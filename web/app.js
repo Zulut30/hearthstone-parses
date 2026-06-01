@@ -473,11 +473,15 @@ function renderDetail(p) {
       <!-- Class Selector Tabs -->
       <h5 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Выберите класс:</h5>
       <div class="tabs-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 1rem;">
-        ${uniqueClasses.map((cls, i) => `
-          <button class="source-btn class-tab-btn ${i === 0 ? "active" : ""}" data-class="${escapeHtml(cls)}" style="font-weight: bold; border-radius: 6px; padding: 0.4rem 0.8rem; border: 1px solid var(--border);">
-            ${escapeHtml(cls)}
-          </button>
-        `).join("")}
+        ${uniqueClasses.map((cls, i) => {
+          const hasArch = v.radars.some(r => r.class === cls && r.archetype !== null);
+          return `
+            <button class="source-btn class-tab-btn ${i === 0 ? "active" : ""}" data-class="${escapeHtml(cls)}" style="font-weight: bold; border-radius: 6px; padding: 0.4rem 0.8rem; border: 1px solid var(--border); display: flex; align-items: center; gap: 6px;">
+              ${escapeHtml(cls)}
+              ${hasArch ? `<span style="background: #2ec4b6; color: #fff; font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 10px; font-weight: normal;">+ Архетипы</span>` : ""}
+            </button>
+          `;
+        }).join("")}
       </div>
 
       <!-- Archetype Selector Tabs -->

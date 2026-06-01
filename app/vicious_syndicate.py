@@ -276,9 +276,24 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
             issue = r["issue"]
             break
 
+    classes_summary = {}
+    for r in radars:
+        cls = r["class"]
+        arch = r["archetype"]
+        if cls not in classes_summary:
+            classes_summary[cls] = {
+                "class": cls,
+                "has_archetypes": False,
+                "archetypes": [],
+            }
+        if arch is not None:
+            classes_summary[cls]["has_archetypes"] = True
+            classes_summary[cls]["archetypes"].append(arch)
+
     return {
         "type": "vicious_syndicate_radars",
         "issue": issue,
+        "classes_summary": list(classes_summary.values()),
         "radars": radars,
         "total_radars": len(radars),
     }
