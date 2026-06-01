@@ -84,6 +84,11 @@ async function selectSource(id, btn) {
   
   if (id === "vicious_syndicate_radars" && payload.view) {
     initRadarGraph(payload.view);
+  } else if (payload.view) {
+    const t = viewType(payload.view);
+    if (t === "meta" && payload.view.strategies) {
+      initMetaScatterChart(payload.view.strategies);
+    }
   }
 }
 
@@ -235,8 +240,19 @@ function renderDetail(p) {
     }
     body += "</div>";
   } else if (t === "meta" && v.strategies) {
-    body = `<div class="block"><h3>Стратегии (${v.strategies.length})</h3>`;
-    body += renderTableFromObjects(v.strategies.slice(0, 30));
+    body = `<div class="block">
+      <h3>Распределение архетипов (Винрейт / Популярность)</h3>
+      <p class="muted" style="margin-bottom: 15px;">Интерактивный график мета-отчета. По вертикали — популярность колоды (%), по горизонтали — процент побед (%). Наведите курсор на точку, чтобы подсветить ее и увидеть подробности.</p>
+      
+      <div class="canvas-container" style="background: #111113; border-radius: 8px; padding: 10px; margin-bottom: 15px; border: 1px solid var(--border);">
+        <canvas id="meta-scatter-canvas" width="850" height="500" style="background: #1e1e24; border-radius: 6px; width: 100%; max-width: 850px; aspect-ratio: 850/500; display: block; margin: 0 auto;"></canvas>
+      </div>
+      <div id="meta-hover-info" class="meta-hover-info" style="min-height: 36px; padding: 8px 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 6px; text-align: center; color: #f0f0f0; margin-bottom: 25px; font-size: 0.95rem;">
+        Наведите на точку, чтобы увидеть детали
+      </div>
+
+      <h3>Таблица архетипов и статистик (${v.strategies.length})</h3>`;
+    body += renderTableFromObjects(v.strategies);
     body += "</div>";
   } else if (t === "streamer_decks" && v.decks) {
     body = `<div class="block"><h3>Колоды стримеров (${v.decks.length})</h3>`;
@@ -1226,5 +1242,277 @@ async function performDbSearch() {
   } catch (err) {
     resultsDiv.innerHTML = `<p class="muted" style="color: #ff3b30;">Ошибка при выполнении поиска: ${escapeHtml(err.message)}</p>`;
   }
+}
+
+function initMetaScatterChart(strategies) {
+  const canvas = document.getElementById("meta-scatter-canvas");
+  if (!canvas) return;
+
+  const ctx = canvas.getContext("2d");
+  const hoverInfo = document.getElementById("meta-hover-info");
+
+  // Parse strategies to coordinate points
+  const parsedPoints = strategies.map(s => {
+    const name = s.Archetype || s.strategy || s.name || "";
+    const winrateStr = s["Winrate↓"] || s.Winrate || s.winrate || "0";
+    const popularityStr = s.Popularity || s.popularity || "0%";
+    
+    const winrate = parseFloat(winrateStr) || 0;
+    
+    let popularity = 0;
+    const popMatch = popularityStr.match(/^([\d.,]+)/);
+    if (popMatch) {
+      popularity = parseFloat(popMatch[1].replace(',', '.')) || 0;
+    }
+    
+    let hsClass = "Neutral";
+    const nameLower = name.toLowerCase();
+    if (nameLower.includes("dh") || nameLower.includes("demon hunter") || nameLower.includes("demonhunter")) {
+      hsClass = "Demon Hunter";
+    } else if (nameLower.includes("dk") || nameLower.includes("death knight") || nameLower.includes("deathknight")) {
+      hsClass = "Death Knight";
+    } else if (nameLower.includes("druid")) {
+      hsClass = "Druid";
+    } else if (nameLower.includes("hunter")) {
+      hsClass = "Hunter";
+    } else if (nameLower.includes("mage")) {
+      hsClass = "Mage";
+    } else if (nameLower.includes("paladin") || nameLower.includes("turnadin")) {
+      hsClass = "Paladin";
+    } else if (nameLower.includes("priest")) {
+      hsClass = "Priest";
+    } else if (nameLower.includes("rogue")) {
+      hsClass = "Rogue";
+    } else if (nameLower.includes("shaman")) {
+      hsClass = "Shaman";
+    } else if (nameLower.includes("warlock") || nameLower.includes("egglock") || nameLower.includes("rafaamlock")) {
+      hsClass = "Warlock";
+    } else if (nameLower.includes("warrior")) {
+      hsClass = "Warrior";
+    }
+    
+    return {
+      name,
+      winrate,
+      popularity,
+      popularityStr,
+      turns: s.Turns || s.turns || "",
+      duration: s.Duration || s.duration || "",
+      climbingSpeed: s["Climbing Speed"] || s.climbing_speed || "",
+      hsClass,
+      raw: s
+    };
+  }).filter(p => p.winrate > 0 && p.name);
+
+  // Constants for coloring
+  const CLASS_COLORS = {
+    "Death Knight": "#008f7d",
+    "Demon Hunter": "#a330c9",
+    "Druid": "#ff7d0a",
+    "Hunter": "#abd473",
+    "Mage": "#40c7eb",
+    "Paladin": "#f58cba",
+    "Priest": "#ffffff",
+    "Rogue": "#fff569",
+    "Shaman": "#0070de",
+    "Warlock": "#8787ed",
+    "Warrior": "#c79c6e",
+    "Neutral": "#999999"
+  };
+
+  // Dimensions
+  const width = canvas.width;
+  const height = canvas.height;
+  const paddingLeft = 60;
+  const paddingRight = 40;
+  const paddingTop = 30;
+  const paddingBottom = 50;
+
+  const chartWidth = width - paddingLeft - paddingRight;
+  const chartHeight = height - paddingTop - paddingBottom;
+
+  // Ranges
+  const xMin = 35;
+  const xMax = 65;
+  const yMin = 0;
+  const maxPop = Math.max(...parsedPoints.map(p => p.popularity), 5);
+  const yMax = Math.ceil(maxPop / 5) * 5;
+
+  // Map to canvas
+  function mapX(wr) {
+    return paddingLeft + ((wr - xMin) / (xMax - xMin)) * chartWidth;
+  }
+  function mapY(pop) {
+    return height - paddingBottom - ((pop - yMin) / (yMax - yMin)) * chartHeight;
+  }
+
+  let hoveredPoint = null;
+
+  function draw() {
+    // Clear
+    ctx.fillStyle = "#1e1e24";
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw Gridlines & Axes
+    ctx.strokeStyle = "#2d2d38";
+    ctx.lineWidth = 1;
+    ctx.fillStyle = "#a0a0b0";
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+
+    // Horizontal Gridlines (Y-axis: Popularity)
+    const yStep = yMax <= 10 ? 2 : 5;
+    for (let pop = yMin; pop <= yMax; pop += yStep) {
+      const y = mapY(pop);
+      // Line
+      ctx.beginPath();
+      ctx.moveTo(paddingLeft, y);
+      ctx.lineTo(width - paddingRight, y);
+      ctx.stroke();
+      // Text
+      ctx.fillText(pop + "%", paddingLeft - 8, y);
+    }
+
+    // Vertical Gridlines (X-axis: Winrate)
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (let wr = xMin; wr <= xMax; wr += 5) {
+      const x = mapX(wr);
+      // Line
+      ctx.beginPath();
+      ctx.moveTo(x, paddingTop);
+      ctx.lineTo(x, height - paddingBottom);
+      ctx.stroke();
+      // Text
+      ctx.fillText(wr + "%", x, height - paddingBottom + 8);
+    }
+
+    // Draw solid axes
+    ctx.strokeStyle = "#4e4e5a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, paddingTop);
+    ctx.lineTo(paddingLeft, height - paddingBottom);
+    ctx.lineTo(width - paddingRight, height - paddingBottom);
+    ctx.stroke();
+
+    // Axis titles
+    ctx.fillStyle = "#d0d0e0";
+    ctx.font = "bold 12px sans-serif";
+    ctx.textAlign = "center";
+    // X-axis label
+    ctx.fillText("Винрейт (Winrate)", paddingLeft + chartWidth / 2, height - paddingBottom + 28);
+    // Y-axis label (vertical)
+    ctx.save();
+    ctx.translate(15, paddingTop + chartHeight / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("Популярность (Popularity)", 0, 0);
+    ctx.restore();
+
+    // Draw non-hovered points first (so hovered remains on top)
+    parsedPoints.forEach(p => {
+      if (p === hoveredPoint) return;
+      drawPoint(p, false);
+    });
+
+    // Draw hovered point
+    if (hoveredPoint) {
+      drawPoint(hoveredPoint, true);
+    }
+  }
+
+  function drawPoint(p, isHovered) {
+    const cx = mapX(p.winrate);
+    const cy = mapY(p.popularity);
+    const color = CLASS_COLORS[p.hsClass] || CLASS_COLORS["Neutral"];
+
+    // Draw Outer Highlight if hovered
+    if (isHovered) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, 10, 0, 2 * Math.PI);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+      ctx.fill();
+    }
+
+    // Draw point circle
+    ctx.beginPath();
+    ctx.arc(cx, cy, isHovered ? 7 : 5, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = isHovered ? "#fff" : "rgba(0, 0, 0, 0.5)";
+    ctx.lineWidth = isHovered ? 2 : 1;
+    ctx.stroke();
+
+    // Draw Text Label
+    ctx.font = isHovered ? "bold 12px sans-serif" : "10px sans-serif";
+    ctx.fillStyle = isHovered ? "#fff" : "#cccccc";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+
+    // Draw label with nice shadow/glow
+    ctx.shadowColor = "rgba(0, 0, 0, 0.95)";
+    ctx.shadowBlur = isHovered ? 6 : 4;
+    ctx.shadowOffsetX = 1;
+    ctx.shadowOffsetY = 1;
+
+    ctx.fillText(p.name, cx + 8, cy);
+
+    // Reset shadow
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+  }
+
+  // Hover detection
+  canvas.addEventListener("mousemove", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left) * (width / rect.width);
+    const mouseY = (e.clientY - rect.top) * (height / rect.height);
+
+    let found = null;
+    let minDistance = 15;
+
+    for (const p of parsedPoints) {
+      const cx = mapX(p.winrate);
+      const cy = mapY(p.popularity);
+      const dist = Math.hypot(mouseX - cx, mouseY - cy);
+      if (dist < minDistance) {
+        minDistance = dist;
+        found = p;
+      }
+    }
+
+    if (found !== hoveredPoint) {
+      hoveredPoint = found;
+      canvas.style.cursor = hoveredPoint ? "pointer" : "default";
+      
+      if (hoveredPoint) {
+        hoverInfo.innerHTML = `
+          <span style="color: ${CLASS_COLORS[hoveredPoint.hsClass]}; font-weight: bold;">${hoveredPoint.name} (${hoveredPoint.hsClass})</span> · 
+          Винрейт: <strong style="color: #4cd137">${hoveredPoint.winrate}%</strong> · 
+          Популярность: <strong style="color: #00a8ff">${hoveredPoint.popularityStr}</strong>
+          ${hoveredPoint.turns ? ` · Ходов: <strong>${hoveredPoint.turns}</strong>` : ""}
+          ${hoveredPoint.climbingSpeed ? ` · Скорость: <strong>${hoveredPoint.climbingSpeed}</strong>` : ""}
+        `;
+      } else {
+        hoverInfo.textContent = "Наведите на точку, чтобы увидеть детали";
+      }
+      draw();
+    }
+  });
+
+  canvas.addEventListener("mouseleave", () => {
+    if (hoveredPoint) {
+      hoveredPoint = null;
+      hoverInfo.textContent = "Наведите на точку, чтобы увидеть детали";
+      canvas.style.cursor = "default";
+      draw();
+    }
+  });
+
+  // Initial draw
+  draw();
 }
 
