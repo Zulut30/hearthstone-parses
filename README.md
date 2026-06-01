@@ -195,18 +195,18 @@ curl -s "http://localhost:8000/datasets/hsreplay_cards_legend_included_winrate" 
 | Сценарий | `source_id` |
 |----------|-------------|
 | Композиции / билды | `hsreplay_battlegrounds_comps` |
-| Герои (тир-лист) | `hsreplay_battlegrounds_heroes` |
+| Герои (среднее место, pick rate, игры) | `firestone_battlegrounds_heroes` |
 | Малые тринкеты | `hsreplay_battlegrounds_trinkets_lesser` |
 | Большие тринкеты | `hsreplay_battlegrounds_trinkets_greater` |
 
 ```bash
-# Герои BG
-curl -s "http://localhost:8000/datasets/hsreplay_battlegrounds_heroes" \
-  | jq '[.data.text_preview[] | select(test("Top|%|Hero";"i"))][0:25]'
+# Герои BG (Firestone API, past-three)
+curl -s "http://localhost:8000/datasets/firestone_battlegrounds_heroes" \
+  | jq '.data.structured.heroes[0:10] | .[] | {hero, avg_placement, pick_rate, games}'
 
-# Компы
-curl -s "http://localhost:8000/datasets/hsreplay_battlegrounds_comps" \
-  | jq '.data.text_preview[0:40]'
+# Компы (Firestone)
+curl -s "http://localhost:8000/datasets/firestone_battlegrounds_comps" \
+  | jq '.data.structured.comps[0:3] | .[] | {title, avg_placement, games}'
 ```
 
 ---

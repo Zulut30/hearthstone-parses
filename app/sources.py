@@ -149,6 +149,13 @@ SOURCES: tuple[Source, ...] = (
         "ranked",
         description="HSReplay cards, legend, sorted by included popularity. Fragment is client-side.",
     ),
+    Source(
+        "firestone_battlegrounds_comps",
+        "https://www.firestoneapp.com/battlegrounds/comps",
+        "firestone",
+        "battlegrounds",
+        description="Firestone Battlegrounds compositions.",
+    ),
 )
 
 

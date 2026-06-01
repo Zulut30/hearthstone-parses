@@ -66,7 +66,7 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
                 return False, "matchups content not detected"
             return True, "ok"
 
-    if source.site == "hsreplay":
+    if source.site in ("hsreplay", "firestone"):
         structured = parsed.get("structured") or parsed.get("hsreplay_extracted") or {}
         if structured.get("type") == "arena_legendary_groups":
             if len(structured.get("groups") or []) < 10:
@@ -98,6 +98,22 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
                 return False, f"arena class stats too few ({len(classes)})"
             if len(matchups) < 50:
                 return False, f"arena dual-class matchups too few ({len(matchups)})"
+            return True, "ok"
+        if structured.get("type") == "bg_heroes":
+            heroes = structured.get("heroes") or []
+            if structured.get("blocked"):
+                return False, "bg heroes blocked"
+            if len(heroes) < 30:
+                return False, f"bg heroes too few ({len(heroes)})"
+            with_stats = sum(
+                1
+                for h in heroes
+                if h.get("avg_placement") is not None
+                and (h.get("games") or h.get("data_points"))
+                and h.get("pick_rate")
+            )
+            if with_stats < 20:
+                return False, f"bg heroes missing stats ({with_stats}/{len(heroes)})"
             return True, "ok"
         if structured.get("type") == "arena_card_tiers":
             cards = structured.get("cards") or []

@@ -15,7 +15,7 @@ const LABELS = {
   hsreplay_decks_trending: "Трендовые колоды",
   hsreplay_cards_legend_included_winrate: "Карты · winrate",
   hsreplay_cards_legend_included_popularity: "Карты · popularity",
-  hsreplay_battlegrounds_heroes: "BG · герои",
+  firestone_battlegrounds_heroes: "Firestone · BG герои",
   hsreplay_battlegrounds_comps: "BG · компы",
   hsreplay_battlegrounds_trinkets_lesser: "BG · малые тринкеты",
   hsreplay_battlegrounds_trinkets_greater: "BG · большие тринкеты",
@@ -153,13 +153,18 @@ function renderDetail(p) {
       <p>HSReplay вернул «Повторите попытку позже». Обновите источник или проверьте сессию.</p></div>`;
   } else if (t === "bg_heroes" && v.heroes) {
     body = `<div class="block"><h3>Герои Battlegrounds (${v.heroes.length})</h3>`;
+    if (v.time_period || v.mmr) {
+      body += `<p class="muted">Период: ${escapeHtml(v.time_period || "?")} · MMR: ${escapeHtml(v.mmr || "?")}${v.last_update ? " · обновлено Firestone: " + escapeHtml(String(v.last_update)) : ""}</p>`;
+    }
     body += renderTableFromObjects(
       v.heroes.map((h) => ({
         Герой: h.hero,
-        "Pick Rate": h.pick_rate || "",
-        Описание: (h.description || "").slice(0, 100),
+        "Среднее место": h.avg_placement ?? h.average_position ?? "",
+        "Pick rate": h.pick_rate || "",
+        Игры: h.games ?? h.data_points ?? "",
+        "id / dbfId": `${h.hero_card_id || h.id || "?"} / ${h.dbfId ?? "?"}`,
       })),
-      ["Герой", "Pick Rate", "Описание"]
+      ["Герой", "Среднее место", "Pick rate", "Игры", "id / dbfId"]
     );
     body += "</div>";
   } else if (t === "arena_class_matrix") {

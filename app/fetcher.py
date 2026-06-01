@@ -190,6 +190,11 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
         structured = await fetch_arena_card_tiers(source_id=source.id)
         backend = structured.get("source", {}).get("backend", "hsreplay_api")
         return _dataset_from_structured(source, structured, backend=backend)
+    if source.id == "firestone_battlegrounds_comps":
+        from .firestone_comps import fetch_firestone_comps
+
+        structured = await fetch_firestone_comps(source)
+        return _dataset_from_structured(source, structured, backend="firestone_api")
     return None
 
 
@@ -215,6 +220,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         "hsreplay_arena_winning_decks",
         "hsreplay_arena_legendaries",
         "hsreplay_battlegrounds_comps",
+        "firestone_battlegrounds_comps",
     ):
         try:
             parsed = await _fetch_hsreplay_api_source(source)
@@ -412,10 +418,20 @@ async def _refresh_sources_unlocked(source_ids: list[str] | None = None) -> list
             http2=True,
         )
 
-    use_flaresolverr = "flaresolverr" in [b.lower() for b in fetch_backends()]
-    use_patchright = "patchright" in [b.lower() for b in fetch_backends()] or "playwright" in [
+    api_sources = {
+        "hsreplay_arena",
+        "hsreplay_arena_cards_advanced",
+        "hsreplay_arena_winning_decks",
+        "hsreplay_arena_legendaries",
+        "hsreplay_battlegrounds_comps",
+        "firestone_battlegrounds_comps",
+    }
+    non_api_selected = [s for s in selected if s.id not in api_sources]
+
+    use_flaresolverr = bool(non_api_selected) and "flaresolverr" in [b.lower() for b in fetch_backends()]
+    use_patchright = bool(non_api_selected) and ("patchright" in [b.lower() for b in fetch_backends()] or "playwright" in [
         b.lower() for b in fetch_backends()
-    ]
+    ])
 
     results: list[dict[str, Any]] = []
     fs_session: FlareSolverrSession | None = None
