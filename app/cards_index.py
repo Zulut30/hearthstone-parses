@@ -122,7 +122,17 @@ def resolve_card_name(name: str) -> dict[str, Any]:
 
 def card_label(card: dict[str, Any] | None) -> dict[str, Any]:
     if not card:
-        return {"id": None, "dbfId": None, "name": "Unknown", "cost": None, "type": None, "rarity": None}
+        return {
+            "id": None,
+            "dbfId": None,
+            "name": "Unknown",
+            "cost": None,
+            "type": None,
+            "rarity": None,
+            "techLevel": None,
+            "isBattlegroundsPoolMinion": None,
+            "isBattlegroundsPoolSpell": None,
+        }
     return {
         "id": card.get("id"),
         "dbfId": card.get("dbfId"),
@@ -131,4 +141,7 @@ def card_label(card: dict[str, Any] | None) -> dict[str, Any]:
         "type": card.get("type"),
         "rarity": card.get("rarity"),
         "cardClass": card.get("cardClass"),
+        "techLevel": card.get("techLevel"),
+        "isBattlegroundsPoolMinion": card.get("isBattlegroundsPoolMinion"),
+        "isBattlegroundsPoolSpell": card.get("isBattlegroundsPoolSpell"),
     }

@@ -195,6 +195,51 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
 
         structured = await fetch_firestone_comps(source)
         return _dataset_from_structured(source, structured, backend="firestone_api")
+    if source.id == "firestone_battlegrounds_cards":
+        from .firestone_comps import fetch_firestone_cards
+
+        structured = await fetch_firestone_cards(source)
+        return _dataset_from_structured(source, structured, backend="firestone_api")
+    if source.id == "firestone_battlegrounds_spells":
+        from .firestone_comps import fetch_firestone_cards
+
+        structured = await fetch_firestone_cards(source)
+        return _dataset_from_structured(source, structured, backend="firestone_api")
+    if source.id in (
+        "firestone_arena_cards_normal",
+        "firestone_arena_cards_underground",
+        "firestone_arena_legendaries_underground",
+        "firestone_arena_legendaries_normal",
+    ):
+        from .firestone_comps import fetch_firestone_arena
+
+        structured = await fetch_firestone_arena(source)
+        return _dataset_from_structured(source, structured, backend="firestone_api")
+    if source.id == "heartharena_tierlist":
+        from .heartharena import fetch_heartharena_tierlist
+
+        structured = await fetch_heartharena_tierlist(source)
+        return _dataset_from_structured(source, structured, backend="heartharena_api")
+    if source.id == "metastats_decks":
+        from .metastats import fetch_metastats_decks
+
+        structured = await fetch_metastats_decks(source)
+        return _dataset_from_structured(source, structured, backend="metastats_api")
+    if source.id == "metastats_matchups":
+        from .metastats import fetch_metastats_matchups
+
+        structured = await fetch_metastats_matchups(source)
+        return _dataset_from_structured(source, structured, backend="metastats_api")
+    if source.id == "hearthstone_decks":
+        from .hearthstone_decks import fetch_hearthstone_decks
+
+        structured = await fetch_hearthstone_decks(source)
+        return _dataset_from_structured(source, structured, backend="hearthstone_decks_api")
+    if source.id == "vicious_syndicate_radars":
+        from .vicious_syndicate import fetch_vicious_syndicate_radars
+
+        structured = await fetch_vicious_syndicate_radars(source)
+        return _dataset_from_structured(source, structured, backend="vicious_syndicate_api")
     return None
 
 
@@ -221,6 +266,17 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         "hsreplay_arena_legendaries",
         "hsreplay_battlegrounds_comps",
         "firestone_battlegrounds_comps",
+        "firestone_battlegrounds_cards",
+        "firestone_battlegrounds_spells",
+        "firestone_arena_cards_normal",
+        "firestone_arena_cards_underground",
+        "firestone_arena_legendaries_underground",
+        "firestone_arena_legendaries_normal",
+        "heartharena_tierlist",
+        "metastats_decks",
+        "metastats_matchups",
+        "hearthstone_decks",
+        "vicious_syndicate_radars",
     ):
         try:
             parsed = await _fetch_hsreplay_api_source(source)
@@ -425,6 +481,17 @@ async def _refresh_sources_unlocked(source_ids: list[str] | None = None) -> list
         "hsreplay_arena_legendaries",
         "hsreplay_battlegrounds_comps",
         "firestone_battlegrounds_comps",
+        "firestone_battlegrounds_cards",
+        "firestone_battlegrounds_spells",
+        "firestone_arena_cards_normal",
+        "firestone_arena_cards_underground",
+        "firestone_arena_legendaries_underground",
+        "firestone_arena_legendaries_normal",
+        "heartharena_tierlist",
+        "metastats_decks",
+        "metastats_matchups",
+        "hearthstone_decks",
+        "vicious_syndicate_radars",
     }
     non_api_selected = [s for s in selected if s.id not in api_sources]
 

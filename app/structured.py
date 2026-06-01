@@ -510,4 +510,13 @@ def build_structured(source: Source, data: dict[str, Any]) -> dict[str, Any]:
             "total_cards": next((l for l in lines if l.isdigit() and int(l) > 100), None),
         }
 
+    if sid == "metastats_decks":
+        return data.get("structured") or data.get("hsreplay_extracted") or {"type": "metastats_decks", "decks": []}
+    if sid == "metastats_matchups":
+        return data.get("structured") or data.get("hsreplay_extracted") or {"type": "metastats_matchups", "matchups": [], "archetypes": []}
+    if sid == "hearthstone_decks":
+        return data.get("structured") or data.get("hsreplay_extracted") or {"type": "hearthstone_decks", "decks": []}
+    if sid == "vicious_syndicate_radars":
+        return data.get("structured") or data.get("hsreplay_extracted") or {"type": "vicious_syndicate_radars", "radars": []}
+
     return {"type": "raw", "lines": lines[:80]}

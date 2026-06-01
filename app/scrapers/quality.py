@@ -66,7 +66,34 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
                 return False, "matchups content not detected"
             return True, "ok"
 
-    if source.site in ("hsreplay", "firestone"):
+    if source.site == "metastats":
+        structured = parsed.get("structured") or {}
+        if source.id == "metastats_decks":
+            decks = structured.get("decks") or []
+            if len(decks) < 5:
+                return False, f"metastats too few decks ({len(decks)})"
+            return True, "ok"
+        if source.id == "metastats_matchups":
+            matchups = structured.get("matchups") or []
+            if len(matchups) < 10:
+                return False, f"metastats matchups too few ({len(matchups)})"
+            return True, "ok"
+
+    if source.site == "hearthstone-decks":
+        structured = parsed.get("structured") or {}
+        decks = structured.get("decks") or []
+        if len(decks) < 5:
+            return False, f"hearthstone-decks too few decks ({len(decks)})"
+        return True, "ok"
+
+    if source.site == "vicious-syndicate":
+        structured = parsed.get("structured") or {}
+        radars = structured.get("radars") or []
+        if len(radars) < 5:
+            return False, f"vicious-syndicate too few radars ({len(radars)})"
+        return True, "ok"
+
+    if source.site in ("hsreplay", "firestone", "heartharena"):
         structured = parsed.get("structured") or parsed.get("hsreplay_extracted") or {}
         if structured.get("type") == "arena_legendary_groups":
             if len(structured.get("groups") or []) < 10:
@@ -83,6 +110,12 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             )
             if with_cards < max(3, len(comps) // 2):
                 return False, f"bg comps mostly empty ({with_cards}/{len(comps)} with cards)"
+            return True, "ok"
+        if structured.get("type") == "bg_card_stats":
+            tiers = structured.get("tiers") or {}
+            total_cards = sum(len(cards) for cards in tiers.values())
+            if total_cards < 50:
+                return False, f"bg_card_stats too few total cards ({total_cards})"
             return True, "ok"
         if structured.get("type") == "arena_winning_decks":
             decks = structured.get("decks") or []
@@ -117,10 +150,19 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return True, "ok"
         if structured.get("type") == "arena_card_tiers":
             cards = structured.get("cards") or []
-            if len(cards) < 200:
+            min_cards = 20 if "legendary" in source.id else 100
+            if len(cards) < min_cards:
                 return False, f"arena card tiers too few ({len(cards)})"
-            if not any(c.get("tier") for c in cards[:50]):
+            if "firestone" not in source.id and not any(c.get("tier") for c in cards[:50]):
                 return False, "arena card tiers missing tier labels"
+            return True, "ok"
+        if structured.get("type") == "heartharena_tierlist":
+            classes = structured.get("classes") or []
+            if len(classes) < 5:
+                return False, f"heartharena classes too few ({len(classes)})"
+            total_cards = structured.get("total_cards", 0)
+            if total_cards < 300:
+                return False, f"heartharena cards too few ({total_cards})"
             return True, "ok"
         if any("could not load data" in line.lower() for line in text_lines):
             return False, "hsreplay premium data not loaded (login required)"
