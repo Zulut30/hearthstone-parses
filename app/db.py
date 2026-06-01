@@ -43,22 +43,24 @@ def init_db() -> None:
                 );
             """)
 
-            # 2. Decks table
+            # 2. Decks table (Unique constraint on deck_code only, to guarantee absolutely NO duplicate decks across different sources or updates)
+            # URL is optional, so we place the UNIQUE on deck_code (if populated).
+            # To handle records with null deck_code but unique URLs, we use a unique index where appropriate,
+            # or handle duplicates explicitly during ingestion (checking for existing codes/URLs and doing an upsert).
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS decks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_id TEXT NOT NULL,
                     class TEXT NOT NULL,
                     archetype TEXT NOT NULL,
-                    deck_code TEXT,
+                    deck_code TEXT UNIQUE,
                     win_rate REAL,
                     score TEXT,
                     title TEXT,
                     url TEXT,
                     format TEXT,
                     added_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(source_id, url, deck_code)
+                    updated_at TEXT NOT NULL
                 );
             """)
 
@@ -79,6 +81,7 @@ def init_db() -> None:
             # Create indexing for super fast search and queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_source_class ON decks(source_id, class);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_code ON decks(deck_code);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_url ON decks(url);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_card_pop_history ON card_popularity_history(source_id, card_name, recorded_at);")
             
             logger.info("SQLite database tables initialized successfully.")
@@ -130,12 +133,9 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
             if source_id == "hearthstone_decks":
                 decks_list = structured.get("decks") or []
                 for d in decks_list:
-                    # Resolve format
                     fmt = d.get("format") or "Standard"
-                    # Determine class from archetype or URL or default
                     cls = d.get("class") or ""
                     if not cls:
-                        # Attempt to extract class from URL (e.g. druid-decks)
                         url = d.get("url") or ""
                         for c in ("death-knight", "demon-hunter", "druid", "hunter", "mage", "paladin", "priest", "rogue", "shaman", "warlock", "warrior"):
                             if c in url.lower():
@@ -144,24 +144,42 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
                     if not cls:
                         cls = "Neutral"
 
+                    # Normalize Class capitalization
+                    cls = cls.replace("Demonhunter", "DemonHunter").replace("Deathknight", "DeathKnight")
+
                     arch = d.get("archetype") or "Unknown"
                     deck_code = d.get("deck_code")
                     score = d.get("score")
                     title = d.get("title")
                     url = d.get("url")
 
-                    # Check if already exists in decks table
+                    if not deck_code:
+                        continue
+
+                    # Search if deck code is already saved from ANY source
                     row = conn.execute("""
-                        SELECT id FROM decks WHERE source_id = ? AND (url = ? OR (deck_code IS NOT NULL AND deck_code = ?))
-                    """, (source_id, url, deck_code)).fetchone()
+                        SELECT id, source_id, url FROM decks WHERE deck_code = ?
+                    """, (deck_code,)).fetchone()
 
                     if row:
+                        # Deck code exists. Update it (keep original source_id, update stats/score/title/format if newer)
                         conn.execute("""
                             UPDATE decks
-                            SET class = ?, archetype = ?, deck_code = ?, score = ?, title = ?, format = ?, updated_at = ?
+                            SET class = ?, archetype = ?, score = ?, title = ?, format = ?, url = ?, updated_at = ?
                             WHERE id = ?
-                        """, (cls, arch, deck_code, score, title, fmt, fetched_at, row["id"]))
+                        """, (cls, arch, score, title, fmt, url or row["url"], fetched_at, row["id"]))
                     else:
+                        # No duplicate code. Check if URL exists for deck without code (or update it)
+                        if url:
+                            row_url = conn.execute("SELECT id FROM decks WHERE url = ?", (url,)).fetchone()
+                            if row_url:
+                                conn.execute("""
+                                    UPDATE decks
+                                    SET class = ?, archetype = ?, deck_code = ?, score = ?, title = ?, format = ?, updated_at = ?
+                                    WHERE id = ?
+                                """, (cls, arch, deck_code, score, title, fmt, fetched_at, row_url["id"]))
+                                continue
+                        
                         conn.execute("""
                             INSERT INTO decks (source_id, class, archetype, deck_code, score, title, url, format, added_at, updated_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -172,6 +190,7 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
                 decks_list = structured.get("decks") or []
                 for d in decks_list:
                     cls = d.get("class") or "Neutral"
+                    cls = cls.replace("Demonhunter", "DemonHunter").replace("Deathknight", "DeathKnight")
                     arch = d.get("archetype_name") or "Unknown"
                     deck_code = d.get("deck_code")
                     win_rate = _parse_percent(d.get("win_rate"))
@@ -182,9 +201,10 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
                     if not deck_code:
                         continue
 
+                    # Search by unique deck_code
                     row = conn.execute("""
-                        SELECT id FROM decks WHERE source_id = ? AND deck_code = ?
-                    """, (source_id, deck_code)).fetchone()
+                        SELECT id FROM decks WHERE deck_code = ?
+                    """, (deck_code,)).fetchone()
 
                     if row:
                         conn.execute("""
@@ -201,26 +221,26 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
             # Source: vicious_syndicate_radars (Vicious Syndicate Radars)
             elif source_id == "vicious_syndicate_radars":
                 radars_list = structured.get("radars") or []
-                recorded_date = fetched_at.split("T")[0] # Just the day (YYYY-MM-DD) for trends
+                recorded_date = fetched_at.split("T")[0]
 
                 for r in radars_list:
                     cls = r.get("class") or "Neutral"
+                    cls = cls.replace("Demonhunter", "DemonHunter").replace("Deathknight", "DeathKnight")
                     arch = r.get("archetype") or "Overall"
                     deck_code = r.get("deck_code")
                     url = r.get("url")
 
-                    # Upsert deck code if present
                     if deck_code:
                         row = conn.execute("""
-                            SELECT id FROM decks WHERE source_id = ? AND (deck_code = ? OR archetype = ?)
-                        """, (source_id, deck_code, arch)).fetchone()
+                            SELECT id FROM decks WHERE deck_code = ?
+                        """, (deck_code,)).fetchone()
 
                         if row:
                             conn.execute("""
                                 UPDATE decks
-                                SET class = ?, archetype = ?, deck_code = ?, url = ?, updated_at = ?
+                                SET class = ?, archetype = ?, url = ?, updated_at = ?
                                 WHERE id = ?
-                            """, (cls, arch, deck_code, url, fetched_at, row["id"]))
+                            """, (cls, arch, url, fetched_at, row["id"]))
                         else:
                             conn.execute("""
                                 INSERT INTO decks (source_id, class, archetype, deck_code, url, added_at, updated_at)
@@ -234,7 +254,6 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
                         popularity = n.get("radius") or 0.0
 
                         if card_name:
-                            # Upsert card popularity daily snapshot
                             conn.execute("""
                                 INSERT INTO card_popularity_history (source_id, class, archetype, card_name, popularity, recorded_at)
                                 VALUES (?, ?, ?, ?, ?, ?)
@@ -249,12 +268,12 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
 
                 for c in cards_list:
                     card_name = c.get("name")
-                    # Find deck popularity percentage
                     pop = _parse_percent(c.get("deck_popularity") or c.get("avg_copies") or c.get("popularity"))
                     if pop is None:
                         pop = 0.0
 
                     cls = c.get("cardClass") or "Neutral"
+                    cls = cls.replace("Demonhunter", "DemonHunter").replace("Deathknight", "DeathKnight")
 
                     if card_name:
                         conn.execute("""
@@ -262,7 +281,7 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
                             VALUES (?, ?, ?, ?, ?, ?)
                             ON CONFLICT(source_id, class, archetype, card_name, recorded_at) DO UPDATE SET
                                 popularity = excluded.popularity
-                        """, (source_id, cls, "Overall", card_name, pop, recorded_date))
+                            """, (source_id, cls, "Overall", card_name, pop, recorded_date))
 
         logger.info(f"Successfully saved structured dataset for {source_id} to SQLite DB.")
     except Exception as e:
