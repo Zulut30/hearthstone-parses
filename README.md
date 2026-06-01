@@ -36,6 +36,9 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 **Установка на новый сервер и перенос кэша:** см. [DEPLOY.md](DEPLOY.md) и `scripts/install.sh`, `scripts/export-bundle.sh`, `scripts/import-bundle.sh`, `scripts/audit.sh`.
 
+**Безопасность и устройство парсинга (подробно):** [docs/SECURITY_AND_PARSING.md](docs/SECURITY_AND_PARSING.md)  
+**Ротация IP и надёжность:** [docs/PROXY_AND_RELIABILITY.md](docs/PROXY_AND_RELIABILITY.md)
+
 ---
 
 ## Базовый URL REST API
