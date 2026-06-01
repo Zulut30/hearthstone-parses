@@ -1,21 +1,50 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import api_key
+from .demo import build_demo_view, build_overview
 from .fetcher import refresh_sources
 from .sources import SOURCES, SOURCE_BY_ID
 from .storage import load_dataset, load_status, root_dir, save_dataset, save_status
 
+
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 app = FastAPI(
     title="Hearthstone Data API",
     version="0.1.0",
     description="Cached API for configured Hearthstone public data sources.",
 )
+
+if WEB_DIR.is_dir():
+    app.mount("/ui/assets", StaticFiles(directory=WEB_DIR), name="ui-assets")
+
+
+@app.get("/ui")
+def demo_index() -> FileResponse:
+    index = WEB_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="Demo UI not installed")
+    return FileResponse(index)
+
+
+@app.get("/demo/overview")
+def demo_overview() -> dict:
+    return build_overview()
+
+
+@app.get("/demo/view/{source_id}")
+def demo_view(source_id: str) -> dict:
+    if source_id not in SOURCE_BY_ID:
+        raise HTTPException(status_code=404, detail="Unknown source")
+    return build_demo_view(source_id)
 
 
 def require_admin(x_api_key: Annotated[str | None, Header()] = None) -> None:

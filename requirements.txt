@@ -7,3 +7,4 @@ pydantic>=2.7,<3.0
 cloudscraper>=1.2.71,<2.0
 curl-cffi>=0.7,<0.13
 patchright>=1.49,<2.0
+hearthstone>=9.0

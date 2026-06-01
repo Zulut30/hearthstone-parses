@@ -29,6 +29,18 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 ---
 
+## Демо-сайт
+
+После запуска API откройте в браузере:
+
+```
+http://YOUR_HOST:8000/ui
+```
+
+Показывает распарсенные данные по каждому источнику. Колоды стримеров декодируются в карты с **id** и **dbfId** через [HearthstoneJSON](https://api.hearthstonejson.com).
+
+---
+
 ## Базовый URL API
 
 ```

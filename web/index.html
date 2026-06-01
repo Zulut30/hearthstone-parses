@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hearthstone Parses — Demo</title>
+  <link rel="stylesheet" href="/ui/assets/style.css" />
+</head>
+<body>
+  <header class="header">
+    <h1>Hearthstone Parses</h1>
+    <p class="sub">Демо: парсинг HSGuru / HSReplay + карты из <a href="https://hearthstonejson.com" target="_blank">HearthstoneJSON</a></p>
+    <div id="stats" class="stats"></div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <h2>Источники</h2>
+      <div id="source-list" class="source-list"></div>
+    </aside>
+    <section class="content">
+      <div id="placeholder" class="placeholder">
+        Выберите источник слева, чтобы увидеть распарсенные данные.
+      </div>
+      <article id="detail" class="detail hidden"></article>
+    </section>
+  </main>
+
+  <script src="/ui/assets/app.js"></script>
+</body>
+</html>
