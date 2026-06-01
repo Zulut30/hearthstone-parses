@@ -68,6 +68,37 @@ def _status_payload(
     return payload
 
 
+async def send_telegram_alert(source_id: str, state: str, detail: str, url: str) -> None:
+    from .config import telegram_bot_token, telegram_chat_id
+    token = telegram_bot_token()
+    chat_id = telegram_chat_id()
+    if not token or not chat_id:
+        return
+    
+    text_message = (
+        f"⚠️ <b>Hearthstone Parser Alert</b>\n\n"
+        f"<b>Source ID:</b> <code>{source_id}</code>\n"
+        f"<b>URL:</b> {url}\n"
+        f"<b>State:</b> 🟥 <code>{state}</code>\n"
+        f"<b>Detail:</b> {detail or 'N/A'}\n"
+        f"<b>Time:</b> {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+    )
+    
+    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text_message,
+        "parse_mode": "HTML",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(api_url, json=payload)
+            response.raise_for_status()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Failed to send Telegram notification: %s", e)
+
+
 class RefreshLock:
     def __init__(self, path: Path = LOCK_PATH) -> None:
         self.path = path
@@ -96,7 +127,73 @@ async def _fetch_direct(client: httpx.AsyncClient, source: Source) -> tuple[str,
     return response.text, response.status_code, str(response.url)
 
 
-async def fetch_source(client: httpx.AsyncClient | None, source: Source) -> dict[str, Any]:
+def _dataset_from_structured(source: Source, structured: dict[str, Any], *, backend: str) -> dict[str, Any]:
+    import json as json_mod
+
+    body = json_mod.dumps(structured, ensure_ascii=False)
+    return {
+        "source_id": source.id,
+        "site": source.site,
+        "category": source.category,
+        "url": source.url,
+        "fetch_url": source.fetch_url,
+        "fragment": source.fragment,
+        "title": source.description or source.id,
+        "tables": [],
+        "json_scripts": [],
+        "hsreplay_bootstrap": None,
+        "structured": structured,
+        "hsreplay_extracted": structured,
+        "deck_codes": [],
+        "links": [],
+        "text_preview": [],
+        "counts": {
+            "tables": 0,
+            "json_scripts": 0,
+            "deck_codes": 0,
+            "links": 0,
+            "text_lines": 0,
+            "api_bytes": len(body.encode("utf-8")),
+        },
+        "_backend": backend,
+    }
+
+
+async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
+    if source.id == "hsreplay_arena_winning_decks":
+        from .hsreplay_arena_api import fetch_winning_decks
+
+        structured = await fetch_winning_decks(source_id=source.id, limit=20)
+        backend = structured.get("source", {}).get("backend", "hsreplay_api")
+        return _dataset_from_structured(source, structured, backend=backend)
+    if source.id == "hsreplay_battlegrounds_comps":
+        from .battlegrounds_comps_parse import fetch_battlegrounds_comps
+
+        structured = await fetch_battlegrounds_comps(source_id=source.id, detail_limit=24)
+        backend = structured.get("source", {}).get("backend", "hsreplay_jina_markdown")
+        return _dataset_from_structured(source, structured, backend=backend)
+    if source.id == "hsreplay_arena_legendaries":
+        from .hsreplay_legendaries_api import fetch_legendary_groups
+
+        structured = await fetch_legendary_groups(source_id=source.id)
+        backend = structured.get("source", {}).get("backend", "hsreplay_api")
+        return _dataset_from_structured(source, structured, backend=backend)
+    if source.id == "hsreplay_arena":
+        from .hsreplay_arena_api import fetch_class_stats
+
+        structured = await fetch_class_stats(source_id=source.id)
+        backend = structured.get("source", {}).get("backend", "hsreplay_api")
+        return _dataset_from_structured(source, structured, backend=backend)
+    if source.id == "hsreplay_arena_cards_advanced":
+        from .hsreplay_arena_api import fetch_arena_card_tiers
+
+        structured = await fetch_arena_card_tiers(source_id=source.id)
+        backend = structured.get("source", {}).get("backend", "hsreplay_api")
+        return _dataset_from_structured(source, structured, backend=backend)
+    return None
+
+
+async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_on_auth_failure: bool = True) -> dict[str, Any]:
     fetched_at = now_iso()
     previous = load_status(source.id) or {}
     preferred_backend = previous.get("backend") if previous.get("state") == "ok" else None
@@ -109,9 +206,64 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source) -> dict
             detail="Set HS_FETCH_PROXY_URL in /etc/hs-data-api.env",
         )
         save_status(source.id, status)
+        await send_telegram_alert(source.id, "proxy_required", status["detail"], source.url)
         return status
 
+    if source.id in (
+        "hsreplay_arena",
+        "hsreplay_arena_cards_advanced",
+        "hsreplay_arena_winning_decks",
+        "hsreplay_arena_legendaries",
+        "hsreplay_battlegrounds_comps",
+    ):
+        try:
+            parsed = await _fetch_hsreplay_api_source(source)
+            if parsed is not None:
+                ok, reason = validate_parsed_data(source, parsed)
+                backend = parsed.pop("_backend", "hsreplay_api")
+                content_length = parsed.get("counts", {}).get("api_bytes", 0)
+                if ok:
+                    dataset = {
+                        "source_id": source.id,
+                        "fetched_at": fetched_at,
+                        "data": parsed,
+                    }
+                    save_dataset(source.id, dataset)
+                    status = _status_payload(
+                        source,
+                        "ok",
+                        fetched_at=fetched_at,
+                        http_status=200,
+                        final_url=source.url,
+                        content_length=content_length,
+                        backend=backend,
+                    )
+                    save_status(source.id, status)
+                    return status
+                status = _status_payload(
+                    source,
+                    "quality_error",
+                    fetched_at=fetched_at,
+                    http_status=200,
+                    final_url=source.url,
+                    detail=reason,
+                    content_length=content_length,
+                    backend=backend,
+                )
+                save_status(source.id, status)
+                await send_telegram_alert(source.id, "quality_error", status["detail"], source.url)
+                return status
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "HSReplay API fetch failed for %s, falling back to browser: %s",
+                source.id,
+                exc,
+            )
+
     set_flaresolverr_source(source.id)
+    page_snapshot = None
     try:
         if fetch_direct_enabled() and client is not None:
             body, http_status, final_url = await _fetch_direct(client, source)
@@ -126,6 +278,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source) -> dict
             http_status = result.http_status
             final_url = result.final_url
             backend = result.backend
+            page_snapshot = result.snapshot
     except Exception as exc:
         status = _status_payload(
             source,
@@ -135,6 +288,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source) -> dict
             detail=str(exc)[:2000],
         )
         save_status(source.id, status)
+        await send_telegram_alert(source.id, "fetch_error", status["detail"], source.url)
         return status
     finally:
         set_flaresolverr_source(None)
@@ -152,6 +306,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source) -> dict
             backend=backend,
         )
         save_status(source.id, status)
+        await send_telegram_alert(source.id, "blocked_by_protection", status["detail"], source.url)
         return status
 
     if http_status >= 400:
@@ -166,11 +321,29 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source) -> dict
             backend=backend,
         )
         save_status(source.id, status)
+        await send_telegram_alert(source.id, "http_error", status["detail"], source.url)
         return status
 
-    parsed = parse_html(source, body)
+    parsed = parse_html(source, body, page_snapshot)
     ok, reason = validate_parsed_data(source, parsed)
     if not ok:
+        is_auth_error = source.site == "hsreplay" and any(
+            k in reason.lower() for k in ("session not authenticated", "premium data", "login required")
+        )
+        if is_auth_error and retry_on_auth_failure:
+            from .hsreplay_auth import force_relogin_hsreplay, hsreplay_email, hsreplay_password
+            if hsreplay_email() and hsreplay_password():
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Detected invalid/expired HSReplay session for %s (%s). Forcing automatic relogin and retry...",
+                    source.id,
+                    reason,
+                )
+                relogin_success = await force_relogin_hsreplay()
+                if relogin_success:
+                    logging.getLogger(__name__).info("Relogin successful, retrying fetch for %s...", source.id)
+                    return await fetch_source(client, source, retry_on_auth_failure=False)
+
         status = _status_payload(
             source,
             "quality_error",
@@ -182,6 +355,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source) -> dict
             backend=backend,
         )
         save_status(source.id, status)
+        await send_telegram_alert(source.id, "quality_error", reason, source.url)
         return status
 
     dataset = {
@@ -257,7 +431,10 @@ async def _refresh_sources_unlocked(source_ids: list[str] | None = None) -> list
             if proxy_info and status.get("state") == "ok":
                 status["proxy_egress_ip"] = proxy_info.get("egress_ip")
             results.append(status)
-            await asyncio.sleep(request_delay_seconds())
+            import random
+            delay_seconds = request_delay_seconds()
+            jitter_delay = delay_seconds * random.uniform(0.75, 1.25)
+            await asyncio.sleep(jitter_delay)
     finally:
         if fs_session is not None:
             set_active_flaresolverr_session(None)

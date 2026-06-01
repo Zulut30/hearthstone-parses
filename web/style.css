@@ -152,6 +152,9 @@ table.simple th { background: var(--card); color: var(--muted); }
 .lines { font-size: 0.82rem; color: var(--muted); }
 .lines li { margin-bottom: 0.2rem; }
 
+.muted { color: var(--muted); }
+.warn { border-color: var(--warn); }
+
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { border-right: none; border-bottom: 1px solid var(--border); max-height: 40vh; }

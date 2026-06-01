@@ -56,7 +56,16 @@ def playwright_proxy(source_id: str | None = None) -> dict[str, str] | None:
     url = proxy_url_for_source(source_id)
     if not url:
         return None
-    return {"server": url}
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return {"server": url}
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    server = f"{parsed.scheme}://{parsed.hostname}:{port}"
+    out: dict[str, str] = {"server": server}
+    if parsed.username:
+        out["username"] = parsed.username
+        out["password"] = parsed.password or ""
+    return out
 
 
 def cloudscraper_proxies(source_id: str | None = None) -> dict[str, str] | None:

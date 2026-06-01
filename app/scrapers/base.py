@@ -10,3 +10,4 @@ class FetchResult:
     backend: str
     http_status: int = 200
     detail: str | None = None
+    snapshot: dict | None = None

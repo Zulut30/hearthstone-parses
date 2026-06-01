@@ -22,7 +22,11 @@ def _site_backend_order(source: Source) -> list[str]:
     if source.site == "hsguru":
         preferred = ["flaresolverr", "patchright", "curl_cffi", "cloudscraper", "camoufox"]
     else:
+        from ..config import hsreplay_storage_path
+
         preferred = ["patchright", "flaresolverr", "curl_cffi", "cloudscraper", "camoufox"]
+        if not hsreplay_storage_path().exists():
+            preferred = ["flaresolverr", "patchright", "curl_cffi", "cloudscraper", "camoufox"]
     ordered: list[str] = []
     for name in preferred:
         if name in configured and name not in ordered:
@@ -52,6 +56,11 @@ def _ordered_backends(source: Source | None = None) -> list[tuple[str, BackendFn
     }
 
     names = _site_backend_order(source) if source else [b.lower() for b in fetch_backends()]
+    if source and source.site == "hsreplay":
+        from ..config import hsreplay_storage_path
+
+        if hsreplay_storage_path().exists():
+            names = [n for n in names if n == "patchright"] or names
     ordered: list[tuple[str, BackendFn, Callable[[], bool]]] = []
     for key in names:
         if key not in registry:

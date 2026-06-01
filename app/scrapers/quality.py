@@ -67,6 +67,58 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return True, "ok"
 
     if source.site == "hsreplay":
+        structured = parsed.get("structured") or parsed.get("hsreplay_extracted") or {}
+        if structured.get("type") == "arena_legendary_groups":
+            if len(structured.get("groups") or []) < 10:
+                return False, f"legendary groups too few ({len(structured.get('groups') or [])})"
+            if not any(g.get("key_card") for g in structured.get("groups") or []):
+                return False, "legendary groups missing key_card"
+            return True, "ok"
+        if structured.get("type") == "bg_comps":
+            comps = structured.get("comps") or []
+            if len(comps) < 3:
+                return False, f"bg comps too few ({len(comps)})"
+            with_cards = sum(
+                1 for c in comps if (c.get("main_cards") or c.get("additional_cards"))
+            )
+            if with_cards < max(3, len(comps) // 2):
+                return False, f"bg comps mostly empty ({with_cards}/{len(comps)} with cards)"
+            return True, "ok"
+        if structured.get("type") == "arena_winning_decks":
+            decks = structured.get("decks") or []
+            if len(decks) < 1:
+                return False, "arena winning decks empty"
+            if not any((d.get("final_deck") or []) for d in decks):
+                return False, "arena winning decks missing final_deck"
+            return True, "ok"
+        if structured.get("type") == "arena_class_matrix":
+            classes = structured.get("classes") or []
+            matchups = structured.get("matchups") or []
+            if len(classes) < 8:
+                return False, f"arena class stats too few ({len(classes)})"
+            if len(matchups) < 50:
+                return False, f"arena dual-class matchups too few ({len(matchups)})"
+            return True, "ok"
+        if structured.get("type") == "arena_card_tiers":
+            cards = structured.get("cards") or []
+            if len(cards) < 200:
+                return False, f"arena card tiers too few ({len(cards)})"
+            if not any(c.get("tier") for c in cards[:50]):
+                return False, "arena card tiers missing tier labels"
+            return True, "ok"
+        if any("could not load data" in line.lower() for line in text_lines):
+            return False, "hsreplay premium data not loaded (login required)"
+        if source.id.startswith("hsreplay_cards_"):
+            for script in json_scripts:
+                if script.get("id") != "userdata":
+                    continue
+                user = (script.get("value") or {})
+                if isinstance(user, str):
+                    continue
+                if not (user.get("user") or {}).get("is_authenticated"):
+                    return False, "hsreplay session not authenticated"
+            if not any("%" in line for line in text_lines[100:200]):
+                return False, "hsreplay cards stats not found in page"
         has_userdata = any(s.get("id") == "userdata" for s in json_scripts)
         if has_userdata or table_rows >= 3 or len(text_lines) >= 40:
             return True, "ok"

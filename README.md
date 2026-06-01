@@ -29,18 +29,6 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 ---
 
-## Демо-сайт
-
-После запуска API откройте в браузере:
-
-```
-http://YOUR_HOST:8000/ui
-```
-
-Показывает распарсенные данные по каждому источнику. Колоды стримеров декодируются в карты с **id** и **dbfId** через [HearthstoneJSON](https://api.hearthstonejson.com).
-
----
-
 ## Базовый URL API
 
 ```
@@ -143,26 +131,27 @@ curl -s "http://localhost:8000/datasets/hsguru_streamer_decks_legend_1000" \
 
 ### HSReplay — Арена
 
-| Сценарий | `source_id` | Что на странице |
-|----------|-------------|-----------------|
-| **Обзор арены, тир-лист классов (2-class / dual class)** | `hsreplay_arena` | [Arena Guide](https://hsreplay.net/arena/) — таблица матчапов классов |
-| **Тир-лист карт арены (advanced)** | `hsreplay_arena_cards_advanced` | [Arena cards #advanced](https://hsreplay.net/arena/cards/#view=advanced) |
-| **Винрейт легендарок в арене** | `hsreplay_arena_legendaries` | [Arena legendaries](https://hsreplay.net/arena/legendaries/) |
-| **Виновые колоды арены (12-win и др.)** | `hsreplay_arena_winning_decks` | [Winning decks](https://hsreplay.net/arena/winning_decks/#playerClass=ALL) |
+| Сценарий | `source_id` | HSReplay API (через Jina+прокси) |
+|----------|-------------|----------------------------------|
+| **Винрейт классов + двухклассовые матчапы** | `hsreplay_arena` | `/api/v1/arena/classes_stats/` |
+| **Тир-лист карт (S–F по winrate)** | `hsreplay_arena_cards_advanced` | `/api/v1/arena/card_stats/` |
+| **Легендарные группы** | `hsreplay_arena_legendaries` | `/api/v1/arena/card_packages/free` |
+| **Виновые колоды** | `hsreplay_arena_winning_decks` | `/api/v1/arena/winning_decks/` |
 
-#### Двухклассовый тир / матрица классов на арене
+Источники с пометкой API-first не требуют браузера: данные лежат в `data.structured` / `data.hsreplay_extracted`.
+
+#### Винрейт классов и матрица 2-class
 
 ```bash
-# Таблица классов (строки = класс, ячейки = винрейт vs другой класс)
 curl -s "http://localhost:8000/datasets/hsreplay_arena" \
-  | jq '.data.tables[0].objects[0:5]'
+  | jq '.data.structured | {classes: .classes[0:5], matchups: .matchups[0:5]}'
 ```
 
 #### Тир-лист карт арены
 
 ```bash
 curl -s "http://localhost:8000/datasets/hsreplay_arena_cards_advanced" \
-  | jq '.data | {title, lines: [.text_preview[] | select(test("Tier|Winrate|Pick";"i"))][0:20]}'
+  | jq '.data.structured | {total: .total_cards, top: [.cards[] | {name, tier, deck_winrate, id}][0:15]}'
 ```
 
 #### Колоды для арены (победные листы)

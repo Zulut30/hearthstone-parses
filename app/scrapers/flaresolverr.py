@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 
 from ..config import flaresolverr_url, request_timeout_seconds
+from ..hsreplay_auth import hsreplay_cookies_for_fetch
 from ..sources import Source
 from .base import FetchResult
 from .flaresolverr_session import FlareSolverrSession, flaresolverr_request_timeout_ms
@@ -36,6 +37,10 @@ async def fetch_via_flaresolverr(source: Source) -> FetchResult:
     proxy = proxy_dict_for_flaresolverr(_current_source_id)
     if proxy:
         payload["proxy"] = proxy
+    if source.site == "hsreplay":
+        cookies = hsreplay_cookies_for_fetch()
+        if cookies:
+            payload["cookies"] = cookies
 
     timeout = httpx.Timeout(request_timeout_seconds() + 30.0)
     async with httpx.AsyncClient(timeout=timeout) as client:

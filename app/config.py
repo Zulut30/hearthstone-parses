@@ -26,11 +26,11 @@ def api_key() -> str | None:
 
 
 def request_delay_seconds() -> float:
-    return float(os.environ.get("HS_API_REQUEST_DELAY_SECONDS", "2.0"))
+    return float(os.environ.get("HS_API_REQUEST_DELAY_SECONDS", "8.0"))
 
 
 def request_timeout_seconds() -> float:
-    return float(os.environ.get("HS_API_REQUEST_TIMEOUT_SECONDS", "90.0"))
+    return float(os.environ.get("HS_API_REQUEST_TIMEOUT_SECONDS", "150.0"))
 
 
 def user_agent() -> str:
@@ -47,10 +47,7 @@ def fetch_proxy_url() -> str | None:
 
 def fetch_require_proxy() -> bool:
     return os.environ.get("HS_FETCH_REQUIRE_PROXY", "true").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
+        "1", "true", "yes", "on",
     }
 
 
@@ -77,7 +74,7 @@ def fetch_max_retries() -> int:
 
 
 def iproyal_session_per_source() -> bool:
-    return os.environ.get("HS_IPROYAL_SESSION_PER_SOURCE", "true").strip().lower() in {
+    return os.environ.get("HS_IPROYAL_SESSION_PER_SOURCE", "false").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -87,3 +84,27 @@ def iproyal_session_per_source() -> bool:
 
 def proxy_check_url() -> str:
     return os.environ.get("HS_PROXY_CHECK_URL", "https://api.ipify.org").strip()
+
+
+def hsreplay_email() -> str | None:
+    value = os.environ.get("HSREPLAY_EMAIL", "").strip()
+    return value or None
+
+
+def hsreplay_password() -> str | None:
+    value = os.environ.get("HSREPLAY_PASSWORD", "").strip()
+    return value or None
+
+
+def hsreplay_storage_path() -> Path:
+    return Path(os.environ.get("HSREPLAY_STORAGE_PATH", str(data_dir() / "hsreplay-auth.json")))
+
+
+def telegram_bot_token() -> str | None:
+    value = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    return value or None
+
+
+def telegram_chat_id() -> str | None:
+    value = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    return value or None
