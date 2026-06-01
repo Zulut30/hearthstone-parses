@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from typing import Any
 
@@ -106,71 +107,98 @@ def normalize_radar_url(path: str) -> str:
     return path
 
 
-async def fetch_radar_html(client: httpx.AsyncClient, url: str) -> str | None:
+async def fetch_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    semaphore: asyncio.Semaphore,
+    max_retries: int = 5,
+) -> httpx.Response | None:
+    """
+    Robust HTTP GET with a concurrency semaphore, exponential backoff, retry jitter,
+    and a tiny sleep gap to avoid disconnects.
+    """
     headers = {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
-    try:
-        resp = await client.get(url, headers=headers)
-        if resp.status_code == 200:
-            return resp.text
-    except Exception as e:
-        logger.error(f"Error fetching radar HTML from {url}: {e}")
+    
+    async with semaphore:
+        for attempt in range(max_retries):
+            # Small randomized sleep gap between entering the semaphore
+            await asyncio.sleep(random.uniform(0.2, 0.5))
+            try:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    return resp
+                if resp.status_code == 429:
+                    wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
+                    logger.warning(f"Rate limited (429) fetching {url}. Retrying in {wait_time:.2f}s... (attempt {attempt+1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                
+                logger.warning(f"Received non-200 status code {resp.status_code} for {url} (attempt {attempt+1}/{max_retries})")
+                wait_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+                await asyncio.sleep(wait_time)
+            except Exception as e:
+                wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
+                logger.warning(f"Error fetching {url}: {e}. Retrying in {wait_time:.2f}s... (attempt {attempt+1}/{max_retries})")
+                await asyncio.sleep(wait_time)
+
+        logger.error(f"Failed to fetch {url} after {max_retries} attempts.")
+        return None
+
+
+async def fetch_radar_html(client: httpx.AsyncClient, url: str, semaphore: asyncio.Semaphore) -> str | None:
+    resp = await fetch_with_retry(client, url, semaphore)
+    return resp.text if resp else None
+
+
+async def fetch_deck_code(client: httpx.AsyncClient, deck_url: str, semaphore: asyncio.Semaphore) -> str | None:
+    resp = await fetch_with_retry(client, deck_url, semaphore)
+    if not resp:
+        return None
+
+    # Look for button data-clipboard-text or input value containing AAE...
+    soup = BeautifulSoup(resp.text, "lxml")
+    
+    # 1. Look for data-clipboard-text on buttons
+    btn = soup.find("button", attrs={"data-clipboard-text": True})
+    if btn:
+        val = btn["data-clipboard-text"].strip()
+        if val.startswith("AAE"):
+            return val
+
+    # 2. Look for input tag with AAE value
+    inp = soup.find("input", value=True)
+    if inp:
+        val = inp["value"].strip()
+        if val.startswith("AAE"):
+            return val
+
+    # 3. Text search
+    text_match = re.search(r"(AAE[A-Za-z0-9+/=]+)", resp.text)
+    if text_match:
+        return text_match.group(1)
+        
     return None
 
 
-async def fetch_deck_code(client: httpx.AsyncClient, deck_url: str) -> str | None:
-    headers = {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-    try:
-        resp = await client.get(deck_url, headers=headers)
-        if resp.status_code == 200:
-            # Look for button data-clipboard-text or input value containing AAE...
-            soup = BeautifulSoup(resp.text, "lxml")
-            
-            # 1. Look for data-clipboard-text on buttons
-            btn = soup.find("button", attrs={"data-clipboard-text": True})
-            if btn:
-                val = btn["data-clipboard-text"].strip()
-                if val.startswith("AAE"):
-                    return val
-
-            # 2. Look for input tag with AAE value
-            inp = soup.find("input", value=True)
-            if inp:
-                val = inp["value"].strip()
-                if val.startswith("AAE"):
-                    return val
-
-            # 3. Text search
-            text_match = re.search(r"(AAE[A-Za-z0-9+/=]+)", resp.text)
-            if text_match:
-                return text_match.group(1)
-    except Exception as e:
-        logger.error(f"Error fetching inner deck code from {deck_url}: {e}")
-    return None
-
-
-async def discover_class_radars(client: httpx.AsyncClient, class_name: str) -> list[dict[str, Any]]:
+async def discover_class_radars(
+    client: httpx.AsyncClient,
+    class_name: str,
+    semaphore: asyncio.Semaphore,
+) -> list[dict[str, Any]]:
     slug = CLASS_SLUGS.get(class_name)
     if not slug:
         return []
 
     index_url = f"https://www.vicioussyndicate.com/deck-library/{slug}/"
-    headers = {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-
     discovered = []
 
     try:
-        resp = await client.get(index_url, headers=headers)
-        if resp.status_code != 200:
-            logger.error(f"Failed to fetch deck library for {class_name}: {resp.status_code}")
+        resp = await fetch_with_retry(client, index_url, semaphore)
+        if not resp:
+            logger.error(f"Failed to fetch deck library index for {class_name}")
             return []
 
         soup = BeautifulSoup(resp.text, "lxml")
@@ -222,14 +250,14 @@ async def discover_class_radars(client: httpx.AsyncClient, class_name: str) -> l
     return discovered
 
 
-async def resolve_archetype_details(client: httpx.AsyncClient, item: dict[str, Any]) -> dict[str, Any] | None:
-    headers = {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
+async def resolve_archetype_details(
+    client: httpx.AsyncClient,
+    item: dict[str, Any],
+    semaphore: asyncio.Semaphore,
+) -> dict[str, Any] | None:
     try:
-        resp = await client.get(item["source_page"], headers=headers)
-        if resp.status_code == 200:
+        resp = await fetch_with_retry(client, item["source_page"], semaphore)
+        if resp:
             soup = BeautifulSoup(resp.text, "lxml")
             
             # Resolve radar URL if missing
@@ -255,9 +283,12 @@ async def resolve_archetype_details(client: httpx.AsyncClient, item: dict[str, A
 
 
 async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
+    # Use strict Semaphore of 3 to avoid triggering Cloudflare / server rate-limiting/disconnects
+    semaphore = asyncio.Semaphore(3)
+
     async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         # Step 1: Discover class indexes & potential archetype pages
-        discovery_tasks = [discover_class_radars(client, cls_name) for cls_name in CLASSES]
+        discovery_tasks = [discover_class_radars(client, cls_name, semaphore) for cls_name in CLASSES]
         discovery_results = await asyncio.gather(*discovery_tasks)
 
         all_items = []
@@ -265,7 +296,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
             all_items.extend(res_list)
 
         # Step 2: Resolve archetype details (including inner deck links & radar URLs)
-        resolve_tasks = [resolve_archetype_details(client, item) for item in all_items]
+        resolve_tasks = [resolve_archetype_details(client, item, semaphore) for item in all_items]
         resolved_results = await asyncio.gather(*resolve_tasks)
         
         # Keep items that have resolved radar URLs
@@ -275,7 +306,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
         async def fetch_code_for_item(item: dict[str, Any]) -> dict[str, Any]:
             if item["inner_deck_pages"]:
                 # Fetch first deck page code for this archetype
-                code = await fetch_deck_code(client, item["inner_deck_pages"][0])
+                code = await fetch_deck_code(client, item["inner_deck_pages"][0], semaphore)
                 if code:
                     item["deck_code"] = code
             return item
@@ -285,7 +316,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
 
         # Step 4: Fetch index.html files for all resolved radars and parse them
         async def fetch_and_parse(item: dict[str, Any]) -> dict[str, Any] | None:
-            html = await fetch_radar_html(client, item["radar_url"])
+            html = await fetch_radar_html(client, item["radar_url"], semaphore)
             if not html:
                 return None
 

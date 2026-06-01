@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import re
 import secrets
 from urllib.parse import urlparse, urlunparse
@@ -149,14 +150,29 @@ async def check_proxy_health() -> dict[str, str]:
     url = proxy_url_for_source("healthcheck")
     if not url:
         raise RuntimeError("HS_FETCH_PROXY_URL is empty")
-    async with httpx.AsyncClient(
-        proxy=url,
-        timeout=30.0,
-        limits=httpx.Limits(max_keepalive_connections=0),
-    ) as client:
-        response = await client.get(proxy_check_url())
-        response.raise_for_status()
-        ip = response.text.strip()
+    
+    # Retry checking health multiple times as rotating residential proxies can occasionally drop connections
+    ip = None
+    last_err = None
+    for attempt in range(5):
+        try:
+            async with httpx.AsyncClient(
+                proxy=url,
+                timeout=30.0,
+                limits=httpx.Limits(max_keepalive_connections=0),
+            ) as client:
+                response = await client.get(proxy_check_url())
+                response.raise_for_status()
+                ip = response.text.strip()
+                break
+        except Exception as exc:
+            last_err = exc
+            logger.warning(f"Proxy healthcheck attempt {attempt+1}/5 failed: {exc}. Retrying...")
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+            
+    if not ip:
+        raise RuntimeError(f"Proxy healthcheck failed after 5 attempts. Last error: {last_err}")
+        
     rotation = await check_proxy_rotation(3)
     return {
         "proxy_url_host": urlparse(url).hostname or "",
