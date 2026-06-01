@@ -120,6 +120,40 @@ async def fetch_radar_html(client: httpx.AsyncClient, url: str) -> str | None:
     return None
 
 
+async def fetch_deck_code(client: httpx.AsyncClient, deck_url: str) -> str | None:
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    try:
+        resp = await client.get(deck_url, headers=headers)
+        if resp.status_code == 200:
+            # Look for button data-clipboard-text or input value containing AAE...
+            soup = BeautifulSoup(resp.text, "lxml")
+            
+            # 1. Look for data-clipboard-text on buttons
+            btn = soup.find("button", attrs={"data-clipboard-text": True})
+            if btn:
+                val = btn["data-clipboard-text"].strip()
+                if val.startswith("AAE"):
+                    return val
+
+            # 2. Look for input tag with AAE value
+            inp = soup.find("input", value=True)
+            if inp:
+                val = inp["value"].strip()
+                if val.startswith("AAE"):
+                    return val
+
+            # 3. Text search
+            text_match = re.search(r"(AAE[A-Za-z0-9+/=]+)", resp.text)
+            if text_match:
+                return text_match.group(1)
+    except Exception as e:
+        logger.error(f"Error fetching inner deck code from {deck_url}: {e}")
+    return None
+
+
 async def discover_class_radars(client: httpx.AsyncClient, class_name: str) -> list[dict[str, Any]]:
     slug = CLASS_SLUGS.get(class_name)
     if not slug:
@@ -155,6 +189,8 @@ async def discover_class_radars(client: httpx.AsyncClient, class_name: str) -> l
                 "archetype": None,
                 "radar_url": main_radar_url,
                 "source_page": index_url,
+                "inner_deck_pages": [],
+                "deck_code": None,
             })
 
         # 2. Archetype Sublinks
@@ -163,9 +199,6 @@ async def discover_class_radars(client: httpx.AsyncClient, class_name: str) -> l
             if "#" in href or "?" in href:
                 continue
             
-            # Match formats like:
-            # https://www.vicioussyndicate.com/deck-library/hunter-decks/companion-hunter/
-            # /deck-library/hunter-decks/companion-hunter/
             pattern = rf"https?://(?:www\.)?vicioussyndicate\.com/deck-library/{slug}/([^/]+)/?$"
             match = re.match(pattern, href)
             if not match:
@@ -174,12 +207,13 @@ async def discover_class_radars(client: httpx.AsyncClient, class_name: str) -> l
 
             if match:
                 arch_name = a.text.strip() or match.group(1).replace("-", " ").title()
-                # Resolve the subpage to find its embed
                 discovered.append({
                     "class": class_name,
                     "archetype": arch_name,
-                    "radar_url": None, # Will resolve later
+                    "radar_url": None,
                     "source_page": normalize_radar_url(href),
+                    "inner_deck_pages": [],
+                    "deck_code": None,
                 })
 
     except Exception as e:
@@ -188,10 +222,7 @@ async def discover_class_radars(client: httpx.AsyncClient, class_name: str) -> l
     return discovered
 
 
-async def resolve_archetype_radar_url(client: httpx.AsyncClient, item: dict[str, Any]) -> dict[str, Any] | None:
-    if item["radar_url"]:
-        return item # Already resolved
-
+async def resolve_archetype_details(client: httpx.AsyncClient, item: dict[str, Any]) -> dict[str, Any] | None:
     headers = {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -200,14 +231,26 @@ async def resolve_archetype_radar_url(client: httpx.AsyncClient, item: dict[str,
         resp = await client.get(item["source_page"], headers=headers)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "lxml")
-            obj = soup.find(["object", "embed", "iframe"])
-            if obj:
-                path = obj.get("data") or obj.get("src")
-                if path:
-                    item["radar_url"] = normalize_radar_url(path)
-                    return item
+            
+            # Resolve radar URL if missing
+            if not item["radar_url"]:
+                obj = soup.find(["object", "embed", "iframe"])
+                if obj:
+                    path = obj.get("data") or obj.get("src")
+                    if path:
+                        item["radar_url"] = normalize_radar_url(path)
+
+            # Discover nested deck page links (e.g., https://www.vicioussyndicate.com/decks/...)
+            deck_pages = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "/decks/" in href:
+                    deck_pages.append(normalize_radar_url(href))
+            
+            item["inner_deck_pages"] = list(set(deck_pages))
+            return item
     except Exception as e:
-        logger.error(f"Error resolving archetype radar for {item['archetype']}: {e}")
+        logger.error(f"Error resolving details for {item.get('archetype') or item['class']}: {e}")
     return None
 
 
@@ -226,24 +269,26 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
         for res_list in discovery_results:
             all_items.extend(res_list)
 
-        # Step 2: Resolve archetype subpage URLs
-        resolve_tasks = []
-        for item in all_items:
-            if not item["radar_url"]:
-                resolve_tasks.append(resolve_archetype_radar_url(client, item))
+        # Step 2: Resolve archetype details (including inner deck links & radar URLs)
+        resolve_tasks = [resolve_archetype_details(client, item) for item in all_items]
+        resolved_results = await asyncio.gather(*resolve_tasks)
+        
+        # Keep items that have resolved radar URLs
+        active_items = [r for r in resolved_results if r is not None and r.get("radar_url")]
 
-        if resolve_tasks:
-            resolved_results = await asyncio.gather(*resolve_tasks)
-            # Filter and update
-            for res in resolved_results:
-                if res:
-                    # Update in our all_items list or keep track of successfully resolved
-                    pass
+        # Step 3: Fetch deck codes in parallel for items that have deck pages
+        async def fetch_code_for_item(item: dict[str, Any]) -> dict[str, Any]:
+            if item["inner_deck_pages"]:
+                # Fetch first deck page code for this archetype
+                code = await fetch_deck_code(client, item["inner_deck_pages"][0])
+                if code:
+                    item["deck_code"] = code
+            return item
 
-        # Clean list to keep only resolved items
-        active_items = [i for i in all_items if i.get("radar_url")]
+        code_tasks = [fetch_code_for_item(item) for item in active_items]
+        active_items = await asyncio.gather(*code_tasks)
 
-        # Step 3: Fetch index.html files for all resolved radars
+        # Step 4: Fetch index.html files for all resolved radars and parse them
         async def fetch_and_parse(item: dict[str, Any]) -> dict[str, Any] | None:
             html = await fetch_radar_html(client, item["radar_url"])
             if not html:
@@ -262,6 +307,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
                 "issue": issue,
                 "url": item["source_page"],
                 "radar_url": item["radar_url"],
+                "deck_code": item["deck_code"],
                 **radar_data
             }
 

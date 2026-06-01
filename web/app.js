@@ -490,6 +490,15 @@ function renderDetail(p) {
         <!-- Populated dynamically -->
       </div>
 
+      <!-- Selected Radar Deck Code Block -->
+      <div id="radar-deck-code-section" class="block" style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; margin-bottom: 1.5rem; display: none;">
+        <h4 style="margin-top: 0; color: #ff9f1c; font-size: 1.1rem; margin-bottom: 0.5rem;">Код колоды для этого радара</h4>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input type="text" id="radar-deck-code-input" readonly style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 0.8rem; font-size: 0.85rem; border-radius: 6px; width: 100%; font-family: monospace;" onclick="this.select();" />
+          <button id="radar-deck-code-copy-btn" class="source-btn" style="padding: 0.5rem 1rem; border-radius: 6px; font-weight: bold; background: #2ec4b6; color: white;">Копировать</button>
+        </div>
+      </div>
+
       <!-- Graph Container -->
       <div style="position: relative; margin: 1.5rem 0; background: #0f0f11; border: 1px solid var(--border); border-radius: 12px; padding: 1rem; overflow: hidden;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 10px;">
@@ -659,6 +668,24 @@ function initRadarGraph(data) {
     selectedNode = null;
     hoveredNode = null;
     updateSelectedCardView();
+
+    // Display deck code if available
+    const deckCodeSec = document.getElementById("radar-deck-code-section");
+    const deckCodeInp = document.getElementById("radar-deck-code-input");
+    const deckCodeBtn = document.getElementById("radar-deck-code-copy-btn");
+    
+    if (deckCodeSec && deckCodeInp && deckCodeBtn) {
+      if (radar.deck_code) {
+        deckCodeInp.value = radar.deck_code;
+        deckCodeSec.style.display = "block";
+        deckCodeBtn.onclick = () => {
+          navigator.clipboard.writeText(radar.deck_code);
+          alert("Код колоды скопирован!");
+        };
+      } else {
+        deckCodeSec.style.display = "none";
+      }
+    }
 
     nodes = radar.nodes.map(n => {
       const angle = Math.random() * Math.PI * 2;
