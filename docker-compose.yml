@@ -1,0 +1,13 @@
+services:
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: hs-flaresolverr
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      CAPTCHA_SOLVER: none
+      TZ: UTC
+    ports:
+      - "127.0.0.1:8191:8191"
+    shm_size: "1gb"
+    mem_limit: 1500m

@@ -1,0 +1,12 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+*.log
+.refresh.lock
+/var/lib/hs-data-api/
+.pytest_cache/
+.mypy_cache/
+.DS_Store

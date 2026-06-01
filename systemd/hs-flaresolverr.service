@@ -1,0 +1,16 @@
+[Unit]
+Description=FlareSolverr for HS Data API scraping
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/hs-data-api
+ExecStart=/usr/bin/docker compose up -d flaresolverr
+ExecStop=/usr/bin/docker compose stop flaresolverr
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Hearthstone data cache
+After=network-online.target hs-scrape-proxy.service
+Wants=network-online.target hs-scrape-proxy.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/hs-data-api
+EnvironmentFile=/etc/hs-data-api.env
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --all

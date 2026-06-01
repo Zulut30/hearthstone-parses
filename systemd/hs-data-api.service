@@ -1,0 +1,15 @@
+[Unit]
+Description=Hearthstone Data API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hs-data-api
+EnvironmentFile=/etc/hs-data-api.env
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
