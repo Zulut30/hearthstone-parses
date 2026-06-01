@@ -47,9 +47,12 @@ $$R_i = K_{min} + C \cdot P_i$$
 ```json
 {
   "class": "DeathKnight",
-  "title": "Data Reaper's Radar - Issue #349 - DeathKnight",
+  "archetype": "Plague Death Knight",
+  "title": "Data Reaper's Radar - Issue #349 - Plague Death Knight",
   "issue": "349",
-  "url": "https://www.vicioussyndicate.com/wp-content/datareaper/radars/DeathKnight/index.html",
+  "url": "https://www.vicioussyndicate.com/deck-library/death-knight-decks/plague-death-knight/",
+  "radar_url": "https://www.vicioussyndicate.com/wp-content/datareaper/radars/DeathKnight/index.html",
+  "deck_code": "AAECAfHhBAam6wX7+AWYgQaHggaOgAbTngYM88gF8+gFlMoF16IGl6UGmKUGmqUG6aUGkLUGkrUEl7UEAAA=",
   "nodes": [
     {
       "name": "Arisen Onyxia",
@@ -80,6 +83,8 @@ $$R_i = K_{min} + C \cdot P_i$$
 }
 ```
 
+- **Параметр `archetype`** содержит название конкретного субарехтипа класса (или `null` для общего радара класса).
+- **Параметр `deck_code`** содержит прямой импортируемый код колоды в Hearthstone для быстрого импорта.
 - **Узлы (nodes)** хранят визуальные атрибуты: радиус, цвета заливки (`fill` кодирует тип карты или её школу магии / руны) и рамки (`stroke` кодирует редкость или класс карты).
 - **Ребра (edges)** связывают узлы по именам и имеют вес (`weight`), определяющий упругость связи в симуляции, и желаемую длину пружины (`length`).
 

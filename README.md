@@ -166,22 +166,37 @@ https://api.hs-manacost.ru
 
 ### 2.1 Vicious Syndicate: Радары связей карт (`vicious_syndicate_radars`)
 * **ID источника:** `vicious_syndicate_radars`
-* **Целевой URL:** `https://www.vicioussyndicate.com/deck-library/death-knight-decks/`
-* **Бэкэнд сбора:** `vicious_syndicate_api` (асинхронный сбор в параллельном режиме с вытягиванием вложенных HTML-страниц классов)
-* **Описание:** Парсит интерактивные физические радары синергий карт Vicious Syndicate для всех 11 классов Hearthstone. Извлекает координаты, радиусы популярности и веса связей (совместную встречаемость) для построения динамических графов на Canvas.
+* **Целевой URL:** `https://www.vicioussyndicate.com/deck-library/death-knight-decks/` (и все остальные классовые разделы)
+* **Бэкэнд сбора:** `vicious_syndicate_api` (асинхронный сбор в параллельном режиме с автоматическим обнаружением и парсингом как общих радаров классов, так и специфичных радаров для отдельных архетипов)
+* **Описание:** Парсит интерактивные физические радары синергий карт Vicious Syndicate для всех классов и архетипов Hearthstone, а также **извлекает прямые коды колод** для этих архетипов с их страниц деталей. Извлекает координаты, радиусы популярности и веса связей (совместную встречаемость) для построения динамических графов на Canvas.
 
 #### Спецификация JSON-ответа `data.structured`:
 ```json
 {
   "type": "vicious_syndicate_radars",
   "issue": "349",
-  "total_radars": 11,
+  "classes_summary": [
+    {
+      "class": "Hunter",
+      "has_archetypes": true,
+      "archetypes": ["Companion Hunter", "Face Hunter"]
+    },
+    {
+      "class": "Paladin",
+      "has_archetypes": false,
+      "archetypes": []
+    }
+  ],
+  "total_radars": 15,
   "radars": [
     {
-      "class": "DeathKnight",
-      "title": "Data Reaper's Radar - Issue #349 - DeathKnight",
+      "class": "Paladin",
+      "archetype": null,
+      "title": "Data Reaper's Radar - Issue #349 - Dude Paladin",
       "issue": "349",
-      "url": "https://www.vicioussyndicate.com/wp-content/datareaper/radars/DeathKnight/index.html",
+      "url": "https://www.vicioussyndicate.com/deck-library/paladin-decks/dude-paladin/",
+      "radar_url": "https://www.vicioussyndicate.com/wp-content/datareaper/radars/Paladin/index.html",
+      "deck_code": "AAECAZ8FBMODB8avB+XBB+jFBw3JoASU9QW6lgfXlwfOmweNnQf1rwf2wQeDwgfkxQfmxQfnxQfD4wcAAA==",
       "nodes": [
         {
           "name": "Arisen Onyxia",
@@ -207,16 +222,21 @@ https://api.hs-manacost.ru
 ```
 
 #### Ключевые поля объектов:
-* **Узлы (Nodes):**
-  * `name` (string) — локализованное (английское) название карты.
-  * `radius` (float) — популярность карты (определяет диаметр круга в симуляции).
-  * `fill` (string) — цвет заливки в формате `rgba`. Используется для классификации (например, классовые карты, нейтральные, школы магии).
-  * `stroke` (string) — цвет границы узла.
-* **Ребра (Edges):**
-  * `source` (string) — название первой карты.
-  * `target` (string) — название второй карты.
-  * `weight` (float) — сила связи совместной встречаемости (от $0.0$ до $1.0$). Чем выше вес, тем сильнее синергия между картами в реальных колодах.
-  * `length` (float) — базовая длина физической связи-пружины (обычно `250.0`).
+* `classes_summary` (array) — верхнеуровневый свод классов, упрощающий отрисовку вкладок в UI. Содержит поле `has_archetypes` (есть ли у класса субарехтипы) и список `archetypes`.
+* **Элемент массива `radars`:**
+  * `class` (string) — класс Hearthstone.
+  * `archetype` (string | null) — название конкретного архетипа (или `null` для общего радара класса).
+  * `deck_code` (string | null) — **импортируемый код колоды** Hearthstone, автоматически извлеченный со страницы подробностей данного архетипа.
+  * **Узлы (Nodes):**
+    * `name` (string) — локализованное (английское) название карты.
+    * `radius` (float) — популярность карты (определяет диаметр круга в симуляции).
+    * `fill` (string) — цвет заливки в формате `rgba`. Используется для классификации (классовые, нейтральные, заклинания).
+    * `stroke` (string) — цвет границы узла.
+  * **Ребра (Edges):**
+    * `source` (string) — название первой карты.
+    * `target` (string) — название второй карты.
+    * `weight` (float) — сила связи совместной встречаемости (от $0.0$ до $1.0$). Чем выше вес, тем сильнее синергия между картами в реальных колодах.
+    * `length` (float) — базовая длина физической связи-пружины (обычно `250.0`).
 
 ---
 
