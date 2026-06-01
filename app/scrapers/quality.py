@@ -164,19 +164,32 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             if total_cards < 300:
                 return False, f"heartharena cards too few ({total_cards})"
             return True, "ok"
+        if structured.get("type") == "card_stats":
+            cards = structured.get("cards") or []
+            if structured.get("blocked") and len(cards) < 10:
+                return False, "card stats blocked or empty"
+            if len(cards) < 30:
+                return False, f"card stats too few ({len(cards)})"
+            with_metrics = sum(
+                1 for c in cards if c.get("deck_winrate") or c.get("deck_popularity")
+            )
+            if with_metrics < 20:
+                return False, f"card stats missing metrics ({with_metrics}/{len(cards)})"
+            return True, "ok"
         if any("could not load data" in line.lower() for line in text_lines):
             return False, "hsreplay premium data not loaded (login required)"
         if source.id.startswith("hsreplay_cards_"):
-            for script in json_scripts:
-                if script.get("id") != "userdata":
-                    continue
-                user = (script.get("value") or {})
-                if isinstance(user, str):
-                    continue
-                if not (user.get("user") or {}).get("is_authenticated"):
-                    return False, "hsreplay session not authenticated"
-            if not any("%" in line for line in text_lines[100:200]):
-                return False, "hsreplay cards stats not found in page"
+            if "rankrange=gold" not in (source.fragment or "").lower():
+                for script in json_scripts:
+                    if script.get("id") != "userdata":
+                        continue
+                    user = (script.get("value") or {})
+                    if isinstance(user, str):
+                        continue
+                    if not (user.get("user") or {}).get("is_authenticated"):
+                        return False, "hsreplay session not authenticated"
+                if not any("%" in line for line in text_lines[100:200]):
+                    return False, "hsreplay cards stats not found in page"
         has_userdata = any(s.get("id") == "userdata" for s in json_scripts)
         if has_userdata or table_rows >= 3 or len(text_lines) >= 40:
             return True, "ok"

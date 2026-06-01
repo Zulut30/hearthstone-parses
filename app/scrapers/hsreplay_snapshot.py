@@ -29,6 +29,33 @@ _EXTRACT_JS = """
     if (cells.length >= 2) card_rows.push(cells);
   });
 
+  const card_entries = [];
+  const card_grid_rows = [];
+  const seenHref = new Set();
+  const collectRow = (el) => {
+    const link = el.querySelector('a[href*="/cards/"]');
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    if (!href || seenHref.has(href)) return;
+    seenHref.add(href);
+    const m = href.match(/(\\d{3,})/);
+    const dbfId = m ? parseInt(m[1], 10) : null;
+    const rowText = clean(el.innerText || "");
+    const cells = [...el.querySelectorAll("td, th, span, div")]
+      .map((c) => clean(c.innerText))
+      .filter((t) => t && t.length < 80);
+    const item = { href, dbfId, rowText, cells: cells.slice(0, 12) };
+    card_entries.push(item);
+    if (/%/.test(rowText)) card_grid_rows.push(item);
+  };
+  ["[role=\\"row\\"]", "div[class*=\\"CardRow\\"]", "div[class*=\\"card-row\\"]"].forEach((sel) => {
+    document.querySelectorAll(sel).forEach(collectRow);
+  });
+  document.querySelectorAll('a[href*="/cards/"]').forEach((link) => {
+    const row = link.closest('[role="row"], tr, li, div');
+    if (row) collectRow(row);
+  });
+
   let authenticated = null;
   const ud = document.querySelector("script#userdata");
   if (ud && ud.textContent) {
@@ -36,7 +63,7 @@ _EXTRACT_JS = """
       authenticated = !!JSON.parse(ud.textContent).user?.is_authenticated;
     } catch (e) {}
   }
-  return { lines, tables, card_rows, authenticated };
+  return { lines, tables, card_rows, card_entries, card_grid_rows, authenticated };
 }
 """
 
@@ -64,7 +91,7 @@ async def dismiss_consent(page) -> None:
 
 
 async def scroll_for_lazy_content(page, source: Source) -> None:
-    scroll_pages = 12 if source.id.startswith("hsreplay_cards_") else 6
+    scroll_pages = 7 if source.id.startswith("hsreplay_cards_") else 6
     if source.id == "hsreplay_arena_cards_advanced":
         scroll_pages = 15
     for _ in range(scroll_pages):

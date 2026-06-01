@@ -34,6 +34,8 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 Автоматический сбор данных раз в сутки по таймеру: `systemd/hs-data-api-refresh.timer`.
 
+**Установка на новый сервер и перенос кэша:** см. [DEPLOY.md](DEPLOY.md) и `scripts/install.sh`, `scripts/export-bundle.sh`, `scripts/import-bundle.sh`, `scripts/audit.sh`.
+
 ---
 
 ## Базовый URL REST API

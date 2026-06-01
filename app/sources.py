@@ -137,17 +137,17 @@ SOURCES: tuple[Source, ...] = (
     ),
     Source(
         "hsreplay_cards_legend_included_winrate",
-        "https://hsreplay.net/cards/#rankRange=LEGEND&sortBy=includedWinrate",
+        "https://hsreplay.net/cards/#rankRange=GOLD&sortBy=includedWinrate&timeRange=LAST_14_DAYS",
         "hsreplay",
         "ranked",
-        description="HSReplay cards, legend, sorted by included winrate. Fragment is client-side.",
+        description="HSReplay cards, Gold rank, 14 days, sorted by included winrate.",
     ),
     Source(
         "hsreplay_cards_legend_included_popularity",
-        "https://hsreplay.net/cards/#rankRange=LEGEND&sortBy=includedPopularity",
+        "https://hsreplay.net/cards/#rankRange=GOLD&sortBy=includedPopularity&timeRange=LAST_14_DAYS",
         "hsreplay",
         "ranked",
-        description="HSReplay cards, legend, sorted by included popularity. Fragment is client-side.",
+        description="HSReplay cards, Gold rank, 14 days, sorted by included popularity.",
     ),
     Source(
         "firestone_battlegrounds_comps",
