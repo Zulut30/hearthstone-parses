@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
-from .config import fetch_proxy_url
+from .scrapers.proxy import httpx_client_kwargs
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -255,12 +255,7 @@ async def resolve_archetype_details(client: httpx.AsyncClient, item: dict[str, A
 
 
 async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
-    proxy = fetch_proxy_url()
-    client_kwargs = {"timeout": 45.0}
-    if proxy:
-        client_kwargs["proxy"] = proxy
-
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         # Step 1: Discover class indexes & potential archetype pages
         discovery_tasks = [discover_class_radars(client, cls_name) for cls_name in CLASSES]
         discovery_results = await asyncio.gather(*discovery_tasks)

@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
-from .config import fetch_proxy_url
+from .scrapers.proxy import httpx_client_kwargs
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -116,13 +116,7 @@ async def fetch_hearthstone_decks(source: Source) -> dict[str, Any]:
     """
     from .storage import load_dataset
 
-    proxy = fetch_proxy_url()
-    client_kwargs = {"timeout": 45.0}
-    if proxy:
-        client_kwargs["proxy"] = proxy
-
-    # Fetch standard and wild deck list pages in parallel
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         standard_task = parse_decks_list_page(client, "https://hearthstone-decks.net/standard-decks/", "Standard", limit=20)
         wild_task = parse_decks_list_page(client, "https://hearthstone-decks.net/wild-decks/", "Wild", limit=20)
         

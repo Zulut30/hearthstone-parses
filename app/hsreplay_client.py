@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 from .config import request_timeout_seconds, user_agent
-from .scrapers.proxy import proxy_url_for_source
+from .scrapers.proxy import httpx_client_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +37,9 @@ def extract_json_payload(body: str) -> dict[str, Any] | list[Any] | None:
 
 
 async def download_text(url: str, source_id: str | None = None) -> str:
-    proxy = proxy_url_for_source(source_id)
-    timeout = request_timeout_seconds()
     headers = {"User-Agent": user_agent(), "Accept": "application/json,text/plain,*/*"}
-    async with httpx.AsyncClient(
-        proxy=proxy,
-        timeout=timeout,
-        follow_redirects=True,
-        headers=headers,
-    ) as client:
+    kwargs = httpx_client_kwargs(source_id, timeout=request_timeout_seconds())
+    async with httpx.AsyncClient(headers=headers, **kwargs) as client:
         response = await client.get(url)
         response.raise_for_status()
         return response.text

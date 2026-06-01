@@ -41,6 +41,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     refresh.add_argument("--all", action="store_true", help="Refresh every configured source.")
     refresh.add_argument("--source", action="append", default=[], help="Refresh one source id.")
     sub.add_parser("proxy-check", help="Verify HS_FETCH_PROXY_URL egress IP.")
+    sub.add_parser(
+        "proxy-rotation-check",
+        help="Sample egress IPs (rotation test; set HS_IPROYAL_ROTATE_PER_FETCH=true for max spread).",
+    )
     login = sub.add_parser("hsreplay-login", help="Log into HSReplay Premium and save browser session.")
     imp = sub.add_parser(
         "hsreplay-import-storage",
@@ -66,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
         info = asyncio.run(check_proxy_health())
         print(json.dumps(info, ensure_ascii=False, indent=2))
         return 0
+    if args.command == "proxy-rotation-check":
+        from .scrapers.proxy import check_proxy_rotation
+
+        info = asyncio.run(check_proxy_rotation(8))
+        print(json.dumps(info, ensure_ascii=False, indent=2))
+        return 0 if info.get("rotating") or info.get("unique_ips", 0) >= 1 else 1
     if args.command == "hsreplay-login":
         from .config import hsreplay_storage_path
         from .hsreplay_auth import ensure_hsreplay_login

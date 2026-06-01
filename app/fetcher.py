@@ -15,6 +15,7 @@ from .config import (
     fetch_direct_enabled,
     fetch_proxy_url,
     fetch_require_proxy,
+    flaresolverr_session_per_source,
     request_delay_seconds,
     request_timeout_seconds,
     user_agent,
@@ -521,11 +522,15 @@ async def _refresh_sources_unlocked(source_ids: list[str] | None = None) -> list
     try:
         if use_patchright and not fetch_direct_enabled():
             await PatchrightPool.get()
-        if use_flaresolverr and not fetch_direct_enabled():
-            fs_session = FlareSolverrSession()
-            await fs_session.__aenter__()
-            set_active_flaresolverr_session(fs_session)
         for source in selected:
+            if use_flaresolverr and not fetch_direct_enabled():
+                if flaresolverr_session_per_source() or fs_session is None:
+                    if fs_session is not None:
+                        set_active_flaresolverr_session(None)
+                        await fs_session.__aexit__(None, None, None)
+                    fs_session = FlareSolverrSession()
+                    await fs_session.__aenter__()
+                    set_active_flaresolverr_session(fs_session)
             status = await fetch_source(client, source)
             if proxy_info and status.get("state") == "ok":
                 status["proxy_egress_ip"] = proxy_info.get("egress_ip")

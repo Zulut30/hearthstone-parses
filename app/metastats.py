@@ -10,7 +10,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .cards_index import card_from_id
-from .config import fetch_proxy_url
+from .scrapers.proxy import httpx_client_kwargs
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -170,15 +170,10 @@ def parse_metastats_class_page(html_content: str, class_name: str) -> list[dict[
 
 
 async def fetch_metastats_decks(source: Source) -> dict[str, Any]:
-    proxy = fetch_proxy_url()
-    client_kwargs = {"timeout": 45.0}
-    if proxy:
-        client_kwargs["proxy"] = proxy
-
     all_decks = []
     classes_parsed = []
 
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         tasks = []
         for cls_name in CLASSES:
             url = f"https://metastats.net/hearthstone/class/decks/{cls_name}/"
@@ -290,17 +285,12 @@ def parse_metastats_matchups(html_content: str) -> dict[str, Any]:
 
 
 async def fetch_metastats_matchups(source: Source) -> dict[str, Any]:
-    proxy = fetch_proxy_url()
-    client_kwargs = {"timeout": 45.0}
-    if proxy:
-        client_kwargs["proxy"] = proxy
-
     headers = {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     }
 
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         resp = await client.get(source.url, headers=headers)
         resp.raise_for_status()
         html_content = resp.text

@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from .cards_index import card_from_id
+from .scrapers.proxy import httpx_client_kwargs
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -105,11 +106,10 @@ async def fetch_firestone_comps(source: Source) -> dict[str, Any]:
         "user-agent": "KolodaHS BattlegroundsCrawler/1.0 (+https://kolodahs.ru)",
     }
     
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        # Fetch strategies and stats in parallel
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         resp_strategies, resp_stats = await asyncio.gather(
             client.get(FIRESTONE_STRATEGIES_URL, headers=headers),
-            client.get(FIRESTONE_STATS_URL, headers=headers)
+            client.get(FIRESTONE_STATS_URL, headers=headers),
         )
         
         resp_strategies.raise_for_status()
@@ -218,7 +218,7 @@ async def fetch_firestone_cards(source: Source) -> dict[str, Any]:
     
     is_spell = "type=spell" in source.url or source.id.endswith("_spells")
     
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         resp = await client.get(FIRESTONE_CARDS_URL, headers=headers)
         resp.raise_for_status()
         
@@ -324,11 +324,11 @@ async def fetch_firestone_arena(source: Source) -> dict[str, Any]:
         "user-agent": "KolodaHS ArenaCrawler/1.0 (+https://kolodahs.ru)",
     }
     
-    async with httpx.AsyncClient(timeout=45.0) as client:
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
         resps = await asyncio.gather(
             client.get(card_stats_url, headers=headers),
             client.get(draft_stats_url, headers=headers),
-            return_exceptions=True
+            return_exceptions=True,
         )
         
         resp_cards = resps[0]

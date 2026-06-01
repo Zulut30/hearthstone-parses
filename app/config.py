@@ -82,6 +82,26 @@ def iproyal_session_per_source() -> bool:
     }
 
 
+def iproyal_rotate_per_fetch() -> bool:
+    """Append a unique IPRoyal session suffix per request (fresh IP). Off if your plan returns 407."""
+    return os.environ.get("HS_IPROYAL_ROTATE_PER_FETCH", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def flaresolverr_session_per_source() -> bool:
+    """New FlareSolverr browser session per source during refresh (better IP/cookie isolation)."""
+    return os.environ.get("HS_FLARESOLVERR_SESSION_PER_SOURCE", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def proxy_check_url() -> str:
     return os.environ.get("HS_PROXY_CHECK_URL", "https://api.ipify.org").strip()
 

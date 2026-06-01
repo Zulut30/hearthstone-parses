@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from .cards_index import card_from_id
+from .scrapers.proxy import httpx_client_kwargs
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ async def fetch_firestone_bg_heroes(source: Source, *, locale: str = "ruRU") -> 
     mmr, time_period = _parse_page_params(source.url)
     api_url = FIRESTONE_BG_HEROES_API.format(mmr=mmr, time_period=time_period)
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(**httpx_client_kwargs(source.id, timeout=60.0)) as client:
         response = await client.get(api_url, headers=_HEADERS)
         response.raise_for_status()
         raw = response.content
