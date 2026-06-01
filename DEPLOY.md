@@ -2,6 +2,8 @@
 
 Репозиторий: **https://github.com/Zulut30/hearthstone-parses**
 
+Перед продакшеном: **[docs/SECURITY_AND_PARSING.md](docs/SECURITY_AND_PARSING.md)** — секреты, API, прокси, парсинг, чеклист.
+
 ## Быстрая установка с нуля
 
 ```bash
