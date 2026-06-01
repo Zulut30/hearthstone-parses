@@ -465,17 +465,25 @@ function renderDetail(p) {
     }
     body += "</div>";
   } else if (t === "vicious_syndicate_radars" && v.radars) {
+    const uniqueClasses = Array.from(new Set(v.radars.map(r => r.class)));
     body = `<div class="block">
       <h3>Интерактивный радар карт Vicious Syndicate (Выпуск #${escapeHtml(v.issue || "?")})</h3>
       <p class="muted" style="margin-bottom: 1.5rem;">Граф показывает связи между картами в колодах. Чем больше круг, тем популярнее карта. Чем толще линия, тем сильнее синергия.</p>
       
       <!-- Class Selector Tabs -->
-      <div class="tabs-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 1.5rem;">
-        ${v.radars.map((r, i) => `
-          <button class="source-btn class-tab-btn ${i === 0 ? "active" : ""}" data-class="${escapeHtml(r.class)}" style="font-weight: bold; border-radius: 6px; padding: 0.4rem 0.8rem; border: 1px solid var(--border);">
-            ${escapeHtml(r.class)}
+      <h5 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Выберите класс:</h5>
+      <div class="tabs-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 1rem;">
+        ${uniqueClasses.map((cls, i) => `
+          <button class="source-btn class-tab-btn ${i === 0 ? "active" : ""}" data-class="${escapeHtml(cls)}" style="font-weight: bold; border-radius: 6px; padding: 0.4rem 0.8rem; border: 1px solid var(--border);">
+            ${escapeHtml(cls)}
           </button>
         `).join("")}
+      </div>
+
+      <!-- Archetype Selector Tabs -->
+      <h5 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Выберите архетип / радар:</h5>
+      <div id="radar-archetypes-container" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 1.5rem; background: var(--panel); padding: 0.4rem; border-radius: 8px; border: 1px dashed var(--border);">
+        <!-- Populated dynamically -->
       </div>
 
       <!-- Graph Container -->
@@ -568,8 +576,10 @@ function initRadarGraph(data) {
   const selectedCardTitle = document.getElementById("selected-card-title");
   const selectedCardDetails = document.getElementById("selected-card-details");
   const nodesTableBody = document.querySelector("#radar-nodes-table tbody");
+  const archetypesContainer = document.getElementById("radar-archetypes-container");
 
   let currentClass = data.radars[0] ? data.radars[0].class : null;
+  let currentArchetype = null;
   let nodes = [];
   let edges = [];
   let draggedNode = null;
@@ -577,12 +587,47 @@ function initRadarGraph(data) {
   let selectedNode = null;
   let searchText = "";
 
+  function rebuildArchetypeTabs(clsName) {
+    if (!archetypesContainer) return;
+    archetypesContainer.innerHTML = "";
+
+    const classRadars = data.radars.filter(r => r.class === clsName);
+    
+    // Sort radars so that the main class radar (archetype === null) is first
+    classRadars.sort((a, b) => {
+      if (a.archetype === null) return -1;
+      if (b.archetype === null) return 1;
+      return a.archetype.localeCompare(b.archetype);
+    });
+
+    classRadars.forEach((r, i) => {
+      const btn = document.createElement("button");
+      btn.className = `source-btn arch-tab-btn ${i === 0 ? "active" : ""}`;
+      btn.style.fontSize = "0.8rem";
+      btn.style.padding = "0.3rem 0.6rem";
+      btn.style.borderRadius = "4px";
+      btn.style.border = "1px solid var(--border)";
+      btn.textContent = r.archetype ? r.archetype : "Общий (Класс)";
+      
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".arch-tab-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentArchetype = r.archetype;
+        loadClassRadar(currentClass, currentArchetype);
+      });
+
+      archetypesContainer.appendChild(btn);
+    });
+  }
+
   document.querySelectorAll(".class-tab-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".class-tab-btn").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       currentClass = btn.dataset.class;
-      loadClassRadar(currentClass);
+      currentArchetype = null;
+      rebuildArchetypeTabs(currentClass);
+      loadClassRadar(currentClass, null);
     });
   });
 
@@ -599,12 +644,12 @@ function initRadarGraph(data) {
       selectedNode = null;
       hoveredNode = null;
       updateSelectedCardView();
-      loadClassRadar(currentClass);
+      loadClassRadar(currentClass, currentArchetype);
     });
   }
 
-  function loadClassRadar(clsName) {
-    const radar = data.radars.find(r => r.class === clsName);
+  function loadClassRadar(clsName, archetype = null) {
+    const radar = data.radars.find(r => r.class === clsName && r.archetype === archetype);
     if (!radar) return;
 
     selectedNode = null;
@@ -944,7 +989,8 @@ function initRadarGraph(data) {
     radarAnimationId = requestAnimationFrame(tick);
   }
 
-  loadClassRadar(currentClass);
+  rebuildArchetypeTabs(currentClass);
+  loadClassRadar(currentClass, null);
   tick();
 }
 
