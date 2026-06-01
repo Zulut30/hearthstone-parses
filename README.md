@@ -38,9 +38,9 @@ uvicorn app.server:app --host 0.0.0.0 --port 8000
 
 ## Базовый URL REST API
 
-По умолчанию сервер запускается на:
+Все эндпоинты API и демонстрационный веб-интерфейс теперь доступны публично на выделенном поддомене:
 ```
-http://YOUR_HOST:8000
+https://api.hs-manacost.ru
 ```
 
 ---
@@ -445,7 +445,124 @@ http://YOUR_HOST:8000
 
 ---
 
-## 3. Политика дедупликации, слияния и надежности сбора
+## 3. Практическое руководство по получению данных (Примеры запросов)
+
+Ниже приведены готовые примеры запросов через `curl` и `HTTP` для получения ключевых наборов данных, таких как матч-апы, колоды и радары.
+
+### 3.1 Как получить матрицу матч-апов (MetaStats)
+* **Запрос:** `GET https://api.hs-manacost.ru/datasets/metastats_matchups`
+* **Команда curl:**
+  ```bash
+  curl -s "https://api.hs-manacost.ru/datasets/metastats_matchups" | jq '.data.structured'
+  ```
+* **Пример структуры ответа:**
+  ```json
+  {
+    "type": "metastats_matchups",
+    "matchups": [
+      {
+        "archetype": "Plague Death Knight",
+        "vs": "Treant Druid",
+        "games": 12450,
+        "winrate": 48.2,
+        "vs_winrate": 51.8
+      }
+    ],
+    "archetypes": [
+      "Plague Death Knight",
+      "Treant Druid",
+      "Sif Mage"
+    ]
+  }
+  ```
+
+### 3.2 Как получить архетипы и версии колод (MetaStats)
+* **Запрос:** `GET https://api.hs-manacost.ru/datasets/metastats_decks`
+* **Команда curl:**
+  ```bash
+  curl -s "https://api.hs-manacost.ru/datasets/metastats_decks" | jq '.data.structured.decks[0:2]'
+  ```
+* **Пример структуры ответа:**
+  ```json
+  [
+    {
+      "class": "DeathKnight",
+      "archetype_id": "dk_unholy_dk",
+      "archetype_name": "Unholy Death Knight",
+      "deck_id": "12345",
+      "title": "Unholy Death Knight #12345",
+      "games": 1400,
+      "win_rate": 58.4,
+      "deck_code": "AAECAfHGBATp0ASY1AS42QT8+gUNkeQEkuQE0eSEkvQElfQEj6UF88gF8vgFu/kF6/8F9fcFgvgF6oAGAAA=",
+      "cards": [
+        {
+          "name": "Body Bagger",
+          "id": "RLK_037",
+          "dbfId": 86105,
+          "cost": 1,
+          "rarity": "COMMON",
+          "count": 2
+        }
+      ]
+    }
+  ]
+  ```
+
+### 3.3 Как получить интерактивный радар популярности и связей карт (Vicious Syndicate)
+* **Запрос:** `GET https://api.hs-manacost.ru/datasets/vicious_syndicate_radars`
+* **Команда curl:**
+  ```bash
+  # Получить радар для DeathKnight (первый в массиве)
+  curl -s "https://api.hs-manacost.ru/datasets/vicious_syndicate_radars" | jq '.data.structured.radars[0]'
+  ```
+* **Пример структуры ответа:**
+  ```json
+  {
+    "class": "DeathKnight",
+    "title": "Data Reaper's Radar - Issue #349 - DeathKnight",
+    "issue": "349",
+    "url": "https://www.vicioussyndicate.com/wp-content/datareaper/radars/DeathKnight/index.html",
+    "nodes": [
+      {
+        "name": "Arisen Onyxia",
+        "radius": 14.6,
+        "strokewidth": 2,
+        "fill": "rgba(0,102,0,0.75)",
+        "stroke": "rgba(255,127,0,1.00)",
+        "text": "rgba(255,255,255,1.00)"
+      }
+    ],
+    "edges": [
+      {
+        "source": "Arisen Onyxia",
+        "target": "Command Claw",
+        "weight": 0.15,
+        "length": 250,
+        "stroke": "rgba(0,0,0,0.01)"
+      }
+    ]
+  }
+  ```
+
+### 3.4 Как получить топ-колоды Легенды с Hearthstone-Decks.net
+* **Запрос:** `GET https://api.hs-manacost.ru/datasets/hearthstone_decks`
+* **Команда curl:**
+  ```bash
+  # Показать последние 5 колод Standard формата
+  curl -s "https://api.hs-manacost.ru/datasets/hearthstone_decks" | jq '[.data.structured.decks[] | select(.format == "Standard")][0:5]'
+  ```
+
+### 3.5 Как получить существ Полей Боя по тавернам (Firestone)
+* **Запрос:** `GET https://api.hs-manacost.ru/datasets/firestone_battlegrounds_cards`
+* **Команда curl:**
+  ```bash
+  # Получить список существ 1-го тира
+  curl -s "https://api.hs-manacost.ru/datasets/firestone_battlegrounds_cards" | jq '.data.structured.tiers["1"] | .[0:3]'
+  ```
+
+---
+
+## 4. Политика дедупликации, слияния и надежности сбора
 
 Для обеспечения отказоустойчивости парсеров применены следующие архитектурные паттерны:
 
