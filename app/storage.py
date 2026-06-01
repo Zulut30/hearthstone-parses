@@ -37,6 +37,12 @@ def read_json(path: Path) -> dict[str, Any] | None:
 
 def save_dataset(source_id: str, payload: dict[str, Any]) -> None:
     write_json(dataset_path(source_id), payload)
+    try:
+        from .db import store_dataset_to_db
+        store_dataset_to_db(source_id, payload)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error storing dataset {source_id} in SQLite: {e}")
 
 
 def save_status(source_id: str, payload: dict[str, Any]) -> None:

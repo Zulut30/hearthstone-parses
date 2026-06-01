@@ -183,3 +183,90 @@ def upload_dataset(
     save_dataset(source_id, dataset)
     save_status(source_id, status)
     return {"ok": True, "source_id": source_id, "fetched_at": fetched_at}
+
+
+@app.get("/api/db/decks")
+def db_decks(
+    class_name: str | None = None,
+    format_name: str | None = None,
+    source_id: str | None = None,
+    min_win_rate: float | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    from .db import get_db_connection
+    conn = get_db_connection()
+    try:
+        query = "SELECT * FROM decks WHERE 1=1"
+        params = []
+        if class_name:
+            query += " AND class = ?"
+            params.append(class_name)
+        if format_name:
+            query += " AND format = ?"
+            params.append(format_name)
+        if source_id:
+            query += " AND source_id = ?"
+            params.append(source_id)
+        if min_win_rate is not None:
+            query += " AND win_rate >= ?"
+            params.append(min_win_rate)
+        if q:
+            query += " AND (title LIKE ? OR archetype LIKE ? OR deck_code LIKE ?)"
+            params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+
+        # Count total
+        count_query = query.replace("SELECT *", "SELECT COUNT(*)", 1)
+        total = conn.execute(count_query, params).fetchone()[0]
+
+        # Fetch page (sorted by updated_at or win_rate)
+        query += " ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = conn.execute(query, params).fetchall()
+        decks = [dict(row) for row in rows]
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "decks": decks
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database query failed: {e}")
+    finally:
+        conn.close()
+
+
+@app.get("/api/db/cards/trends")
+def db_card_trends(
+    card_name: str,
+    source_id: str | None = None,
+    class_name: str | None = None,
+    limit: int = 100,
+) -> dict:
+    from .db import get_db_connection
+    conn = get_db_connection()
+    try:
+        query = "SELECT * FROM card_popularity_history WHERE card_name = ?"
+        params = [card_name]
+        if source_id:
+            query += " AND source_id = ?"
+            params.append(source_id)
+        if class_name:
+            query += " AND class = ?"
+            params.append(class_name)
+
+        query += " ORDER BY recorded_at ASC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        trends = [dict(row) for row in rows]
+        return {
+            "card_name": card_name,
+            "trends": trends
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database query failed: {e}")
+    finally:
+        conn.close()

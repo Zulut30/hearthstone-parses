@@ -41,6 +41,20 @@ async function loadOverview() {
 
   const list = $("#source-list");
   list.innerHTML = "";
+
+  // Добавляем вкладку быстрого поиска по базе SQLite сверху сайдбара
+  const dbBtn = document.createElement("button");
+  dbBtn.className = "source-btn";
+  dbBtn.style.border = "1px solid #ff9f1c";
+  dbBtn.style.boxShadow = "0 0 10px rgba(255, 159, 28, 0.15)";
+  dbBtn.innerHTML = `
+    <span class="id" style="color: #ff9f1c; font-weight: bold; display: flex; align-items: center; gap: 6px;">🔍 Поиск колод (SQLite)</span>
+    <span class="meta">Быстрый поиск по всем колодам</span>
+    <span class="badge ok" style="background: #ff9f1c; color: black; font-weight: bold;">local</span>
+  `;
+  dbBtn.onclick = () => selectDbSearch(dbBtn);
+  list.appendChild(dbBtn);
+
   for (const s of data.sources) {
     const btn = document.createElement("button");
     btn.className = "source-btn";
@@ -1026,5 +1040,191 @@ function initRadarGraph(data) {
   rebuildArchetypeTabs(currentClass);
   loadClassRadar(currentClass, null);
   tick();
+}
+
+
+async function selectDbSearch(btn) {
+  document.querySelectorAll(".source-btn").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  $("#placeholder").classList.add("hidden");
+  const detail = $("#detail");
+  detail.classList.remove("hidden");
+  detail.innerHTML = `
+    <h2>🔍 Поиск колод в базе SQLite</h2>
+    <p class="meta-line">Поиск в реальном времени по всей истории собранных колод</p>
+    
+    <div class="block" style="background: var(--panel); border: 1px solid var(--border); padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 1.5rem;">
+        <div>
+          <label style="display: block; font-size: 0.85rem; margin-bottom: 0.4rem; color: #aaa;">Класс:</label>
+          <select id="db-search-class" style="width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.5rem; border-radius: 6px;">
+            <option value="">Все классы</option>
+            <option value="DeathKnight">Рыцарь смерти (Death Knight)</option>
+            <option value="DemonHunter">Охотник на демонов (Demon Hunter)</option>
+            <option value="Druid">Друид (Druid)</option>
+            <option value="Hunter">Охотник (Hunter)</option>
+            <option value="Mage">Маг (Mage)</option>
+            <option value="Paladin">Паладин (Paladin)</option>
+            <option value="Priest">Жрец (Priest)</option>
+            <option value="Rogue">Разбойник (Rogue)</option>
+            <option value="Shaman">Шаман (Shaman)</option>
+            <option value="Warlock">Чернокнижник (Warlock)</option>
+            <option value="Warrior">Воин (Warrior)</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.85rem; margin-bottom: 0.4rem; color: #aaa;">Формат:</label>
+          <select id="db-search-format" style="width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.5rem; border-radius: 6px;">
+            <option value="">Все форматы</option>
+            <option value="Standard">Стандартный (Standard)</option>
+            <option value="Wild">Вольный (Wild)</option>
+          </select>
+        </div>
+        <div>
+          <label style="display: block; font-size: 0.85rem; margin-bottom: 0.4rem; color: #aaa;">Источник:</label>
+          <select id="db-search-source" style="width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.5rem; border-radius: 6px;">
+            <option value="">Все источники</option>
+            <option value="hearthstone_decks">Hearthstone-Decks.net</option>
+            <option value="metastats_decks">MetaStats.net</option>
+            <option value="vicious_syndicate_radars">Vicious Syndicate Radars</option>
+          </select>
+        </div>
+      </div>
+      
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <input type="text" id="db-search-query" placeholder="Название колоды, архетип, карта или код..." style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.6rem 1rem; border-radius: 6px; font-size: 0.95rem; flex: 1;" />
+        <button id="db-search-btn" class="source-btn" style="background: #ff9f1c; color: #000; font-weight: bold; border: none; padding: 0.6rem 1.5rem; border-radius: 6px; cursor: pointer;">Найти</button>
+      </div>
+    </div>
+    
+    <div id="db-search-results" class="block">
+      <p class="muted">Нажмите кнопку «Найти» или введите запрос для поиска колод.</p>
+    </div>
+  `;
+
+  // Attach search events
+  $("#db-search-btn").onclick = performDbSearch;
+  $("#db-search-query").onkeydown = (e) => {
+    if (e.key === "Enter") performDbSearch();
+  };
+
+  performDbSearch();
+}
+
+async function performDbSearch() {
+  const resultsDiv = $("#db-search-results");
+  if (!resultsDiv) return;
+
+  resultsDiv.innerHTML = "<p>Поиск…</p>";
+
+  const cls = $("#db-search-class").value;
+  const fmt = $("#db-search-format").value;
+  const src = $("#db-search-source").value;
+  const q = $("#db-search-query").value.trim();
+
+  let url = "/api/db/decks?limit=100";
+  if (cls) url += `&class_name=${encodeURIComponent(cls)}`;
+  if (fmt) url += `&format_name=${encodeURIComponent(fmt)}`;
+  if (src) url += `&source_id=${encodeURIComponent(src)}`;
+  if (q) url += `&q=${encodeURIComponent(q)}`;
+
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    
+    if (!data.decks || data.decks.length === 0) {
+      resultsDiv.innerHTML = `<p class="muted" style="text-align: center; padding: 2rem;">Колоды не найдены по вашему запросу.</p>`;
+      return;
+    }
+
+    let html = `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h4 style="margin: 0;">Результаты поиска (${data.total}):</h4>
+        <span class="muted" style="font-size: 0.85rem;">Показаны последние 100 колод</span>
+      </div>
+      <div style="overflow-x: auto;">
+        <table class="simple">
+          <thead>
+            <tr>
+              <th>Класс</th>
+              <th>Архетип / Название</th>
+              <th>Формат</th>
+              <th>Показатель</th>
+              <th>Источник</th>
+              <th>Код колоды</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    data.decks.forEach((deck, index) => {
+      const clsLabel = escapeHtml(deck.class);
+      const arch = escapeHtml(deck.archetype || deck.title || "Unknown");
+      const fmtLabel = escapeHtml(deck.format || "Standard");
+      
+      // Calculate winrate or score
+      let metric = "-";
+      if (deck.win_rate) metric = `<strong style="color: #2ec4b6;">${deck.win_rate.toFixed(1)}%</strong>`;
+      else if (deck.score) metric = `<span style="font-family: monospace;">${escapeHtml(deck.score)}</span>`;
+      
+      // Determine source label
+      let srcLabel = deck.source_id;
+      if (deck.source_id === "hearthstone_decks") srcLabel = "HS-Decks.net";
+      else if (deck.source_id === "metastats_decks") srcLabel = "MetaStats.net";
+      else if (deck.source_id === "vicious_syndicate_radars") srcLabel = "Vicious Syndicate";
+
+      const hasCode = !!deck.deck_code;
+      const codeId = `db-code-input-${index}`;
+      const btnId = `db-code-btn-${index}`;
+
+      html += `
+        <tr>
+          <td><strong style="color: #ff9f1c;">${clsLabel}</strong></td>
+          <td>
+            <div><strong>${arch}</strong></div>
+            ${deck.title && deck.title !== arch ? `<div class="muted" style="font-size: 0.8rem; margin-top: 0.2rem;">${escapeHtml(deck.title)}</div>` : ""}
+            ${deck.url ? `<div style="margin-top: 0.3rem;"><a href="${escapeHtml(deck.url)}" target="_blank" style="font-size: 0.8rem; color: #2ec4b6;">Перейти к источнику ↗</a></div>` : ""}
+          </td>
+          <td><span class="badge ok" style="font-size: 0.75rem;">${fmtLabel}</span></td>
+          <td>${metric}</td>
+          <td><span class="muted" style="font-size: 0.85rem;">${srcLabel}</span></td>
+          <td>
+            ${hasCode ? `
+              <div style="display: flex; gap: 6px; align-items: center;">
+                <input type="text" id="${codeId}" value="${escapeHtml(deck.deck_code)}" readonly style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.3rem 0.5rem; font-size: 0.75rem; border-radius: 4px; width: 150px; font-family: monospace;" onclick="this.select();" />
+                <button id="${btnId}" class="source-btn" style="padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.75rem; background: #2ec4b6; color: white;">Копировать</button>
+              </div>
+            ` : `<span class="muted">-</span>`}
+          </td>
+        </tr>
+      `;
+    });
+
+    html += `</tbody></table></div>`;
+    resultsDiv.innerHTML = html;
+
+    // Attach click events to copy buttons
+    data.decks.forEach((deck, index) => {
+      if (deck.deck_code) {
+        const btn = document.getElementById(`db-code-btn-${index}`);
+        if (btn) {
+          btn.onclick = () => {
+            navigator.clipboard.writeText(deck.deck_code);
+            btn.textContent = "Скопировано!";
+            btn.style.background = "#ff9f1c";
+            btn.style.color = "#000";
+            setTimeout(() => {
+              btn.textContent = "Копировать";
+              btn.style.background = "#2ec4b6";
+              btn.style.color = "white";
+            }, 1500);
+          };
+        }
+      }
+    });
+
+  } catch (err) {
+    resultsDiv.innerHTML = `<p class="muted" style="color: #ff3b30;">Ошибка при выполнении поиска: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
