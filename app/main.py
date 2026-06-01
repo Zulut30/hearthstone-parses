@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import api_key
@@ -25,6 +25,11 @@ app = FastAPI(
 
 if WEB_DIR.is_dir():
     app.mount("/ui/assets", StaticFiles(directory=WEB_DIR), name="ui-assets")
+
+
+@app.get("/")
+def redirect_to_ui() -> RedirectResponse:
+    return RedirectResponse(url="/ui")
 
 
 @app.get("/ui")
