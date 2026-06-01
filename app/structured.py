@@ -379,7 +379,9 @@ _TRINKET_SKIP = {
 
 
 def _looks_like_trinket_name(line: str) -> bool:
-    if line in _TRINKET_SKIP or len(line) < 4 or len(line) > 60:
+    if line in _TRINKET_SKIP or len(line) < 4 or len(line) > 80:
+        return False
+    if not line[0].isalnum():
         return False
     if _is_percent(line) or line[0].islower() or line.startswith(_DESC_PREFIXES):
         return False
@@ -424,7 +426,20 @@ def parse_bg_trinkets(lines: list[str]) -> list[dict[str, Any]]:
         i += 1
     if current is not None:
         items.append(current)
-    return [t for t in items if t.get("pick_rate")][:80]
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for t in items:
+        if not t.get("pick_rate"):
+            continue
+        name = str(t.get("name") or "").strip()
+        if len(name) < 4 or not name[0].isalnum():
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+    return out[:80]
 
 
 def parse_arena_matrix(tables: list[dict[str, Any]], lines: list[str]) -> list[dict[str, Any]]:
@@ -472,10 +487,6 @@ def build_structured(source: Source, data: dict[str, Any]) -> dict[str, Any]:
         return {"type": "arena_winning_decks", "decks": parse_winning_decks(lines)}
     if sid == "hsreplay_decks_trending":
         return {"type": "trending_decks", "decks": parse_trending_decks(links)}
-    if sid == "hsreplay_battlegrounds_heroes":
-        blocked = any("повторите попытку" in l.lower() or "try again later" in l.lower() for l in lines)
-        heroes = [] if blocked else parse_bg_heroes(lines)
-        return {"type": "bg_heroes", "heroes": heroes, "blocked": blocked}
     if sid == "hsreplay_arena":
         return {"type": "arena_class_matrix", "matchups": parse_arena_matrix(tables, lines)}
     if sid == "hsreplay_battlegrounds_comps":

@@ -35,17 +35,28 @@ async def fetch_heartharena_tierlist(source: Source) -> dict[str, Any]:
     Fetch and parse HearthArena card tier list from https://www.heartharena.com/ru/tierlist.
     Returns structured HearthArena tier list.
     """
+    from .scrapers.proxy import proxy_url_for_source
+
     headers = {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "accept-encoding": "gzip, deflate, br",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-encoding": "gzip, deflate",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     }
-    
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        resp = await client.get(source.url, headers=headers)
-        resp.raise_for_status()
-        html = resp.text
-        
+    proxy = proxy_url_for_source(source.id)
+    last_error: Exception | None = None
+    for fetch_url in (source.url, "https://www.heartharena.com/tierlist"):
+        try:
+            async with httpx.AsyncClient(timeout=45.0, proxy=proxy, follow_redirects=True) as client:
+                resp = await client.get(fetch_url, headers=headers)
+                resp.raise_for_status()
+                html = resp.text
+            break
+        except Exception as exc:
+            last_error = exc
+            html = ""
+    else:
+        raise last_error or RuntimeError("heartharena fetch failed")
+
     soup = BeautifulSoup(html, "html.parser")
     sections = soup.find_all("section", class_="tierlist")
     

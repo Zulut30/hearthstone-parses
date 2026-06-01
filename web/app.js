@@ -15,7 +15,6 @@ const LABELS = {
   hsreplay_decks_trending: "Трендовые колоды",
   hsreplay_cards_legend_included_winrate: "Карты · winrate",
   hsreplay_cards_legend_included_popularity: "Карты · popularity",
-  firestone_battlegrounds_heroes: "Firestone · BG герои",
   firestone_battlegrounds_cards: "Firestone · BG существа по тавернам",
   firestone_battlegrounds_spells: "Firestone · BG заклинания по тавернам",
   firestone_battlegrounds_comps: "Firestone · BG компы",

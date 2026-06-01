@@ -80,13 +80,6 @@ SOURCES: tuple[Source, ...] = (
         description="HSReplay Battlegrounds comps.",
     ),
     Source(
-        "hsreplay_battlegrounds_heroes",
-        "https://hsreplay.net/battlegrounds/heroes/",
-        "hsreplay",
-        "battlegrounds",
-        description="HSReplay Battlegrounds heroes.",
-    ),
-    Source(
         "hsreplay_battlegrounds_trinkets_lesser",
         "https://hsreplay.net/battlegrounds/trinkets/lesser/",
         "hsreplay",

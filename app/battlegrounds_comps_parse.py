@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -244,41 +245,63 @@ def parse_hsreplay_markdown(markdown: str, *, detail_limit: int = 12) -> list[di
     return comps
 
 
+async def _enrich_comp_cards(
+    comp: dict[str, Any],
+    *,
+    source_id: str,
+    sem: asyncio.Semaphore,
+) -> dict[str, Any]:
+    if comp.get("main_cards") or comp.get("additional_cards"):
+        return comp
+    url = comp.get("url") or comp.get("_detail_url")
+    if not url:
+        return comp
+    async with sem:
+        detail = await parse_hsreplay_comp_detail(url, source_id=source_id)
+    main_cards = _group_cards(detail.get("main_cards") or [])
+    additional_cards = _group_cards(detail.get("additional_cards") or [])
+    if main_cards or additional_cards:
+        comp = dict(comp)
+        comp["main_cards"] = main_cards
+        comp["additional_cards"] = additional_cards
+        comp["minions"] = [c.get("name") for c in additional_cards if c.get("name")]
+    return comp
+
+
 async def fetch_battlegrounds_comps(
     *,
     source_id: str = "hsreplay_battlegrounds_comps",
-    detail_limit: int = 24,
+    detail_limit: int = 32,
 ) -> dict[str, Any]:
     markdown = await fetch_hsreplay_markdown(HSREPLAY_COMPS_URL, source_id=source_id)
-    headers = _find_comp_headers(markdown)
-    comps: list[dict[str, Any]] = []
+    comps = parse_hsreplay_markdown(markdown, detail_limit=detail_limit)
+    if not comps:
+        headers = _find_comp_headers(markdown)
+        comps = [
+            {
+                "id": f"hsreplay-{h['remote_id']}",
+                "comp_id": int(h["remote_id"]),
+                "source": "hsreplay",
+                "source_id": h["remote_id"],
+                "slug": h["slug"],
+                "name": _title_from_slug(h["slug"]),
+                "title": _title_from_slug(h["slug"]),
+                "description": "",
+                "main_cards": [],
+                "additional_cards": [],
+                "minions": [],
+                "url": h["url"],
+            }
+            for h in headers[:detail_limit]
+        ]
 
-    for i, header in enumerate(headers):
-        if i >= detail_limit:
-            break
-        slug = header["slug"]
-        comp: dict[str, Any] = {
-            "id": f"hsreplay-{header['remote_id']}",
-            "comp_id": int(header["remote_id"]),
-            "source": "hsreplay",
-            "source_id": header["remote_id"],
-            "slug": slug,
-            "name": _title_from_slug(slug),
-            "title": _title_from_slug(slug),
-            "description": "",
-            "main_cards": [],
-            "additional_cards": [],
-            "minions": [],
-            "url": header["url"],
-        }
-        detail = await parse_hsreplay_comp_detail(header["url"], source_id=source_id)
-        main_cards = _group_cards(detail.get("main_cards") or [])
-        additional_cards = _group_cards(detail.get("additional_cards") or [])
-        if main_cards or additional_cards:
-            comp["main_cards"] = main_cards
-            comp["additional_cards"] = additional_cards
-            comp["minions"] = [c.get("name") for c in additional_cards if c.get("name")]
-        comps.append(comp)
+    sem = asyncio.Semaphore(4)
+    enriched = await asyncio.gather(
+        *[_enrich_comp_cards(c, source_id=source_id, sem=sem) for c in comps[:detail_limit]]
+    )
+    comps = list(enriched)
+
+    with_cards = sum(1 for c in comps if c.get("main_cards") or c.get("additional_cards"))
 
     return {
         "type": "bg_comps",
@@ -288,5 +311,7 @@ async def fetch_battlegrounds_comps(
             "key": "hsreplay",
             "url": HSREPLAY_COMPS_URL,
             "backend": "hsreplay_jina_markdown",
+            "comps_with_cards": with_cards,
+            "comps_total": len(comps),
         },
     }

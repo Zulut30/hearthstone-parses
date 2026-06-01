@@ -176,7 +176,6 @@ def main(argv: list[str] | None = None) -> int:
             extract_arena_cards_from_links,
             extract_arena_winning_decks_from_links,
             extract_bg_comps_from_links,
-            extract_bg_heroes_from_links,
             extract_ranked_cards_from_links,
         )
         from .sources import SOURCES
@@ -198,20 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             data = ds["data"]
             links = data.get("links") or []
             extracted: dict = {}
-            if sid == "hsreplay_battlegrounds_heroes":
-                heroes = extract_bg_heroes_from_links(links)
-                old_by_dbf = {
-                    int(h["dbfId"]): h
-                    for h in (data.get("hsreplay_extracted") or {}).get("heroes") or []
-                    if h.get("dbfId")
-                }
-                for hero in heroes:
-                    prev = old_by_dbf.get(int(hero["dbfId"]), {})
-                    for key in ("pick_rate", "avg_placement", "winrate", "description"):
-                        if prev.get(key) and not hero.get(key):
-                            hero[key] = prev[key]
-                extracted = {"type": "bg_heroes", "heroes": heroes, "blocked": False}
-            elif sid == "hsreplay_battlegrounds_comps":
+            if sid == "hsreplay_battlegrounds_comps":
                 extracted = {"type": "bg_comps", "comps": extract_bg_comps_from_links(links), "blocked": False}
             elif sid.startswith("hsreplay_cards_"):
                 extracted = {

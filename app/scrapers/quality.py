@@ -116,6 +116,29 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             total_cards = sum(len(cards) for cards in tiers.values())
             if total_cards < 50:
                 return False, f"bg_card_stats too few total cards ({total_cards})"
+            with_stats = sum(
+                1
+                for cards in tiers.values()
+                for c in cards
+                if c.get("average_placement") is not None or c.get("total_played")
+            )
+            if with_stats < 40:
+                return False, f"bg_card_stats missing placement stats ({with_stats}/{total_cards})"
+            return True, "ok"
+        if structured.get("type") == "bg_trinkets":
+            trinkets = structured.get("trinkets") or []
+            if len(trinkets) < 8:
+                return False, f"bg trinkets too few ({len(trinkets)})"
+            valid = [
+                t
+                for t in trinkets
+                if t.get("pick_rate")
+                and t.get("name")
+                and len(str(t["name"])) >= 4
+                and str(t["name"])[0].isalnum()
+            ]
+            if len(valid) < max(6, len(trinkets) // 2):
+                return False, f"bg trinkets invalid names/stats ({len(valid)}/{len(trinkets)})"
             return True, "ok"
         if structured.get("type") == "arena_winning_decks":
             decks = structured.get("decks") or []
@@ -163,6 +186,11 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             total_cards = structured.get("total_cards", 0)
             if total_cards < 300:
                 return False, f"heartharena cards too few ({total_cards})"
+            with_tier = sum(
+                1 for cl in classes for c in (cl.get("cards") or []) if c.get("tier_id")
+            )
+            if with_tier < 200:
+                return False, f"heartharena cards missing tier_id ({with_tier})"
             return True, "ok"
         if structured.get("type") == "card_stats":
             cards = structured.get("cards") or []

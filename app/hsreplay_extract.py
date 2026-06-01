@@ -275,19 +275,37 @@ def extract_bg_comps(soup: BeautifulSoup) -> list[dict[str, Any]]:
 
 def extract_bg_trinkets(soup: BeautifulSoup) -> list[dict[str, Any]]:
     trinkets: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for tr in soup.find_all("tr"):
+        link = tr.find("a", href=re.compile(r"/battlegrounds/trinkets/\d+"))
+        if not link:
+            continue
+        name = _clean(link.get_text())
+        if len(name) < 4 or not name[0].isalnum():
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        stats = _row_stats_from_element(tr)
+        trinkets.append({"name": name[:80], "url": link.get("href", ""), **stats})
+    if len(trinkets) >= 5:
+        return trinkets
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href", "")
         if "/battlegrounds/trinkets/" not in href or href.count("/") < 4:
             continue
         name = _clean(anchor.get_text())
-        if len(name) < 3:
+        if len(name) < 4 or not name[0].isalnum():
             continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
         row = anchor.find_parent("tr") or anchor.find_parent("li")
         stats = _row_stats_from_element(row)
         trinkets.append({"name": name[:80], "url": href, **stats})
-    if trinkets:
-        return trinkets
-    return []
+    return trinkets
 
 
 def _parse_card_row(tr: Tag) -> dict[str, Any] | None:
@@ -737,17 +755,6 @@ def extract_for_source(
         {"text": _clean(a.get_text()), "href": a.get("href", "")}
         for a in soup.find_all("a", href=True)
     ]
-    if source_id == "hsreplay_battlegrounds_heroes":
-        heroes = extract_bg_heroes(soup)
-        if len(heroes) < 20:
-            heroes = extract_bg_heroes_from_links(link_items)
-        for h in heroes:
-            h["hero"] = _hero_display_name(int(h.get("dbfId") or 0), str(h.get("hero", "")))
-        return {
-            "type": "bg_heroes",
-            "heroes": heroes,
-            "blocked": len(heroes) < 20,
-        }
     if source_id == "hsreplay_battlegrounds_comps":
         comps = extract_bg_comps(soup)
         if len(comps) < 3:

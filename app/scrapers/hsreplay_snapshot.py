@@ -113,11 +113,7 @@ async def _wait_data_loaded(page, source: Source) -> None:
             continue
 
         if not any(marker in text for marker in _LOAD_ERROR_MARKERS):
-            if source.id == "hsreplay_battlegrounds_heroes":
-                if "pick rate" in text or "hero" in text or "герой" in text:
-                    if "denathrius" in text or "денатрий" in text or "%" in text:
-                        return
-            elif source.id.startswith("hsreplay_cards_"):
+            if source.id.startswith("hsreplay_cards_"):
                 try:
                     has_cards = await page.locator('a[href*="/cards/"]').count() > 0
                 except Exception:
