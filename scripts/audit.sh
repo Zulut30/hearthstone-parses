@@ -20,6 +20,8 @@ echo
 
 echo
 "$VENV" <<'PY'
+from app.cli import load_env_file
+load_env_file()
 import json
 from pathlib import Path
 from app.sources import SOURCES, SOURCE_BY_ID

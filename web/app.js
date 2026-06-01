@@ -465,7 +465,10 @@ function renderDetail(p) {
     }
     body += "</div>";
   } else if (t === "vicious_syndicate_radars" && v.radars) {
-    const uniqueClasses = Array.from(new Set(v.radars.map(r => r.class)));
+    const classItems = v.classes_summary || Array.from(new Set(v.radars.map(r => r.class))).map(cls => ({
+      class: cls,
+      has_archetypes: v.radars.some(r => r.class === cls && r.archetype !== null)
+    }));
     body = `<div class="block">
       <h3>Интерактивный радар карт Vicious Syndicate (Выпуск #${escapeHtml(v.issue || "?")})</h3>
       <p class="muted" style="margin-bottom: 1.5rem;">Граф показывает связи между картами в колодах. Чем больше круг, тем популярнее карта. Чем толще линия, тем сильнее синергия.</p>
@@ -473,8 +476,9 @@ function renderDetail(p) {
       <!-- Class Selector Tabs -->
       <h5 style="margin: 0 0 0.5rem 0; font-size: 0.95rem;">Выберите класс:</h5>
       <div class="tabs-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 1rem;">
-        ${uniqueClasses.map((cls, i) => {
-          const hasArch = v.radars.some(r => r.class === cls && r.archetype !== null);
+        ${classItems.map((item, i) => {
+          const cls = item.class;
+          const hasArch = item.has_archetypes;
           return `
             <button class="source-btn class-tab-btn ${i === 0 ? "active" : ""}" data-class="${escapeHtml(cls)}" style="font-weight: bold; border-radius: 6px; padding: 0.4rem 0.8rem; border: 1px solid var(--border); display: flex; align-items: center; gap: 6px;">
               ${escapeHtml(cls)}
