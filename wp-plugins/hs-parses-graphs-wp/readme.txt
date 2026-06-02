@@ -31,8 +31,13 @@ Both shortcodes only load their JavaScript and CSS assets on pages where they ar
 
 *   `source` (string) - The source dataset ID. Defaults to `hsguru_meta_standard_diamond_4to1`. Other valid options include:
     *   `hsguru_meta_standard_legend`
+    *   `hsguru_meta_standard_diamond_4to1`
+    *   `hsguru_meta_standard_top_5k`
+    *   `hsguru_meta_standard_top_legend`
     *   `hsguru_meta_wild_legend`
     *   `hsguru_meta_wild_diamond_4to1`
+    *   `hsguru_meta_wild_top_legend`
+    *   `hsguru_meta_wild_top_5k`
 *   `api_url` (string) - The Hearthstone Parses API URL. Defaults to `https://api.hs-manacost.ru`.
 *   `width` (integer) - Width of the canvas. Defaults to `850`.
 *   `height` (integer) - Height of the canvas. Defaults to `500`.

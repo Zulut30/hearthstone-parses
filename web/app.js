@@ -36,6 +36,59 @@ const LABELS = {
   hsreplay_battlegrounds_trinkets_greater: "BG · большие тринкеты",
 };
 
+/** Порядок кнопок в сайдбаре (остальные — в конце по id). */
+const SIDEBAR_ORDER = [
+  "hsguru_meta_standard_legend",
+  "hsguru_meta_standard_diamond_4to1",
+  "hsguru_meta_standard_top_5k",
+  "hsguru_meta_standard_top_legend",
+  "hsguru_meta_wild_legend",
+  "hsguru_meta_wild_diamond_4to1",
+  "hsguru_meta_wild_top_legend",
+  "hsguru_meta_wild_top_5k",
+  "hsguru_matchups_legend",
+  "hsguru_matchups_diamond_4to1",
+  "hsguru_streamer_decks_legend_1000",
+];
+
+const SIDEBAR_GROUPS = [
+  { key: "hsguru", title: "HSGuru" },
+  { key: "hsreplay", title: "HSReplay" },
+  { key: "firestone", title: "Firestone" },
+  { key: "heartharena", title: "HearthArena" },
+  { key: "metastats", title: "MetaStats" },
+  { key: "hearthstone-decks", title: "HS-Decks" },
+  { key: "vicious-syndicate", title: "Vicious Syndicate" },
+];
+
+function sidebarSortIndex(sourceId) {
+  const i = SIDEBAR_ORDER.indexOf(sourceId);
+  return i >= 0 ? i : 1000;
+}
+
+function groupSources(sources) {
+  const sorted = [...sources].sort(
+    (a, b) =>
+      sidebarSortIndex(a.source_id) - sidebarSortIndex(b.source_id) ||
+      a.source_id.localeCompare(b.source_id)
+  );
+  const bySite = new Map();
+  for (const s of sorted) {
+    if (!bySite.has(s.site)) bySite.set(s.site, []);
+    bySite.get(s.site).push(s);
+  }
+  const out = [];
+  for (const g of SIDEBAR_GROUPS) {
+    const items = bySite.get(g.key);
+    if (items?.length) out.push({ title: g.title, sources: items });
+    bySite.delete(g.key);
+  }
+  for (const [site, items] of bySite) {
+    if (items.length) out.push({ title: site, sources: items });
+  }
+  return out;
+}
+
 async function loadOverview() {
   const res = await fetch("/demo/overview");
   const data = await res.json();
@@ -59,18 +112,25 @@ async function loadOverview() {
   dbBtn.onclick = () => selectDbSearch(dbBtn);
   list.appendChild(dbBtn);
 
-  for (const s of data.sources) {
-    const btn = document.createElement("button");
-    btn.className = "source-btn";
-    btn.dataset.id = s.source_id;
-    const label = LABELS[s.source_id] || s.source_id;
-    btn.innerHTML = `
+  for (const group of groupSources(data.sources)) {
+    const heading = document.createElement("h3");
+    heading.className = "source-group-title";
+    heading.textContent = group.title;
+    list.appendChild(heading);
+
+    for (const s of group.sources) {
+      const btn = document.createElement("button");
+      btn.className = "source-btn";
+      btn.dataset.id = s.source_id;
+      const label = LABELS[s.source_id] || s.source_id;
+      btn.innerHTML = `
       <span class="id">${label}</span>
-      <span class="meta">${s.site} · ${s.category}</span>
+      <span class="meta">${s.category}</span>
       <span class="badge ${s.state === "ok" ? "ok" : "err"}">${s.state}</span>
     `;
-    btn.onclick = () => selectSource(s.source_id, btn);
-    list.appendChild(btn);
+      btn.onclick = () => selectSource(s.source_id, btn);
+      list.appendChild(btn);
+    }
   }
 }
 
