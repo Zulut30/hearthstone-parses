@@ -27,6 +27,33 @@ def get_db_connection() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_decks_column(conn: sqlite3.Connection, column: str, definition: str) -> None:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(decks)")}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE decks ADD COLUMN {column} {definition}")
+
+
+def _normalize_class_name(cls: str) -> str:
+    return (
+        (cls or "Unknown")
+        .replace("Demonhunter", "DemonHunter")
+        .replace("Deathknight", "DeathKnight")
+    )
+
+
+def _win_rate_from_record(record: str | None) -> float | None:
+    if not record:
+        return None
+    match = re.match(r"(\d+)\s*-\s*(\d+)", str(record).strip())
+    if not match:
+        return None
+    wins, losses = int(match.group(1)), int(match.group(2))
+    total = wins + losses
+    if total <= 0:
+        return None
+    return round(wins / total * 100, 2)
+
+
 def init_db() -> None:
     """Initialize SQLite database tables and indices if they do not exist."""
     conn = get_db_connection()
@@ -79,9 +106,15 @@ def init_db() -> None:
             """)
 
             # Create indexing for super fast search and queries
+            _ensure_decks_column(conn, "draft_id", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_source_class ON decks(source_id, class);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_code ON decks(deck_code);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_url ON decks(url);")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_decks_draft_id "
+                "ON decks(draft_id) WHERE draft_id IS NOT NULL"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_format_updated ON decks(format, updated_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_card_pop_history ON card_popularity_history(source_id, card_name, recorded_at);")
             
             logger.info("SQLite database tables initialized successfully.")
@@ -217,6 +250,86 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
                             INSERT INTO decks (source_id, class, archetype, deck_code, win_rate, score, title, added_at, updated_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (source_id, cls, arch, deck_code, win_rate, score, title, fetched_at, fetched_at))
+
+            # Source: hsreplay_arena_winning_decks (accumulating Arena feed, deduped)
+            elif source_id == "hsreplay_arena_winning_decks":
+                decks_list = structured.get("decks") or []
+                for d in decks_list:
+                    deck_code = (d.get("final_deckstring") or "").strip()
+                    if not deck_code:
+                        continue
+
+                    draft_id = d.get("draft_id")
+                    draft_id_s = str(draft_id).strip() if draft_id is not None else None
+                    cls = _normalize_class_name(d.get("main_class") or d.get("class") or "Unknown")
+                    arch = (d.get("legendary_group") or "Arena").strip() or "Arena"
+                    player = (d.get("player") or "Unknown").strip() or "Unknown"
+                    record = d.get("record")
+                    title = f"{player} · {record}" if record else player
+                    url = d.get("url")
+                    win_rate = _win_rate_from_record(record)
+                    score = record
+
+                    row = None
+                    if draft_id_s:
+                        row = conn.execute(
+                            "SELECT id FROM decks WHERE draft_id = ?",
+                            (draft_id_s,),
+                        ).fetchone()
+                    if not row:
+                        row = conn.execute(
+                            "SELECT id FROM decks WHERE deck_code = ?",
+                            (deck_code,),
+                        ).fetchone()
+
+                    if row:
+                        conn.execute(
+                            """
+                            UPDATE decks
+                            SET source_id = ?, class = ?, archetype = ?,
+                                draft_id = COALESCE(?, draft_id),
+                                win_rate = ?, score = ?, title = ?,
+                                url = COALESCE(?, url), format = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                source_id,
+                                cls,
+                                arch,
+                                draft_id_s,
+                                win_rate,
+                                score,
+                                title,
+                                url,
+                                "Arena",
+                                fetched_at,
+                                row["id"],
+                            ),
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO decks (
+                                source_id, class, archetype, deck_code, draft_id,
+                                win_rate, score, title, url, format, added_at, updated_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                source_id,
+                                cls,
+                                arch,
+                                deck_code,
+                                draft_id_s,
+                                win_rate,
+                                score,
+                                title,
+                                url,
+                                "Arena",
+                                fetched_at,
+                                fetched_at,
+                            ),
+                        )
 
             # Source: vicious_syndicate_radars (Vicious Syndicate Radars)
             elif source_id == "vicious_syndicate_radars":

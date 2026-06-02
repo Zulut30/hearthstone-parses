@@ -221,7 +221,15 @@ function renderDetail(p) {
     }
     body += "</div>";
   } else if (t === "arena_winning_decks" && v.decks) {
-    body = `<div class="block"><h3>Виновые колоды арены (${v.decks.length})</h3>`;
+    const feedNote = v.total_decks && v.total_decks !== v.decks.length
+      ? ` · в ленте ${v.total_decks}`
+      : v.new_unique_decks
+        ? ` · +${v.new_unique_decks} новых`
+        : "";
+    body = `<div class="block"><h3>Виновые колоды арены (${v.decks.length}${feedNote})</h3>`;
+    if (v.fetched_this_run) {
+      body += `<p class="muted">Последний refresh: ${escapeHtml(String(v.fetched_this_run))} с API, лимит ленты ${escapeHtml(String(v.feed_cap || 500))}</p>`;
+    }
     for (const d of v.decks) {
       const cls = d.main_class || d.class || "?";
       body += `<div class="strategy"><h4>${escapeHtml(cls)} · ${escapeHtml(d.record || "?")} · ${escapeHtml(d.player || "?")}</h4>
@@ -1158,6 +1166,7 @@ async function selectDbSearch(btn) {
             <option value="">Все форматы</option>
             <option value="Standard">Стандартный (Standard)</option>
             <option value="Wild">Вольный (Wild)</option>
+            <option value="Arena">Арена (Arena)</option>
           </select>
         </div>
         <div>
@@ -1166,6 +1175,7 @@ async function selectDbSearch(btn) {
             <option value="">Все источники</option>
             <option value="hearthstone_decks">Hearthstone-Decks.net</option>
             <option value="metastats_decks">MetaStats.net</option>
+            <option value="hsreplay_arena_winning_decks">HSReplay · виновые колоды арены</option>
             <option value="vicious_syndicate_radars">Vicious Syndicate Radars</option>
           </select>
         </div>
@@ -1252,6 +1262,7 @@ async function performDbSearch() {
       if (deck.source_id === "hearthstone_decks") srcLabel = "HS-Decks.net";
       else if (deck.source_id === "metastats_decks") srcLabel = "MetaStats.net";
       else if (deck.source_id === "vicious_syndicate_radars") srcLabel = "Vicious Syndicate";
+      else if (deck.source_id === "hsreplay_arena_winning_decks") srcLabel = "HSReplay Arena";
 
       const hasCode = !!deck.deck_code;
       const codeId = `db-code-input-${index}`;

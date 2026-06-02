@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from datetime import datetime
 from typing import Any
 
 from hearthstone.enums import CardClass
@@ -7,6 +9,12 @@ from hearthstone.enums import CardClass
 from .cards_index import card_from_id, card_label, cards_by_id
 from .deck_decode import decode_deck_code
 from .hsreplay_client import fetch_hsreplay_json
+from .storage import load_dataset
+
+logger = logging.getLogger(__name__)
+
+# Max decks kept in JSON cache + SQLite feed (deduped by draft_id / deckstring).
+ARENA_WINNING_DECKS_FEED_CAP = 500
 
 WINNING_DECKS_URL = "https://hsreplay.net/arena/winning_decks/#playerClass=ALL"
 WINNING_DECKS_API_URL = "https://hsreplay.net/api/v1/arena/winning_decks/"
@@ -112,9 +120,11 @@ def normalize_winning_deck(row: dict[str, Any], *, locale: str = "ruRU") -> dict
     wins = row.get("final_wins")
     losses = row.get("final_losses")
     record = f"{wins} - {losses}" if wins is not None and losses is not None else None
+    draft_id = row.get("draft_id")
+    url = f"https://hsreplay.net/arena/run/{draft_id}" if draft_id else None
 
     return {
-        "draft_id": row.get("draft_id"),
+        "draft_id": draft_id,
         "player": row.get("battletag"),
         "region": REGION_NAMES.get(int(row["region"])) if row.get("region") is not None else None,
         "record": record,
@@ -122,6 +132,7 @@ def normalize_winning_deck(row: dict[str, Any], *, locale: str = "ruRU") -> dict
         "main_class": _class_name(row.get("primary_deck_class")),
         "hero_power_class": _class_name(row.get("secondary_deck_class")),
         "played_at": row.get("latest_match_end") or row.get("latest_match_start"),
+        "url": url,
         "final_deckstring": deckstring,
         "final_deck": final_deck,
         "discarded": discarded,
@@ -298,26 +309,111 @@ async def fetch_arena_card_tiers(
     }
 
 
+def _deck_identity_key(deck: dict[str, Any]) -> str:
+    draft_id = deck.get("draft_id")
+    if draft_id is not None and str(draft_id).strip():
+        return f"draft:{draft_id}"
+    deckstring = (deck.get("final_deckstring") or "").strip()
+    if deckstring:
+        return f"deck:{deckstring}"
+    return ""
+
+
+def _played_at_sort_key(deck: dict[str, Any]) -> float:
+    raw = deck.get("played_at")
+    if not raw:
+        return 0.0
+    text = str(raw).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text[:19], fmt).timestamp()
+        except ValueError:
+            continue
+    return 0.0
+
+
+def _load_cached_winning_decks(source_id: str) -> list[dict[str, Any]]:
+    dataset = load_dataset(source_id)
+    if not dataset:
+        return []
+    data = dataset.get("data") or {}
+    structured = data.get("structured") or data.get("hsreplay_extracted") or {}
+    decks = structured.get("decks")
+    return list(decks) if isinstance(decks, list) else []
+
+
+def merge_winning_deck_feed(
+    new_decks: list[dict[str, Any]],
+    previous_decks: list[dict[str, Any]],
+    *,
+    feed_cap: int = ARENA_WINNING_DECKS_FEED_CAP,
+) -> tuple[list[dict[str, Any]], int]:
+    """Merge runs into a deduped feed (newest first). Returns (merged, newly_added_count)."""
+    merged: dict[str, dict[str, Any]] = {}
+
+    for deck in previous_decks:
+        key = _deck_identity_key(deck)
+        if key:
+            merged[key] = deck
+
+    for deck in new_decks:
+        key = _deck_identity_key(deck)
+        if not key:
+            continue
+        if key not in merged:
+            merged[key] = deck
+        else:
+            # Refresh metadata/cards for the same draft without duplicating the row.
+            merged[key] = {**merged[key], **deck}
+
+    ordered = sorted(merged.values(), key=_played_at_sort_key, reverse=True)
+    if feed_cap > 0:
+        ordered = ordered[:feed_cap]
+
+    existing_keys = {_deck_identity_key(d) for d in previous_decks if _deck_identity_key(d)}
+    added = sum(1 for d in new_decks if _deck_identity_key(d) and _deck_identity_key(d) not in existing_keys)
+    return ordered, added
+
+
 async def fetch_winning_decks(
     *,
     source_id: str = "hsreplay_arena_winning_decks",
-    limit: int = 20,
+    feed_cap: int = ARENA_WINNING_DECKS_FEED_CAP,
     locale: str = "ruRU",
 ) -> dict[str, Any]:
     payload = await fetch_hsreplay_json(WINNING_DECKS_API_URL, source_id=source_id)
-    decks: list[dict[str, Any]] = []
-    for row in payload.get("data") or []:
+    api_rows = payload.get("data") or []
+    new_decks: list[dict[str, Any]] = []
+    for row in api_rows:
         if not isinstance(row, dict):
             continue
         deck = normalize_winning_deck(row, locale=locale)
         if deck:
-            decks.append(deck)
-        if len(decks) >= limit:
-            break
+            new_decks.append(deck)
+
+    previous = _load_cached_winning_decks(source_id)
+    decks, added_count = merge_winning_deck_feed(new_decks, previous, feed_cap=feed_cap)
+
+    logger.info(
+        "Arena winning decks: api_rows=%s normalized=%s feed=%s new_unique=%s",
+        len(api_rows),
+        len(new_decks),
+        len(decks),
+        added_count,
+    )
 
     return {
         "type": "arena_winning_decks",
         "decks": decks,
+        "total_decks": len(decks),
+        "api_rows": len(api_rows),
+        "fetched_this_run": len(new_decks),
+        "new_unique_decks": added_count,
+        "feed_cap": feed_cap,
         "source": {
             "key": "hsreplay",
             "url": WINNING_DECKS_URL,

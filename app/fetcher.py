@@ -164,7 +164,7 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
     if source.id == "hsreplay_arena_winning_decks":
         from .hsreplay_arena_api import fetch_winning_decks
 
-        structured = await fetch_winning_decks(source_id=source.id, limit=20)
+        structured = await fetch_winning_decks(source_id=source.id)
         backend = structured.get("source", {}).get("backend", "hsreplay_api")
         return _dataset_from_structured(source, structured, backend=backend)
     if source.id == "hsreplay_battlegrounds_comps":
