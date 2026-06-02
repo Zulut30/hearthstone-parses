@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name:       Hearthstone Parses - Interactive Graphs
- * Description:       Integrates high-performance interactive hsguru meta scatter plots and Vicious Syndicate radars into WordPress via simple shortcodes.
- * Version:           1.0.0
+ * Description:       Integrates high-performance interactive hsguru meta scatter plots (Standard/Wild) and Vicious Syndicate radars into WordPress via simple shortcodes.
+ * Version:           1.1.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Hearthstone Parses Dev Team
@@ -15,7 +15,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'HS_PARSES_GRAPHS_VERSION', '1.0.0' );
+define( 'HS_PARSES_GRAPHS_VERSION', '1.1.0' );
 define( 'HS_PARSES_GRAPHS_DIR', plugin_dir_path( __FILE__ ) );
 define( 'HS_PARSES_GRAPHS_URL', plugin_dir_url( __FILE__ ) );
 
@@ -54,35 +54,64 @@ function hs_parses_graphs_register_assets() {
  */
 add_action( 'init', 'hs_parses_graphs_register_shortcodes' );
 function hs_parses_graphs_register_shortcodes() {
+	// Backward compatibility
 	add_shortcode( 'hs_meta_scatter_chart', 'hs_parses_render_meta_scatter' );
+	
+	// Modern format-specific scatter charts
+	add_shortcode( 'hs_meta_scatter_standard', 'hs_parses_render_meta_scatter_standard' );
+	add_shortcode( 'hs_meta_scatter_wild', 'hs_parses_render_meta_scatter_wild' );
+	
+	// Vicious Syndicate synergy radars
 	add_shortcode( 'hs_vs_radar_chart', 'hs_parses_render_vs_radar' );
 }
 
 /**
- * Render HSGuru Meta Scatter Plot Shortcode
- * Format: [hs_meta_scatter_chart source="hsguru_meta_standard_diamond_4to1" api_url="https://api.hs-manacost.ru" width="850" height="500"]
+ * Helper to get the default api domain
  */
-function hs_parses_render_meta_scatter( $atts ) {
-	$default_api = 'https://api.hs-manacost.ru';
+function hs_parses_graphs_get_default_api_url() {
+	return 'https://api.hs-manacost.ru';
+}
 
+/**
+ * Render HSGuru Meta Scatter Plot Shortcode (Generic / Backward Compatibility)
+ */
+function hs_meta_scatter_chart( $atts ) {
+	return hs_parses_render_meta_scatter( $atts );
+}
+
+function hs_parses_render_meta_scatter( $atts ) {
 	$a = shortcode_atts(
 		array(
-			'source'  => 'hsguru_meta_standard_diamond_4to1',
-			'api_url' => $default_api,
-			'width'   => '850',
-			'height'  => '500',
+			'source'        => 'hsguru_meta_standard_diamond_4to1',
+			'api_url'       => hs_parses_graphs_get_default_api_url(),
+			'width'         => '850',
+			'height'        => '500',
+			'show_selector' => 'yes',
 		),
 		$atts,
 		'hs_meta_scatter_chart'
 	);
 
-	// Sanitize and validate inputs
-	$source  = sanitize_key( $a['source'] );
-	$api_url = esc_url_raw( $a['api_url'] );
-	$width   = absint( $a['width'] );
-	$height  = absint( $a['height'] );
+	$source        = sanitize_key( $a['source'] );
+	$api_url       = esc_url_raw( $a['api_url'] );
+	$width         = absint( $a['width'] );
+	$height        = absint( $a['height'] );
+	$show_selector = sanitize_key( $a['show_selector'] );
 
-	// Dynamically enqueue scripts only when shortcode is rendered
+	// Determine format and rank from legacy source name
+	$format = 'standard';
+	$rank   = 'diamond_4to1';
+	if ( strpos( $source, '_wild_' ) !== false ) {
+		$format = 'wild';
+	}
+	if ( strpos( $source, '_legend' ) !== false ) {
+		$rank = 'legend';
+	} elseif ( strpos( $source, '_top_5k' ) !== false ) {
+		$rank = 'top_5k';
+	} elseif ( strpos( $source, '_top_legend' ) !== false ) {
+		$rank = 'top_legend';
+	}
+
 	wp_enqueue_style( 'hs-parses-graphs-style' );
 	wp_enqueue_script( 'hs-parses-meta-scatter' );
 
@@ -90,11 +119,17 @@ function hs_parses_render_meta_scatter( $atts ) {
 	?>
 	<div class="hs-meta-scatter-wrapper" 
 		data-api-url="<?php echo esc_url( $api_url ); ?>" 
-		data-source-id="<?php echo esc_attr( $source ); ?>">
+		data-format="<?php echo esc_attr( $format ); ?>"
+		data-start-rank="<?php echo esc_attr( $rank ); ?>"
+		data-show-selector="<?php echo esc_attr( $show_selector ); ?>">
 		
 		<p class="muted">
-			<?php echo esc_html__( 'Интерактивный график распределения метагейма (Винрейт / Популярность). По вертикали — популярность (%), по горизонтали — процент побед (%). Наведите курсор на точку для подробной статистики.', 'hs-parses-graphs-wp' ); ?>
+			<?php echo esc_html__( 'Интерактивный график распределения метагейма (Винрейт / Популярность). По вертикали — популярность (%), по горизонтали — процент побед (%). Выберите нужный ранг ниже.', 'hs-parses-graphs-wp' ); ?>
 		</p>
+
+		<?php if ( 'yes' === $show_selector ) : ?>
+			<div class="hs-meta-scatter-rank-selector" style="margin-bottom: 15px; display: flex; gap: 8px; flex-wrap: wrap;"></div>
+		<?php endif; ?>
 		
 		<div class="hs-meta-scatter-canvas-container" style="background: #1e1e24; border-radius: 8px; padding: 10px; border: 1px solid var(--hs-graph-border);">
 			<canvas class="hs-meta-scatter-canvas" 
@@ -112,40 +147,159 @@ function hs_parses_render_meta_scatter( $atts ) {
 }
 
 /**
- * Render Vicious Syndicate Radar Shortcode
- * Format: [hs_vs_radar_chart api_url="https://api.hs-manacost.ru" width="750" height="750"]
+ * Render Standard Format Scatter Plot
+ * [hs_meta_scatter_standard rank="diamond_4to1" show_selector="yes"]
  */
-function hs_parses_render_vs_radar( $atts ) {
-	$default_api = 'https://api.hs-manacost.ru';
-
+function hs_parses_render_meta_scatter_standard( $atts ) {
 	$a = shortcode_atts(
 		array(
-			'api_url' => $default_api,
-			'width'   => '750',
-			'height'  => '750',
+			'rank'          => 'diamond_4to1',
+			'api_url'       => hs_parses_graphs_get_default_api_url(),
+			'width'         => '850',
+			'height'        => '500',
+			'show_selector' => 'yes',
+		),
+		$atts,
+		'hs_meta_scatter_standard'
+	);
+
+	$rank          = sanitize_key( $a['rank'] );
+	$api_url       = esc_url_raw( $a['api_url'] );
+	$width         = absint( $a['width'] );
+	$height        = absint( $a['height'] );
+	$show_selector = sanitize_key( $a['show_selector'] );
+
+	wp_enqueue_style( 'hs-parses-graphs-style' );
+	wp_enqueue_script( 'hs-parses-meta-scatter' );
+
+	ob_start();
+	?>
+	<div class="hs-meta-scatter-wrapper" 
+		data-api-url="<?php echo esc_url( $api_url ); ?>" 
+		data-format="standard"
+		data-start-rank="<?php echo esc_attr( $rank ); ?>"
+		data-show-selector="<?php echo esc_attr( $show_selector ); ?>">
+		
+		<p class="muted">
+			<strong><?php echo esc_html__( 'Стандартный формат (Standard):', 'hs-parses-graphs-wp' ); ?></strong>
+			<?php echo esc_html__( 'Интерактивный мета-график. Выберите ранг для отображения распределения сил архетипов.', 'hs-parses-graphs-wp' ); ?>
+		</p>
+
+		<?php if ( 'yes' === $show_selector ) : ?>
+			<div class="hs-meta-scatter-rank-selector" style="margin-bottom: 15px; display: flex; gap: 8px; flex-wrap: wrap;"></div>
+		<?php endif; ?>
+		
+		<div class="hs-meta-scatter-canvas-container" style="background: #1e1e24; border-radius: 8px; padding: 10px; border: 1px solid var(--hs-graph-border);">
+			<canvas class="hs-meta-scatter-canvas" 
+				width="<?php echo esc_attr( $width ); ?>" 
+				height="<?php echo esc_attr( $height ); ?>" 
+				style="background: #1e1e24; border-radius: 6px; aspect-ratio: <?php echo esc_attr( $width ); ?>/<?php echo esc_attr( $height ); ?>;"></canvas>
+		</div>
+		
+		<div class="hs-meta-scatter-tooltip">
+			<?php echo esc_html__( 'Наведите на точку, чтобы увидеть детали', 'hs-parses-graphs-wp' ); ?>
+		</div>
+	</div>
+	<?php
+	return ob_get_clean();
+}
+
+/**
+ * Render Wild Format Scatter Plot
+ * [hs_meta_scatter_wild rank="legend" show_selector="yes"]
+ */
+function hs_parses_render_meta_scatter_wild( $atts ) {
+	$a = shortcode_atts(
+		array(
+			'rank'          => 'legend',
+			'api_url'       => hs_parses_graphs_get_default_api_url(),
+			'width'         => '850',
+			'height'        => '500',
+			'show_selector' => 'yes',
+		),
+		$atts,
+		'hs_meta_scatter_wild'
+	);
+
+	$rank          = sanitize_key( $a['rank'] );
+	$api_url       = esc_url_raw( $a['api_url'] );
+	$width         = absint( $a['width'] );
+	$height        = absint( $a['height'] );
+	$show_selector = sanitize_key( $a['show_selector'] );
+
+	wp_enqueue_style( 'hs-parses-graphs-style' );
+	wp_enqueue_script( 'hs-parses-meta-scatter' );
+
+	ob_start();
+	?>
+	<div class="hs-meta-scatter-wrapper" 
+		data-api-url="<?php echo esc_url( $api_url ); ?>" 
+		data-format="wild"
+		data-start-rank="<?php echo esc_attr( $rank ); ?>"
+		data-show-selector="<?php echo esc_attr( $show_selector ); ?>">
+		
+		<p class="muted">
+			<strong><?php echo esc_html__( 'Вольный формат (Wild):', 'hs-parses-graphs-wp' ); ?></strong>
+			<?php echo esc_html__( 'Интерактивный мета-график. Выберите ранг для отображения распределения сил архетипов в Вольном режиме.', 'hs-parses-graphs-wp' ); ?>
+		</p>
+
+		<?php if ( 'yes' === $show_selector ) : ?>
+			<div class="hs-meta-scatter-rank-selector" style="margin-bottom: 15px; display: flex; gap: 8px; flex-wrap: wrap;"></div>
+		<?php endif; ?>
+		
+		<div class="hs-meta-scatter-canvas-container" style="background: #1e1e24; border-radius: 8px; padding: 10px; border: 1px solid var(--hs-graph-border);">
+			<canvas class="hs-meta-scatter-canvas" 
+				width="<?php echo esc_attr( $width ); ?>" 
+				height="<?php echo esc_attr( $height ); ?>" 
+				style="background: #1e1e24; border-radius: 6px; aspect-ratio: <?php echo esc_attr( $width ); ?>/<?php echo esc_attr( $height ); ?>;"></canvas>
+		</div>
+		
+		<div class="hs-meta-scatter-tooltip">
+			<?php echo esc_html__( 'Наведите на точку, чтобы увидеть детали', 'hs-parses-graphs-wp' ); ?>
+		</div>
+	</div>
+	<?php
+	return ob_get_clean();
+}
+
+/**
+ * Render Vicious Syndicate Radar Shortcode with Class Select & Locks
+ * [hs_vs_radar_chart class="Druid" lock_class="no" width="750" height="750"]
+ */
+function hs_parses_render_vs_radar( $atts ) {
+	$a = shortcode_atts(
+		array(
+			'api_url'    => hs_parses_graphs_get_default_api_url(),
+			'class'      => '',
+			'lock_class' => 'no',
+			'width'      => '750',
+			'height'     => '750',
 		),
 		$atts,
 		'hs_vs_radar_chart'
 	);
 
-	// Sanitize and validate inputs
-	$api_url = esc_url_raw( $a['api_url'] );
-	$width   = absint( $a['width'] );
-	$height  = absint( $a['height'] );
+	$api_url    = esc_url_raw( $a['api_url'] );
+	$class      = sanitize_key( $a['class'] );
+	$lock_class = sanitize_key( $a['lock_class'] );
+	$width      = absint( $a['width'] );
+	$height     = absint( $a['height'] );
 
-	// Dynamically enqueue scripts only when shortcode is rendered
 	wp_enqueue_style( 'hs-parses-graphs-style' );
 	wp_enqueue_script( 'hs-parses-vs-radar' );
 
 	ob_start();
 	?>
-	<div class="hs-vs-radar-wrapper" data-api-url="<?php echo esc_url( $api_url ); ?>">
+	<div class="hs-vs-radar-wrapper" 
+		data-api-url="<?php echo esc_url( $api_url ); ?>"
+		data-start-class="<?php echo esc_attr( $class ); ?>"
+		data-lock-class="<?php echo esc_attr( $lock_class ); ?>">
 		
 		<p class="muted">
-			<?php echo esc_html__( 'Интерактивный радар синергии карт (Vicious Syndicate Radar Graph). Выберите класс и конкретный архетип. Перетаскивайте узлы мышью или нажимайте на них для просмотра связей.', 'hs-parses-graphs-wp' ); ?>
+			<?php echo esc_html__( 'Интерактивный радар синергии карт (Vicious Syndicate Radar Graph). Выберите класс и архетип. Перетаскивайте узлы мышью или нажимайте на них для просмотра связей.', 'hs-parses-graphs-wp' ); ?>
 		</p>
 
-		<!-- Class Tab Buttons -->
+		<!-- Class Tab Buttons (Automatically hidden in JS if lock_class="yes") -->
 		<div class="hs-vs-class-tabs"></div>
 		
 		<!-- Archetype Tab Buttons -->
@@ -216,3 +370,180 @@ function hs_parses_render_vs_radar( $atts ) {
 	<?php
 	return ob_get_clean();
 }
+
+/**
+ * Register Admin Menu under Tools
+ */
+add_action( 'admin_menu', 'hs_parses_graphs_register_tools_page' );
+function hs_parses_graphs_register_tools_page() {
+	add_management_page(
+		__( 'Графики Hearthstone', 'hs-parses-graphs-wp' ),
+		__( 'Графики Hearthstone', 'hs-parses-graphs-wp' ),
+		'manage_options',
+		'hs-parses-graphs-documentation',
+		'hs_parses_graphs_render_tools_page'
+	);
+}
+
+/**
+ * Render the Tools Admin Page Layout
+ */
+function hs_parses_graphs_render_tools_page() {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		wp_die( esc_html__( 'Извините, у вас нет достаточных прав для доступа к этой странице.', 'hs-parses-graphs-wp' ) );
+	}
+	?>
+	<div class="wrap" style="max-width: 1100px; margin-top: 20px; font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen-Sans,Ubuntu,Cantarell,sans-serif;">
+		<h1 style="font-weight: 700; margin-bottom: 5px; color: #23282d;">
+			<?php echo esc_html__( 'Интерактивные графики Hearthstone', 'hs-parses-graphs-wp' ); ?>
+		</h1>
+		<p class="description" style="font-size: 1rem; margin-bottom: 25px; color: #555d66;">
+			<?php echo esc_html__( 'Руководство и список доступных шорткодов для размещения интерактивных визуализаций HSGuru и Vicious Syndicate.', 'hs-parses-graphs-wp' ); ?>
+		</p>
+
+		<!-- Card Layout -->
+		<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 30px;">
+			
+			<!-- Card 1 -->
+			<div style="background: #fff; border: 1px solid #ccd0d4; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.04);">
+				<span style="display: inline-block; padding: 4px 8px; background: #2ec4b6; color: #fff; font-size: 0.75rem; font-weight: bold; border-radius: 4px; margin-bottom: 12px; text-transform: uppercase;">
+					Standard Meta
+				</span>
+				<h3 style="margin: 0 0 10px 0; font-size: 1.2rem; color: #1e1e1e;">[hs_meta_scatter_standard]</h3>
+				<p style="color: #646970; font-size: 0.9rem; line-height: 1.5; min-height: 60px;">
+					<?php echo esc_html__( 'Отображает интерактивное распределение винрейта и популярности архетипов Стандартного формата на холсте HTML5 Canvas.', 'hs-parses-graphs-wp' ); ?>
+				</p>
+				<div style="background: #f6f7f7; padding: 10px; border-radius: 6px; border-left: 4px solid #2ec4b6; margin-bottom: 15px;">
+					<code id="sc-code-std" style="font-family: Consolas, Monaco, monospace; font-size: 0.85rem; color: #000;">[hs_meta_scatter_standard rank="diamond_4to1" show_selector="yes"]</code>
+				</div>
+				<button class="button button-secondary" onclick="copyTextToClipboard('sc-code-std', this)">
+					<?php echo esc_html__( 'Скопировать шорткод', 'hs-parses-graphs-wp' ); ?>
+				</button>
+			</div>
+
+			<!-- Card 2 -->
+			<div style="background: #fff; border: 1px solid #ccd0d4; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.04);">
+				<span style="display: inline-block; padding: 4px 8px; background: #ff9f1c; color: #000; font-size: 0.75rem; font-weight: bold; border-radius: 4px; margin-bottom: 12px; text-transform: uppercase;">
+					Wild Meta
+				</span>
+				<h3 style="margin: 0 0 10px 0; font-size: 1.2rem; color: #1e1e1e;">[hs_meta_scatter_wild]</h3>
+				<p style="color: #646970; font-size: 0.9rem; line-height: 1.5; min-height: 60px;">
+					<?php echo esc_html__( 'Отображает интерактивное распределение винрейта и популярности архетипов Вольного формата на холсте HTML5 Canvas.', 'hs-parses-graphs-wp' ); ?>
+				</p>
+				<div style="background: #f6f7f7; padding: 10px; border-radius: 6px; border-left: 4px solid #ff9f1c; margin-bottom: 15px;">
+					<code id="sc-code-wild" style="font-family: Consolas, Monaco, monospace; font-size: 0.85rem; color: #000;">[hs_meta_scatter_wild rank="legend" show_selector="yes"]</code>
+				</div>
+				<button class="button button-secondary" onclick="copyTextToClipboard('sc-code-wild', this)">
+					<?php echo esc_html__( 'Скопировать шорткод', 'hs-parses-graphs-wp' ); ?>
+				</button>
+			</div>
+
+			<!-- Card 3 -->
+			<div style="background: #fff; border: 1px solid #ccd0d4; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,.04);">
+				<span style="display: inline-block; padding: 4px 8px; background: #e71d36; color: #fff; font-size: 0.75rem; font-weight: bold; border-radius: 4px; margin-bottom: 12px; text-transform: uppercase;">
+					Synergy Radar
+				</span>
+				<h3 style="margin: 0 0 10px 0; font-size: 1.2rem; color: #1e1e1e;">[hs_vs_radar_chart]</h3>
+				<p style="color: #646970; font-size: 0.9rem; line-height: 1.5; min-height: 60px;">
+					<?php echo esc_html__( 'Отображает интерактивный физический граф синергий карт Vicious Syndicate с выбором класса и архетипов.', 'hs-parses-graphs-wp' ); ?>
+				</p>
+				<div style="background: #f6f7f7; padding: 10px; border-radius: 6px; border-left: 4px solid #e71d36; margin-bottom: 15px;">
+					<code id="sc-code-radar" style="font-family: Consolas, Monaco, monospace; font-size: 0.85rem; color: #000;">[hs_vs_radar_chart class="Druid" lock_class="yes"]</code>
+				</div>
+				<button class="button button-secondary" onclick="copyTextToClipboard('sc-code-radar', this)">
+					<?php echo esc_html__( 'Скопировать шорткод', 'hs-parses-graphs-wp' ); ?>
+				</button>
+			</div>
+
+		</div>
+
+		<!-- Advanced attributes reference -->
+		<div style="background: #fff; border: 1px solid #ccd0d4; border-radius: 8px; padding: 25px; box-shadow: 0 1px 3px rgba(0,0,0,.04); margin-bottom: 30px;">
+			<h2 style="font-size: 1.3rem; font-weight: bold; margin-top: 0; margin-bottom: 15px; color: #1e1e1e;">
+				<?php echo esc_html__( 'Подробная спецификация параметров шорткодов', 'hs-parses-graphs-wp' ); ?>
+			</h2>
+
+			<table class="wp-list-table widefat fixed striped pages" style="border: 1px solid #e5e5e5; box-shadow: none; border-radius: 4px; overflow: hidden; margin-bottom: 20px;">
+				<thead>
+					<tr>
+						<th style="font-weight: bold; padding: 10px 15px;"><?php echo esc_html__( 'Параметр', 'hs-parses-graphs-wp' ); ?></th>
+						<th style="font-weight: bold; padding: 10px 15px;"><?php echo esc_html__( 'Допустимые значения', 'hs-parses-graphs-wp' ); ?></th>
+						<th style="font-weight: bold; padding: 10px 15px;"><?php echo esc_html__( 'Описание', 'hs-parses-graphs-wp' ); ?></th>
+					</tr>
+				</thead>
+				<tbody>
+					<!-- Rank -->
+					<tr>
+						<td style="padding: 12px 15px;"><strong><code>rank</code></strong></td>
+						<td style="padding: 12px 15px;"><code>top_legend</code>, <code>top_5k</code>, <code>legend</code>, <code>diamond_4to1</code></td>
+						<td style="padding: 12px 15px;">
+							<?php echo esc_html__( 'Определяет стартовый ранг данных при загрузке страницы. По умолчанию используется diamond_4to1.', 'hs-parses-graphs-wp' ); ?>
+						</td>
+					</tr>
+					<!-- Show Selector -->
+					<tr>
+						<td style="padding: 12px 15px;"><strong><code>show_selector</code></strong></td>
+						<td style="padding: 12px 15px;"><code>yes</code>, <code>no</code></td>
+						<td style="padding: 12px 15px;">
+							<?php echo esc_html__( 'Показывает или скрывает кнопки быстрого переключения рангов непосредственно на странице (по умолчанию yes).', 'hs-parses-graphs-wp' ); ?>
+						</td>
+					</tr>
+					<!-- Class -->
+					<tr>
+						<td style="padding: 12px 15px;"><strong><code>class</code></strong></td>
+						<td style="padding: 12px 15px;"><code>DeathKnight</code>, <code>DemonHunter</code>, <code>Druid</code>, <code>Hunter</code>, <code>Mage</code>, <code>Paladin</code>, <code>Priest</code>, <code>Rogue</code>, <code>Shaman</code>, <code>Warlock</code>, <code>Warrior</code></td>
+						<td style="padding: 12px 15px;">
+							<?php echo esc_html__( 'Стартовый класс для предвыбора во Vicious Syndicate радаре. Позволяет мгновенно открывать конкретную класс-карту при загрузке.', 'hs-parses-graphs-wp' ); ?>
+						</td>
+					</tr>
+					<!-- Lock Class -->
+					<tr>
+						<td style="padding: 12px 15px;"><strong><code>lock_class</code></strong></td>
+						<td style="padding: 12px 15px;"><code>yes</code>, <code>no</code></td>
+						<td style="padding: 12px 15px;">
+							<?php echo esc_html__( 'Если установлено в "yes", скрывает глобальные вкладки выбора классов, фиксируя радар на одном выбранном классе (с возможностью переключения его архетипов). Отлично подходит для класс-специфичных постов.', 'hs-parses-graphs-wp' ); ?>
+						</td>
+					</tr>
+					<!-- Width/Height -->
+					<tr>
+						<td style="padding: 12px 15px;"><strong><code>width</code> / <code>height</code></strong></td>
+						<td style="padding: 12px 15px;">Числа в пикселях (например, <code>850</code>, <code>500</code>)</td>
+						<td style="padding: 12px 15px;">
+							<?php echo esc_html__( 'Управляет размерами и соотношением сторон холста интерактивных Canvas графиков.', 'hs-parses-graphs-wp' ); ?>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+
+			<div style="background: #f0f6fc; border-left: 4px solid #72aee6; padding: 15px; border-radius: 4px;">
+				<h4 style="margin-top: 0; margin-bottom: 5px; color: #1d2327; font-weight: bold;"><?php echo esc_html__( 'Премиальная совместимость с темами Blocksy и Newspaper', 'hs-parses-graphs-wp' ); ?></h4>
+				<p style="margin: 0; color: #2c3338; font-size: 0.9rem; line-height: 1.4;">
+					<?php echo esc_html__( 'Стили плагина полностью изолированы и используют гибкую адаптивную верстку CSS Grid, Flexbox и CSS Variables. Настройка корректно наследует шрифты темы, прекрасно работает как на светлых, так и на темных макетах, а также поддерживает адаптивный рендеринг на мобильных дисплеях.', 'hs-parses-graphs-wp' ); ?>
+				</p>
+			</div>
+		</div>
+	</div>
+
+	<!-- Copy scripts -->
+	<script>
+		function copyTextToClipboard(elementId, btn) {
+			var text = document.getElementById(elementId).textContent;
+			navigator.clipboard.writeText(text).then(function() {
+				var oldLabel = btn.textContent;
+				btn.textContent = '<?php echo esc_js( __( 'Успешно скопировано!', 'hs-parses-graphs-wp' ) ); ?>';
+				btn.style.background = '#46b450';
+				btn.style.color = '#fff';
+				btn.style.borderColor = '#46b450';
+				setTimeout(function() {
+					btn.textContent = oldLabel;
+					btn.style.background = '';
+					btn.style.color = '';
+					btn.style.borderColor = '';
+				}, 1500);
+			});
+		}
+	</script>
+	<?php
+}
+EOF
+)",old_string:

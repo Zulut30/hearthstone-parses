@@ -25,6 +25,8 @@
 
     var ctx = canvas.getContext('2d');
     var apiUrl = wrapper.getAttribute('data-api-url') || 'https://api.hs-manacost.ru';
+    var startClass = wrapper.getAttribute('data-start-class') || ''; // e.g., 'Druid'
+    var lockClass = wrapper.getAttribute('data-lock-class') === 'yes';
 
     hoverInfo.textContent = 'Загрузка радаров Vicious Syndicate...';
 
@@ -39,14 +41,14 @@
         }
         var data = payload.data;
         hoverInfo.textContent = 'Наведите на карту для деталей';
-        setupRadarGraph(wrapper, data, canvas, ctx, hoverInfo, classTabs, archTabs, searchInput, resetBtn, nodesTableBody, cardTitle, cardDetails, wrapperIndex);
+        setupRadarGraph(wrapper, data, canvas, ctx, hoverInfo, classTabs, archTabs, searchInput, resetBtn, nodesTableBody, cardTitle, cardDetails, startClass, lockClass, wrapperIndex);
       })
       .catch(function(err) {
         hoverInfo.innerHTML = '<span style="color: #ff3b30;">Ошибка загрузки радаров: ' + escapeHtml(err.message) + '</span>';
       });
   }
 
-  function setupRadarGraph(wrapper, data, canvas, ctx, hoverInfo, classTabs, archTabs, searchInput, resetBtn, nodesTableBody, cardTitle, cardDetails, wrapperIndex) {
+  function setupRadarGraph(wrapper, data, canvas, ctx, hoverInfo, classTabs, archTabs, searchInput, resetBtn, nodesTableBody, cardTitle, cardDetails, startClass, lockClass, wrapperIndex) {
     var currentClass = null;
     var currentArchetype = null;
     var nodes = [];
@@ -77,39 +79,59 @@
       'Warlock': '#8787ed', 'Warrior': '#c79c6e'
     };
 
+    // Normalize starting class if provided
+    if (startClass) {
+      // Find matching class matching case-insensitively
+      var foundClass = data.classes_summary.find(function(c) {
+        return c.class.toLowerCase() === startClass.toLowerCase();
+      });
+      if (foundClass) {
+        currentClass = foundClass.class;
+      }
+    }
+
+    if (!currentClass && data.classes_summary && data.classes_summary[0]) {
+      currentClass = data.classes_summary[0].class;
+    }
+
+    if (!currentClass) {
+      currentClass = data.radars[0] ? data.radars[0].class : null;
+    }
+
     // Render Class Tabs
     if (classTabs && data.classes_summary) {
       classTabs.innerHTML = '';
-      data.classes_summary.forEach(function(c, i) {
-        var btn = document.createElement('button');
-        btn.className = 'hs-vs-tab-btn class-tab-btn ' + (i === 0 ? 'active' : '');
-        btn.style.borderColor = CLASS_COLORS_BORDER[c.class] || '#444';
-        
-        var displayName = CLASS_TRANSLATIONS[c.class] || c.class;
-        var badge = '';
-        if (c.has_archetypes) {
-          badge = ' <span style="background: rgba(255, 159, 28, 0.2); color: #ff9f1c; padding: 1px 4px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; margin-left: 4px;">+арх</span>';
-        }
-        btn.innerHTML = displayName + badge;
-        btn.setAttribute('data-class', c.class);
+      
+      if (lockClass) {
+        // If locked, hide the main class selector tabs completely
+        classTabs.style.display = 'none';
+      } else {
+        classTabs.style.display = 'flex';
+        data.classes_summary.forEach(function(c) {
+          var btn = document.createElement('button');
+          btn.className = 'hs-vs-tab-btn class-tab-btn ' + (c.class === currentClass ? 'active' : '');
+          btn.style.borderColor = CLASS_COLORS_BORDER[c.class] || '#444';
+          
+          var displayName = CLASS_TRANSLATIONS[c.class] || c.class;
+          var badge = '';
+          if (c.has_archetypes) {
+            badge = ' <span style="background: rgba(255, 159, 28, 0.2); color: #ff9f1c; padding: 1px 4px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; margin-left: 4px;">+арх</span>';
+          }
+          btn.innerHTML = displayName + badge;
+          btn.setAttribute('data-class', c.class);
 
-        btn.addEventListener('click', function() {
-          classTabs.querySelectorAll('.class-tab-btn').forEach(function(b) { b.classList.remove('active'); });
-          btn.classList.add('active');
-          currentClass = c.class;
-          currentArchetype = null;
-          rebuildArchetypeTabs(currentClass);
-          loadClassRadar(currentClass, null);
+          btn.addEventListener('click', function() {
+            classTabs.querySelectorAll('.class-tab-btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            currentClass = c.class;
+            currentArchetype = null;
+            rebuildArchetypeTabs(currentClass);
+            loadClassRadar(currentClass, null);
+          });
+
+          classTabs.appendChild(btn);
         });
-
-        classTabs.appendChild(btn);
-      });
-
-      if (data.classes_summary[0]) {
-        currentClass = data.classes_summary[0].class;
       }
-    } else {
-      currentClass = data.radars[0] ? data.radars[0].class : null;
     }
 
     function rebuildArchetypeTabs(clsName) {
@@ -124,23 +146,29 @@
         return a.archetype.localeCompare(b.archetype);
       });
 
-      classRadars.forEach(function(r, i) {
-        var btn = document.createElement('button');
-        btn.className = 'hs-vs-tab-btn arch-tab-btn ' + (i === 0 ? 'active' : '');
-        btn.style.fontSize = '0.8rem';
-        btn.style.padding = '0.3rem 0.6rem';
-        btn.style.borderRadius = '4px';
-        btn.textContent = r.archetype ? r.archetype : 'Общий (Класс)';
-        
-        btn.addEventListener('click', function() {
-          archTabs.querySelectorAll('.arch-tab-btn').forEach(function(b) { b.classList.remove('active'); });
-          btn.classList.add('active');
-          currentArchetype = r.archetype;
-          loadClassRadar(currentClass, currentArchetype);
-        });
+      // Show archetype tabs only if there are multiple options
+      if (classRadars.length > 1) {
+        archTabs.style.display = 'flex';
+        classRadars.forEach(function(r, i) {
+          var btn = document.createElement('button');
+          btn.className = 'hs-vs-tab-btn arch-tab-btn ' + (i === 0 ? 'active' : '');
+          btn.style.fontSize = '0.8rem';
+          btn.style.padding = '0.3rem 0.6rem';
+          btn.style.borderRadius = '4px';
+          btn.textContent = r.archetype ? r.archetype : 'Общий (Класс)';
+          
+          btn.addEventListener('click', function() {
+            archTabs.querySelectorAll('.arch-tab-btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            currentArchetype = r.archetype;
+            loadClassRadar(currentClass, currentArchetype);
+          });
 
-        archTabs.appendChild(btn);
-      });
+          archTabs.appendChild(btn);
+        });
+      } else {
+        archTabs.style.display = 'none';
+      }
     }
 
     if (searchInput) {
@@ -277,6 +305,11 @@
         y: (evt.clientY - rect.top) * (750 / rect.height)
       };
     }
+
+    // Capture previous listeners using DOM node replacement
+    var newCanvas = canvas.cloneNode(true);
+    canvas.parentNode.replaceChild(newCanvas, canvas);
+    canvas = newCanvas;
 
     canvas.addEventListener('mousedown', function(e) {
       var pos = getMousePos(e);

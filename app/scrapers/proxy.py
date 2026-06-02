@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import random
 import re
 import secrets
@@ -14,6 +16,8 @@ from ..config import (
     iproyal_session_per_source,
     proxy_check_url,
 )
+
+logger = logging.getLogger(__name__)
 
 _IPROYAL_HOSTS = ("iproyal.com", "geo.iproyal.com")
 

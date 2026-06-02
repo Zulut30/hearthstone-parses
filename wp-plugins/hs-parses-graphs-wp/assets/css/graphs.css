@@ -59,7 +59,8 @@
 
 /* Tabs & Buttons */
 .hs-vs-class-tabs,
-.hs-vs-archetype-tabs {
+.hs-vs-archetype-tabs,
+.hs-meta-scatter-rank-selector {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;

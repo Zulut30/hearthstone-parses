@@ -1,43 +1,82 @@
 (function() {
   'use strict';
 
+  var activeScatterAnimations = new Map();
+
   document.addEventListener('DOMContentLoaded', function() {
     var containers = document.querySelectorAll('.hs-meta-scatter-wrapper');
-    containers.forEach(function(wrapper) {
-      initScatterPlot(wrapper);
+    containers.forEach(function(wrapper, index) {
+      initScatterPlot(wrapper, index);
     });
   });
 
-  function initScatterPlot(wrapper) {
+  function initScatterPlot(wrapper, wrapperIndex) {
     var canvas = wrapper.querySelector('.hs-meta-scatter-canvas');
     var hoverInfo = wrapper.querySelector('.hs-meta-scatter-tooltip');
+    var rankSelector = wrapper.querySelector('.hs-meta-scatter-rank-selector');
     if (!canvas || !hoverInfo) return;
 
     var ctx = canvas.getContext('2d');
     var apiUrl = wrapper.getAttribute('data-api-url') || 'https://api.hs-manacost.ru';
-    var sourceId = wrapper.getAttribute('data-source-id') || 'hsguru_meta_standard_diamond_4to1';
+    var format = wrapper.getAttribute('data-format') || 'standard'; // standard or wild
+    var currentRank = wrapper.getAttribute('data-start-rank') || 'diamond_4to1'; // legend, diamond_4to1, top_5k, top_legend
+    var showSelector = wrapper.getAttribute('data-show-selector') === 'yes';
 
-    // Show loading state
-    hoverInfo.textContent = 'Загрузка данных графика...';
+    var RANK_LABELS = {
+      'legend': 'Легенда (Legend)',
+      'diamond_4to1': 'Алмаз 4-1 (Diamond)',
+      'top_5k': 'Топ-5к Легенды (Top 5k)',
+      'top_legend': 'Топ-1к Легенды (Top 1k)'
+    };
 
-    fetch(apiUrl + '/datasets/' + sourceId)
-      .then(function(res) {
-        if (!res.ok) throw new Error('Ошибка HTTP: ' + res.status);
-        return res.json();
-      })
-      .then(function(payload) {
-        if (!payload || !payload.data || !payload.data.structured || !payload.data.structured.strategies) {
-          throw new Error('Некорректная структура данных');
-        }
-        var strategies = payload.data.structured.strategies;
-        renderScatterPlot(canvas, hoverInfo, ctx, strategies);
-      })
-      .catch(function(err) {
-        hoverInfo.innerHTML = '<span style="color: #ff3b30;">Ошибка загрузки графика: ' + escapeHtml(err.message) + '</span>';
+    var AVAILABLE_RANKS = ['top_legend', 'top_5k', 'legend', 'diamond_4to1'];
+
+    // Render rank selector if enabled
+    if (showSelector && rankSelector) {
+      rankSelector.innerHTML = '';
+      AVAILABLE_RANKS.forEach(function(rank) {
+        var btn = document.createElement('button');
+        btn.className = 'hs-vs-tab-btn rank-tab-btn ' + (rank === currentRank ? 'active' : '');
+        btn.textContent = RANK_LABELS[rank] || rank;
+        
+        btn.addEventListener('click', function() {
+          rankSelector.querySelectorAll('.rank-tab-btn').forEach(function(b) { b.classList.remove('active'); });
+          btn.classList.add('active');
+          currentRank = rank;
+          loadScatterData(currentRank);
+        });
+
+        rankSelector.appendChild(btn);
       });
+    }
+
+    function loadScatterData(rank) {
+      hoverInfo.textContent = 'Загрузка данных графика...';
+      
+      var sourceId = 'hsguru_meta_' + format + '_' + rank;
+
+      fetch(apiUrl + '/datasets/' + sourceId)
+        .then(function(res) {
+          if (!res.ok) throw new Error('Ошибка HTTP: ' + res.status);
+          return res.json();
+        })
+        .then(function(payload) {
+          if (!payload || !payload.data || !payload.data.structured || !payload.data.structured.strategies) {
+            throw new Error('Некорректная структура данных');
+          }
+          var strategies = payload.data.structured.strategies;
+          renderScatterPlot(canvas, hoverInfo, ctx, strategies, wrapperIndex);
+        })
+        .catch(function(err) {
+          hoverInfo.innerHTML = '<span style="color: #ff3b30;">Ошибка загрузки графика (' + escapeHtml(sourceId) + '): ' + escapeHtml(err.message) + '</span>';
+        });
+    }
+
+    // Initial load
+    loadScatterData(currentRank);
   }
 
-  function renderScatterPlot(canvas, hoverInfo, ctx, strategies) {
+  function renderScatterPlot(canvas, hoverInfo, ctx, strategies, wrapperIndex) {
     var parsedPoints = strategies.map(function(s) {
       var name = s.Archetype || s.strategy || s.name || '';
       var winrateStr = s['Winrate↓'] || s.Winrate || s.winrate || '0';
@@ -132,6 +171,7 @@
     var hoveredPoint = null;
 
     function draw() {
+      // Clear with background color matching the theme beautifully
       ctx.fillStyle = '#1e1e24';
       ctx.fillRect(0, 0, width, height);
 
@@ -232,6 +272,11 @@
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 0;
     }
+
+    // Capture previous mousemove handler by replacing canvas element with its clone to clear listeners
+    var newCanvas = canvas.cloneNode(true);
+    canvas.parentNode.replaceChild(newCanvas, canvas);
+    canvas = newCanvas;
 
     canvas.addEventListener('mousemove', function(e) {
       var rect = canvas.getBoundingClientRect();
