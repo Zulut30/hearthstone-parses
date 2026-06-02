@@ -3,12 +3,18 @@
 
   var activeScatterAnimations = new Map();
 
-  document.addEventListener('DOMContentLoaded', function() {
+  function initAllScatterPlots() {
     var containers = document.querySelectorAll('.hs-meta-scatter-wrapper');
     containers.forEach(function(wrapper, index) {
       initScatterPlot(wrapper, index);
     });
-  });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAllScatterPlots);
+  } else {
+    initAllScatterPlots();
+  }
 
   function initScatterPlot(wrapper, wrapperIndex) {
     var canvas = wrapper.querySelector('.hs-meta-scatter-canvas');

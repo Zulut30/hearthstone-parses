@@ -3,12 +3,18 @@
 
   var activeAnimations = new Map();
 
-  document.addEventListener('DOMContentLoaded', function() {
+  function initAllRadarCharts() {
     var containers = document.querySelectorAll('.hs-vs-radar-wrapper');
     containers.forEach(function(wrapper, index) {
       initRadarChart(wrapper, index);
     });
-  });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAllRadarCharts);
+  } else {
+    initAllRadarCharts();
+  }
 
   function initRadarChart(wrapper, wrapperIndex) {
     var canvas = wrapper.querySelector('.hs-vs-radar-canvas');
