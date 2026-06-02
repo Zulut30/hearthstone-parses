@@ -545,5 +545,3 @@ function hs_parses_graphs_render_tools_page() {
 	</script>
 	<?php
 }
-EOF
-)",old_string:
