@@ -3,8 +3,12 @@ const $ = (sel) => document.querySelector(sel);
 const LABELS = {
   hsguru_meta_standard_legend: "Мета Standard · Legend",
   hsguru_meta_standard_diamond_4to1: "Мета Standard · Diamond",
+  hsguru_meta_standard_top_5k: "Мета Standard · Top 5k",
+  hsguru_meta_standard_top_legend: "Мета Standard · Top Legend",
   hsguru_meta_wild_legend: "Мета Wild · Legend",
   hsguru_meta_wild_diamond_4to1: "Мета Wild · Diamond",
+  hsguru_meta_wild_top_legend: "Мета Wild · Top Legend",
+  hsguru_meta_wild_top_5k: "Мета Wild · Top 5k",
   hsguru_matchups_legend: "Матчапы · Legend",
   hsguru_matchups_diamond_4to1: "Матчапы · Diamond",
   hsguru_streamer_decks_legend_1000: "Колоды стримеров",

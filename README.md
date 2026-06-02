@@ -12,6 +12,8 @@
 
 Репозиторий: [github.com/Zulut30/hearthstone-parses](https://github.com/Zulut30/hearthstone-parses)
 
+* **NEW! WordPress Plugin**: Готовый плагин-шорткод для интеграции интерактивных графиков прямо в ваши страницы WordPress (`wp-plugins/hs-parses-graphs-wp`).
+
 ---
 
 ## Быстрый старт
@@ -404,8 +406,12 @@ https://api.hs-manacost.ru
 * **ID источников:**
   * `hsguru_meta_standard_legend` — Standard, Легенда
   * `hsguru_meta_standard_diamond_4to1` — Standard, Алмаз 4-1
+  * `hsguru_meta_standard_top_5k` — Standard, Top 5k (`format=2`, `rank=top_5k`)
+  * `hsguru_meta_standard_top_legend` — Standard, Top Legend (`format=2`, `rank=top_legend`)
   * `hsguru_meta_wild_legend` — Wild, Легенда
   * `hsguru_meta_wild_diamond_4to1` — Wild, Алмаз 4-1
+  * `hsguru_meta_wild_top_legend` — Wild, Top Legend (`format=1`, `min_games=100`, `rank=top_legend`)
+  * `hsguru_meta_wild_top_5k` — Wild, Top 5k (`format=1`, `min_games=100`, `rank=top_5k`)
 * **Описание:** Возвращает силу архетипов, их процент побед, популярность, среднее количество ходов и скорость подъема.
 
 #### Формат ответа в таблицах:

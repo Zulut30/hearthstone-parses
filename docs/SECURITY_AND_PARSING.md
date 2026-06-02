@@ -102,11 +102,11 @@ flowchart TB
 
 При провале статус → `quality_error`, опционально Telegram-алерт.
 
-### 2.5. Источники данных (29)
+### 2.5. Источники данных (33)
 
 | ID (пример) | Сайт | Категория | Backend |
 |-------------|------|-----------|---------|
-| `hsguru_*` (7) | HSGuru | meta / matchups / streamer | FlareSolverr |
+| `hsguru_*` (11) | HSGuru | meta / matchups / streamer | FlareSolverr |
 | `hsreplay_arena*` (4) | HSReplay | arena | hsreplay_api |
 | `hsreplay_cards_*` (2) | HSReplay | ranked Gold 14d | hsreplay_cards_browser + `card_list` API |
 | `hsreplay_battlegrounds_*` (3) | HSReplay | comps / trinkets | jina / browser |
@@ -402,4 +402,4 @@ venv/bin/python -m app.cli refresh --source <SOURCE_ID>
 - Оператор сервера отвечает за: хранение `/etc/hs-data-api.env`, ротацию ключей, соблюдение ToS сайтов-источников.
 - Разработчик репозитория: Issues/PR на GitHub `Zulut30/hearthstone-parses`.
 
-**Версия документа:** 2026-06-01 (соответствует ветке `main`, 29 источников, без `hsreplay_battlegrounds_heroes`).
+**Версия документа:** 2026-06-02 (ветка `main`, 33 источника, без `hsreplay_battlegrounds_heroes`).
