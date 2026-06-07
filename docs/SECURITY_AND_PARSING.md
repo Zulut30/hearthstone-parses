@@ -162,10 +162,14 @@ flowchart TB
 
 | Endpoint | Auth | Описание |
 |----------|------|----------|
-| `GET /health` | Нет | Сводка состояний источников |
+| `GET /health` | Нет | Лёгкий liveness без внутренних деталей |
 | `GET /sources`, `/sources/{id}` | Нет | Метаданные + status |
 | `GET /datasets`, `/datasets/{id}` | Нет | **Полный кэш JSON** |
 | `GET /demo/*`, `/ui` | Нет | Демо-интерфейс |
+| `GET /system/technologies` | Нет | Публичная redacted техническая информация |
+| `GET /ops/health` | `X-API-Key` | Подробное здоровье источников, stale/cache state |
+| `GET /health/premium` | `X-API-Key` | Premium auth health; `live=true` делает live-probe |
+| `GET /ops/summary`, `/ops/events`, `/ops/trace/{id}`, `/ops/run/{id}` | `X-API-Key` | Операционные логи и timeline refresh |
 | `POST /admin/refresh` | `X-API-Key` | Запуск парсинга |
 | `PUT /admin/datasets/{id}` | `X-API-Key` | Ручная загрузка JSON |
 
@@ -294,8 +298,16 @@ venv/bin/python -m app.cli proxy-rotation-check
 ### 5.2. Команды мониторинга
 
 ```bash
-# Сводка API
+# Public liveness
 curl -s http://127.0.0.1:8000/health | jq .
+
+# Подробная диагностика источников
+source /etc/hs-data-api.env
+curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/health | jq .
+
+# Premium auth local/live checks
+curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/health/premium | jq .
+curl -s -H "X-API-Key: ${HS_API_KEY}" "http://127.0.0.1:8000/health/premium?live=true" | jq .
 
 # Строгий аудит кэша
 ./scripts/audit.sh

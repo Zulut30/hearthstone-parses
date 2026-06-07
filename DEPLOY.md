@@ -2,7 +2,10 @@
 
 Репозиторий: **https://github.com/Zulut30/hearthstone-parses**
 
-Перед продакшеном: **[docs/SECURITY_AND_PARSING.md](docs/SECURITY_AND_PARSING.md)** — секреты, API, прокси, парсинг, чеклист.
+Перед продакшеном:
+
+- **[docs/API.md](docs/API.md)** — публичные/admin endpoints, source IDs, JSON-схемы.
+- **[docs/SECURITY_AND_PARSING.md](docs/SECURITY_AND_PARSING.md)** — секреты, API, прокси, парсинг, чеклист.
 
 ## Быстрая установка с нуля
 
@@ -50,7 +53,11 @@ sudo systemctl restart hs-data-api
 ```bash
 ./scripts/audit.sh
 curl -s http://127.0.0.1:8000/health | jq .
+source /etc/hs-data-api.env
+curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/health | jq .
 ```
+
+`/health` — лёгкий публичный liveness. Подробная диагностика источников, stale/cache state и filesystem path теперь находится в admin-only `/ops/health`.
 
 Скрипт `audit.sh` повторно прогоняет `validate_parsed_data` по кэшу и показывает источники с расхождением статуса и качества данных.
 
@@ -72,11 +79,40 @@ curl -s http://127.0.0.1:8000/health | jq .
 
 ## Обновление кода без потери кэша
 
+**С этого workspace (rsync):**
+
+```bash
+sudo ./scripts/deploy-local.sh
+```
+
+**Или через git:**
+
 ```bash
 cd /opt/hs-data-api
 git pull
 ./venv/bin/pip install -r requirements.txt
-sudo systemctl restart hs-data-api
-# при смене парсера — точечный refresh:
+sudo ./scripts/merge-env-example.sh /etc/hs-data-api.env
+sudo cp systemd/*.timer systemd/*.service /etc/systemd/system/  # или sed как в install.sh
+sudo systemctl daemon-reload
+sudo systemctl enable hs-flaresolverr.service hs-data-api-refresh.timer hs-data-api-refresh-protected.timer
+sudo systemctl restart hs-data-api hs-flaresolverr
+./scripts/audit.sh
+```
+
+После деплоя проверьте новые поля ops:
+
+```bash
+source /etc/hs-data-api.env 2>/dev/null || true
+curl -s http://127.0.0.1:8000/health | jq .
+curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/health | jq '{ok, sources, states, stale_count, cached_count}'
+curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/health/premium | jq .
+curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/summary | jq '.freshness'
+```
+
+Preflight strict для cron включают постепенно: сначала `HS_REFRESH_PREFLIGHT_STRICT=false`, после 2 успешных `refresh --all` → `true`.
+
+Точечный refresh:
+
+```bash
 ./venv/bin/python -m app.cli refresh --source hsreplay_cards_legend_included_popularity
 ```
