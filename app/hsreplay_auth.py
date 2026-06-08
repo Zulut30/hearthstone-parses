@@ -163,6 +163,9 @@ async def force_relogin_hsreplay() -> bool:
         ctx_kw["proxy"] = px
     context = await pool._browser.new_context(**ctx_kw)
     page = await context.new_page()
+    from .scrapers.playwright_stealth_apply import apply_playwright_stealth
+
+    await apply_playwright_stealth(page)
     try:
         return await ensure_hsreplay_login(page, context)
     except Exception as exc:

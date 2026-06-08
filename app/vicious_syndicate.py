@@ -10,7 +10,14 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
-from .scrapers.proxy import httpx_client_kwargs
+from .scrapers.http_resilience import (
+    DEFAULT_BACKOFF_SECONDS,
+    backoff_delay_seconds,
+    build_fetch_headers,
+    is_session_blocked,
+    log_http_error,
+)
+from .scrapers.proxy import burn_proxy_session, httpx_client_kwargs
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -42,6 +49,15 @@ CLASS_SLUGS = {
     "Warlock": "warlock-decks",
     "Warrior": "warrior-decks",
 }
+
+
+def looks_like_vicious_deck_library(html: str) -> bool:
+    lowered = html[:120_000].lower()
+    return (
+        "vicioussyndicate.com" in lowered
+        and "deck-library" in lowered
+        and ("mh-content" in lowered or "class=\"entry-content" in lowered or "/decks/" in lowered)
+    )
 
 
 def parse_radar_js(html: str) -> dict[str, Any]:
@@ -107,44 +123,96 @@ def normalize_radar_url(path: str) -> str:
     return path
 
 
+def find_radar_url(html: str, *, base_url: str) -> str | None:
+    soup = BeautifulSoup(html, "lxml")
+    embedded = soup.find(["object", "embed", "iframe"])
+    if embedded:
+        path = embedded.get("data") or embedded.get("src")
+        if path:
+            return normalize_radar_url(path)
+
+    candidates: list[str] = []
+    for tag in soup.find_all(["a", "script", "iframe", "object", "embed"], href=True):
+        candidates.append(str(tag.get("href") or ""))
+    for tag in soup.find_all(["script", "iframe", "object", "embed"], src=True):
+        candidates.append(str(tag.get("src") or ""))
+    for tag in soup.find_all(["object", "embed"], data=True):
+        candidates.append(str(tag.get("data") or ""))
+
+    for candidate in candidates:
+        lowered = candidate.lower()
+        if "radar" in lowered or lowered.endswith("index.html"):
+            return normalize_radar_url(candidate)
+
+    match = re.search(r'["\']([^"\']*(?:radar|index\.html)[^"\']*)["\']', html, re.I)
+    if match:
+        return normalize_radar_url(match.group(1))
+
+    logger.info("No radar URL discovered on %s", base_url)
+    return None
+
+
 async def fetch_with_retry(
-    client: httpx.AsyncClient,
+    _client: httpx.AsyncClient,
     url: str,
     semaphore: asyncio.Semaphore,
     max_retries: int = 5,
+    *,
+    source_id: str = "vicious_syndicate_radars",
 ) -> httpx.Response | None:
     """
-    Robust HTTP GET with a concurrency semaphore, exponential backoff, retry jitter,
-    and a tiny sleep gap to avoid disconnects.
+    FIX: jitter + exponential backoff (5/15/45s) + session burn + [ERROR] logs.
     """
-    headers = {
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    }
-    
+    headers = build_fetch_headers(
+        url,
+        accept="text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        extra={
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+    )
     async with semaphore:
-        for attempt in range(max_retries):
-            # Small randomized sleep gap between entering the semaphore
+        for attempt in range(1, max_retries + 1):
             await asyncio.sleep(random.uniform(0.2, 0.5))
             try:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 200:
+                # Recreate the client per attempt so a burned sticky proxy session
+                # is reflected on the very next retry.
+                client_kwargs = httpx_client_kwargs(source_id, page_url=url)
+                async with httpx.AsyncClient(**client_kwargs) as attempt_client:
+                    resp = await attempt_client.get(url, headers=headers)
+                blocked = is_session_blocked(resp.status_code, resp.text)
+                if resp.status_code == 200 and (not blocked or looks_like_vicious_deck_library(resp.text)):
                     return resp
-                if resp.status_code == 429:
-                    wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
-                    logger.warning(f"Rate limited (429) fetching {url}. Retrying in {wait_time:.2f}s... (attempt {attempt+1}/{max_retries})")
-                    await asyncio.sleep(wait_time)
+                if blocked:
+                    burn_proxy_session(source_id, page_url=url, reason="vicious_syndicate_blocked")
+                log_http_error(
+                    url=url,
+                    status_code=resp.status_code,
+                    proxy_ip=None,
+                    body=resp.text,
+                    source_id=source_id,
+                )
+                if attempt < max_retries:
+                    await asyncio.sleep(
+                        backoff_delay_seconds(attempt, schedule=DEFAULT_BACKOFF_SECONDS)
+                    )
                     continue
-                
-                logger.warning(f"Received non-200 status code {resp.status_code} for {url} (attempt {attempt+1}/{max_retries})")
-                wait_time = (2 ** attempt) + random.uniform(0.5, 1.5)
-                await asyncio.sleep(wait_time)
-            except Exception as e:
-                wait_time = (2 ** attempt) + random.uniform(1.0, 3.0)
-                logger.warning(f"Error fetching {url}: {e}. Retrying in {wait_time:.2f}s... (attempt {attempt+1}/{max_retries})")
-                await asyncio.sleep(wait_time)
+            except Exception as exc:
+                log_http_error(
+                    url=url,
+                    status_code=None,
+                    proxy_ip=None,
+                    body=None,
+                    error=str(exc),
+                    source_id=source_id,
+                )
+                if attempt < max_retries:
+                    await asyncio.sleep(
+                        backoff_delay_seconds(attempt, schedule=DEFAULT_BACKOFF_SECONDS)
+                    )
+                    continue
 
-        logger.error(f"Failed to fetch {url} after {max_retries} attempts.")
+        logger.error("Failed to fetch %s after %d attempts.", url, max_retries)
         return None
 
 
@@ -204,12 +272,7 @@ async def discover_class_radars(
         soup = BeautifulSoup(resp.text, "lxml")
 
         # 1. Main Class Radar URL
-        main_obj = soup.find(["object", "embed", "iframe"])
-        main_radar_url = None
-        if main_obj:
-            path = main_obj.get("data") or main_obj.get("src")
-            if path:
-                main_radar_url = normalize_radar_url(path)
+        main_radar_url = find_radar_url(resp.text, base_url=index_url)
 
         if main_radar_url:
             discovered.append({
@@ -262,11 +325,7 @@ async def resolve_archetype_details(
             
             # Resolve radar URL if missing
             if not item["radar_url"]:
-                obj = soup.find(["object", "embed", "iframe"])
-                if obj:
-                    path = obj.get("data") or obj.get("src")
-                    if path:
-                        item["radar_url"] = normalize_radar_url(path)
+                item["radar_url"] = find_radar_url(resp.text, base_url=item["source_page"])
 
             # Discover nested deck page links (e.g., https://www.vicioussyndicate.com/decks/...)
             deck_pages = []
@@ -294,6 +353,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
         all_items = []
         for res_list in discovery_results:
             all_items.extend(res_list)
+        discovery_count = len(all_items)
 
         # Step 2: Resolve archetype details (including inner deck links & radar URLs)
         resolve_tasks = [resolve_archetype_details(client, item, semaphore) for item in all_items]
@@ -301,6 +361,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
         
         # Keep items that have resolved radar URLs
         active_items = [r for r in resolved_results if r is not None and r.get("radar_url")]
+        resolved_count = sum(1 for r in resolved_results if r is not None)
 
         # Step 3: Fetch deck codes in parallel for items that have deck pages
         async def fetch_code_for_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -341,6 +402,28 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
         parse_results = await asyncio.gather(*parse_tasks)
 
     radars = [r for r in parse_results if r is not None]
+    diagnostics = {
+        "classes_attempted": len(CLASSES),
+        "discovered_items": discovery_count,
+        "resolved_items": resolved_count,
+        "active_radar_urls": len(active_items),
+        "parsed_radars": len(radars),
+    }
+    try:
+        from .refresh_log import log_action
+
+        log_action(
+            "api.route.ok" if radars else "api.route.fail",
+            source_id=source.id,
+            level="info" if radars else "warn",
+            detail=(
+                "Vicious radar discovery "
+                f"discovered={discovery_count} active={len(active_items)} parsed={len(radars)}"
+            ),
+            extra={"diagnostics": diagnostics},
+        )
+    except Exception:
+        logger.debug("Failed to log Vicious diagnostics", exc_info=True)
 
     issue = "Unknown"
     for r in radars:
@@ -368,4 +451,5 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
         "classes_summary": list(classes_summary.values()),
         "radars": radars,
         "total_radars": len(radars),
+        "diagnostics": diagnostics,
     }

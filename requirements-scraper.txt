@@ -1,2 +1,4 @@
 -r requirements.txt
 camoufox[geoip]>=0.4,<0.5
+cloakbrowser>=0.3.31,<0.4
+scrapling[fetchers]>=0.4.8,<0.5

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hearthstone Parses — Ops Logs</title>
+  <link rel="stylesheet" href="/ui/assets/style.css?v=ops-logs-v4" />
+</head>
+<body class="ops-body">
+  <header class="header">
+    <h1>Панель логов парсера</h1>
+    <p class="sub">
+      Пошаговые действия (action), trace_id на каждый источник, уровни info/warn/error.
+      <a href="/ui">← Демо данных</a> · <a href="/docs">API</a>
+    </p>
+    <div id="ops-stats" class="stats"></div>
+  </header>
+
+  <main class="ops-layout">
+    <section class="ops-panel">
+      <h2>Состояние источников</h2>
+      <div class="ops-filters">
+        <label>
+          Показать
+          <select id="filter-state">
+            <option value="">все</option>
+            <option value="problem">только проблемные</option>
+            <option value="ok">только ok</option>
+          </select>
+        </label>
+        <label>
+          Период
+          <select id="filter-hours">
+            <option value="6">6 ч</option>
+            <option value="24" selected>24 ч</option>
+            <option value="72">72 ч</option>
+          </select>
+        </label>
+        <label>
+          API key
+          <input type="password" id="filter-api-key" placeholder="HS_API_KEY" autocomplete="off" />
+        </label>
+        <button type="button" id="btn-refresh" class="ops-btn">Обновить</button>
+        <label class="ops-auto">
+          <input type="checkbox" id="auto-refresh" checked /> авто 30с
+        </label>
+      </div>
+      <div class="ops-table-wrap">
+        <table class="ops-table" id="vuln-table">
+          <thead>
+            <tr>
+              <th>Источник</th>
+              <th>Статус</th>
+              <th>Backend</th>
+              <th>Ошибок</th>
+              <th>Trace</th>
+              <th>Деталь</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="ops-panel">
+      <h2>Сводка</h2>
+      <h3 class="ops-subhead">По уровню</h3>
+      <div id="level-summary" class="ops-chips"></div>
+      <h3 class="ops-subhead">По группе действий</h3>
+      <div id="group-summary" class="ops-chips"></div>
+      <h3 class="ops-subhead">Топ ошибочных action</h3>
+      <div id="action-errors" class="ops-chips"></div>
+      <h3 class="ops-subhead">Сбои backend</h3>
+      <div id="backend-summary" class="ops-chips"></div>
+      <h3 class="ops-subhead">Трафик последнего refresh</h3>
+      <div id="traffic-summary" class="ops-chips"></div>
+      <h3 class="ops-subhead">Weak sources</h3>
+      <div id="weak-sources" class="weak-source-list"></div>
+    </section>
+
+    <section class="ops-panel ops-panel-wide">
+      <h2>Лента действий</h2>
+      <div class="ops-filters">
+        <label>
+          Источник
+          <select id="filter-source"><option value="">все</option></select>
+        </label>
+        <label>
+          Группа
+          <select id="filter-group"><option value="">все</option></select>
+        </label>
+        <label>
+          Уровень
+          <select id="filter-level">
+            <option value="">все</option>
+            <option value="error">error</option>
+            <option value="warn">warn</option>
+            <option value="info">info</option>
+          </select>
+        </label>
+        <label>
+          Лимит
+          <input type="number" id="filter-limit" value="200" min="20" max="1000" />
+        </label>
+      </div>
+      <div class="ops-table-wrap ops-log-stream">
+        <table class="ops-table ops-events-table" id="events-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Время</th>
+              <th>Ур.</th>
+              <th>Action</th>
+              <th>Источник</th>
+              <th>Backend</th>
+              <th>мс</th>
+              <th>Деталь</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="ops-panel ops-panel-wide" id="trace-panel">
+      <h2>
+        Trace timeline
+        <span id="trace-title" class="muted"></span>
+        <button type="button" id="trace-close" class="ops-btn ops-btn-small">Закрыть</button>
+      </h2>
+      <div class="ops-table-wrap ops-log-stream">
+        <table class="ops-table" id="trace-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Время</th>
+              <th>Ур.</th>
+              <th>Action</th>
+              <th>Backend</th>
+              <th>HTTP</th>
+              <th>мс</th>
+              <th>Деталь</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/ui/assets/logs.js?v=ops-logs-v4"></script>
+</body>
+</html>

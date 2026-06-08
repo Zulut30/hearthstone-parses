@@ -9,5 +9,12 @@ services:
       TZ: UTC
     ports:
       - "127.0.0.1:8191:8191"
-    shm_size: "1gb"
-    mem_limit: 1500m
+    shm_size: "2gb"
+    mem_limit: 2048m
+    healthcheck:
+      # Robust JSON check for FlareSolverr /v1 sessions.list.
+      test: ["CMD-SHELL", "python3 -c \"import json,urllib.request; req=urllib.request.Request('http://127.0.0.1:8191/v1', data=b'{\\\"cmd\\\":\\\"sessions.list\\\"}', headers={'Content-Type':'application/json'}); body=json.load(urllib.request.urlopen(req, timeout=5)); raise SystemExit(0 if body.get('status') == 'ok' else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

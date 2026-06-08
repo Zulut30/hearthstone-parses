@@ -3,7 +3,7 @@ Contributors: Hearthstone Parses Team
 Tags: hearthstone, vicious syndicate, hsguru, graphs, radar, scatter plot, shortcode, interactive, canvas
 Requires at least: 6.0
 Tested up to: 6.5
-Stable tag: 1.1.0
+Stable tag: 1.1.10
 License: MIT
 License URI: https://opensource.org/licenses/MIT
 
@@ -37,6 +37,7 @@ This plugin adds a helpful guide page under **Tools** (Инструменты ->
 *   `rank` (string) - Starting rank. Defaults to `diamond_4to1`. Valid options: `top_legend`, `top_5k`, `legend`, `diamond_4to1`.
 *   `show_selector` (string) - Show buttons to toggle rank. Defaults to `yes`. Valid options: `yes`, `no`.
 *   `api_url` (string) - The Hearthstone Parses API URL. Defaults to `https://api.hs-manacost.ru`.
+*   `archetypes_api_url` (string) - Public Deckview API used for Russian archetype names. Defaults to `https://api.blizzcore.ru`.
 *   `width` (integer) - Width of the canvas. Defaults to `850`.
 *   `height` (integer) - Height of the canvas. Defaults to `500`.
 
@@ -49,6 +50,7 @@ This plugin adds a helpful guide page under **Tools** (Инструменты ->
 *   `rank` (string) - Starting rank. Defaults to `legend`. Valid options: `top_legend`, `top_5k`, `legend`, `diamond_4to1`.
 *   `show_selector` (string) - Show buttons to toggle rank. Defaults to `yes`. Valid options: `yes`, `no`.
 *   `api_url` (string) - The Hearthstone Parses API URL. Defaults to `https://api.hs-manacost.ru`.
+*   `archetypes_api_url` (string) - Public Deckview API used for Russian archetype names. Defaults to `https://api.blizzcore.ru`.
 
 *Example:*
 `[hs_meta_scatter_wild rank="legend"]`
@@ -59,6 +61,7 @@ This plugin adds a helpful guide page under **Tools** (Инструменты ->
 *   `class` (string) - Pre-select or lock to a specific class (e.g., `Druid`, `Hunter`, `Mage`, `Paladin`, `Priest`, `Rogue`, `Shaman`, `Warlock`, `Warrior`, `DeathKnight`, `DemonHunter`).
 *   `lock_class` (string) - Hide class tabs and lock to the specified class. Defaults to `no`. Valid options: `yes`, `no`.
 *   `api_url` (string) - The Hearthstone Parses API URL. Defaults to `https://api.hs-manacost.ru`.
+*   `archetypes_api_url` (string) - Public Deckview API used for Russian archetype names. Defaults to `https://api.blizzcore.ru`.
 *   `width` (integer) - Maximum width of the canvas. Defaults to `750`.
 *   `height` (integer) - Maximum height of the canvas. Defaults to `750`.
 
@@ -72,6 +75,45 @@ Fully tested and optimized for perfect layout compatibility with:
 *   **Newspaper** theme (beautifully scales inside sidebar columns or page builders).
 
 == Changelog ==
+
+= 1.1.10 =
+* Bumped the browser card-translation cache namespace after fuzzy matching changes.
+
+= 1.1.9 =
+* Added fuzzy card matching for truncated Vicious Syndicate names.
+* Improved duplicate HearthstoneJSON card selection to avoid enchantment/token records.
+
+= 1.1.8 =
+* Tuned the Vicious Syndicate radar width and canvas aspect ratio for wide pages.
+
+= 1.1.7 =
+* Fixed Vicious Syndicate radar overflow inside narrow article columns.
+* Added hs-tooltip-compatible card hover targets to the radar table and details panel.
+
+= 1.1.6 =
+* Added Escape handling for fullscreen fallback mode.
+
+= 1.1.5 =
+* Switched scoped card translation requests to POST to avoid query-string cache issues.
+
+= 1.1.4 =
+* Reduced Vicious Syndicate card translation payloads to the cards used by the selected radar.
+
+= 1.1.3 =
+* Added fullscreen controls for scatter and Vicious Syndicate radar charts.
+* Fixed scatter rank switching by removing stale canvas replacement.
+* Added cached Russian archetype names through the Deckview public API.
+* Added cached Russian card names for Vicious Syndicate radars through HearthstoneJSON.
+* Improved HiDPI canvas rendering, label density, and radar layout.
+
+= 1.1.2 =
+* Fixed blank canvas rendering after listener reset for radar and scatter charts.
+* Bumped asset version to force browser cache refresh.
+
+= 1.1.1 =
+* Fixed Vicious Syndicate radar loading for the current Hearthstone Parses API response shape.
+* Improved scatter chart parsing and empty-data handling.
+* Hardened shortcode attribute validation and legacy source rank detection.
 
 = 1.1.0 =
 * Added format-specific shortcodes for Standard and Wild meta distributions.

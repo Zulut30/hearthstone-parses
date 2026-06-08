@@ -6,7 +6,6 @@ from typing import Any
 from urllib.parse import parse_qs
 
 from .cards_index import card_from_id, card_label, cards_by_dbfid, resolve_card_name
-from .hsreplay_extract import _merge_cards
 from .sources import Source
 
 logger = logging.getLogger(__name__)
@@ -72,8 +71,20 @@ def _normalize_card_row(row: dict[str, Any], *, sort_mode: str, locale: str = "r
         or row.get("winrate")
         or row.get("win_rate")
     )
-    copies = row.get("avgCopies") or row.get("avg_copies") or row.get("averageCopiesInDeck")
+    copies = (
+        row.get("included_count")
+        or row.get("includedCount")
+        or row.get("avgCopies")
+        or row.get("avg_copies")
+        or row.get("averageCopiesInDeck")
+    )
     played = row.get("timesPlayed") or row.get("times_played") or row.get("numGames")
+    winrate_when_played = row.get("winrate_when_played") or row.get("winrateWhenPlayed")
+    winrate_when_drawn = row.get("winrate_when_drawn") or row.get("winrateWhenDrawn")
+    keep_percentage = row.get("keep_percentage") or row.get("keepPercentage")
+    opening_hand_winrate = row.get("opening_hand_winrate") or row.get("openingHandWinrate")
+    avg_turns_in_hand = row.get("avg_turns_in_hand") or row.get("avgTurnsInHand")
+    avg_turn_played_on = row.get("avg_turn_played_on") or row.get("avgTurnPlayedOn")
 
     if sort_mode == "winrate":
         entry["deck_winrate"] = _fmt_pct(wr) or _fmt_pct(pop)
@@ -87,6 +98,18 @@ def _normalize_card_row(row: dict[str, Any], *, sort_mode: str, locale: str = "r
         entry["avg_copies"] = copies
     if played is not None:
         entry["times_played"] = played
+    if winrate_when_played is not None:
+        entry["winrate_when_played"] = _fmt_pct(winrate_when_played)
+    if winrate_when_drawn is not None:
+        entry["winrate_when_drawn"] = _fmt_pct(winrate_when_drawn)
+    if keep_percentage is not None:
+        entry["keep_percentage"] = _fmt_pct(keep_percentage)
+    if opening_hand_winrate is not None:
+        entry["opening_hand_winrate"] = _fmt_pct(opening_hand_winrate)
+    if avg_turns_in_hand is not None:
+        entry["avg_turns_in_hand"] = avg_turns_in_hand
+    if avg_turn_played_on is not None:
+        entry["avg_turn_played_on"] = avg_turn_played_on
     return entry
 
 
@@ -183,9 +206,10 @@ def _flatten_api_rows(body: Any) -> list[dict[str, Any]]:
 def _analytics_card_list_url(source: Source) -> str:
     rank = (_query_param(source, "rankRange") or "GOLD").upper()
     time_range = _query_param(source, "timeRange") or "LAST_14_DAYS"
+    game_type = (_query_param(source, "gameType") or "RANKED_STANDARD").upper()
     return (
         "https://hsreplay.net/analytics/query/card_list/"
-        f"?GameType=RANKED_STANDARD&TimeRange={time_range}&LeagueRankRange={rank}"
+        f"?GameType={game_type}&TimeRange={time_range}&LeagueRankRange={rank}"
     )
 
 
@@ -215,6 +239,24 @@ def parse_cards_from_api_payloads(
             seen.add(int(dbf))
             cards.append(entry)
     return cards
+
+
+def _api_payload_diagnostics(payloads: list[tuple[str, Any]]) -> dict[str, Any]:
+    row_counts: list[dict[str, Any]] = []
+    for url, body in payloads:
+        rows = _flatten_api_rows(body)
+        row_counts.append(
+            {
+                "url": url[:180],
+                "rows": len(rows),
+                "body_type": type(body).__name__,
+            }
+        )
+    return {
+        "api_payloads": len(payloads),
+        "api_payload_rows_total": sum(item["rows"] for item in row_counts),
+        "api_payload_row_counts": row_counts[:12],
+    }
 
 
 def parse_card_stats_from_lines(lines: list[str], *, sort_mode: str) -> list[dict[str, Any]]:
@@ -288,50 +330,68 @@ def _has_metric(card: dict[str, Any]) -> bool:
 
 
 async def fetch_hsreplay_ranked_cards(source: Source, *, locale: str = "ruRU") -> dict[str, Any]:
-    """Load HSReplay Gold cards (14d) via patchright; merge API + DOM stats."""
-    from .parser import parse_html
-    from .scrapers.browser_pool import PatchrightPool
+    """Load HSReplay Gold cards (14d) via analytics JSON."""
+    from .hsreplay_client import fetch_hsreplay_json
 
     sort_mode = _sort_mode(source)
-    pool = await PatchrightPool.get()
-    result = await pool.fetch(source)
-    parsed = parse_html(source, result.html, result.snapshot)
-    extracted = parsed.get("hsreplay_extracted") or {}
-
-    payloads = list(result.api_payloads)
-    api_cards = parse_cards_from_api_payloads(payloads, sort_mode=sort_mode, locale=locale)
-    dom_cards = list(extracted.get("cards") or [])
-    cards = _merge_cards(api_cards, dom_cards)
-
-    if len(cards) < 30 or sum(1 for c in cards if _has_metric(c)) < 20:
-        lines = (result.snapshot or {}).get("lines") or parsed.get("text_preview") or []
-        line_cards = parse_card_stats_from_lines(lines, sort_mode=sort_mode)
-        cards = _merge_cards(cards, line_cards)
-
-    for card in cards:
-        if sort_mode == "winrate" and not card.get("deck_winrate") and card.get("deck_popularity"):
-            card["deck_winrate"] = card.pop("deck_popularity")
-        elif sort_mode == "popularity" and not card.get("deck_popularity") and card.get("deck_winrate"):
-            card["deck_popularity"] = card.pop("deck_winrate")
-
+    api_url = _analytics_card_list_url(source)
+    api_payload = await fetch_hsreplay_json(
+        api_url,
+        source_id=source.id,
+        cache_key=(
+            f"cards:{(_query_param(source, 'gameType') or 'RANKED_STANDARD').upper()}:"
+            f"{(_query_param(source, 'rankRange') or 'GOLD').upper()}:"
+            f"{_query_param(source, 'timeRange') or 'LAST_14_DAYS'}"
+        ),
+    )
+    cards = parse_cards_from_api_payloads(
+        [(api_url, api_payload)], sort_mode=sort_mode, locale=locale
+    )
     metrics = sum(1 for c in cards if _has_metric(c))
-    blocked = bool(extracted.get("blocked")) and metrics < 10
-    if len(cards) >= 30 and metrics >= 20:
-        blocked = False
+    diagnostics = {
+        **_api_payload_diagnostics([(api_url, api_payload)]),
+        "api_cards": len(cards),
+        "dom_cards": 0,
+        "line_cards": 0,
+        "merged_cards": len(cards),
+        "cards_with_metrics": metrics,
+        "line_count": 0,
+        "blocked_marker": False,
+        "final_url": api_url,
+        "http_status": 200,
+    }
+    if len(cards) < 30 or metrics < 20:
+        from .refresh_log import log_action
+
+        log_action(
+            "api.validate.fail",
+            source_id=source.id,
+            level="warn",
+            detail=(
+                f"HSReplay cards API sparse: cards={len(cards)} metrics={metrics} "
+                f"api_payloads={diagnostics['api_payloads']}"
+            ),
+            extra={"diagnostics": diagnostics},
+        )
+        raise RuntimeError(
+            f"HSReplay cards API sparse: cards={len(cards)} metrics={metrics}"
+        )
 
     return {
         "type": "card_stats",
         "cards": cards,
-        "blocked": blocked,
+        "blocked": False,
         "sort_mode": sort_mode,
+        "game_type": _query_param(source, "gameType") or "RANKED_STANDARD",
         "rank_range": _query_param(source, "rankRange"),
         "time_range": _query_param(source, "timeRange"),
         "source": {
             "key": "hsreplay",
             "url": source.url,
-            "backend": "hsreplay_cards_browser",
-            "api_calls": len(result.api_payloads),
+            "backend": "hsreplay_cards_api",
+            "api_calls": 1,
             "cards_with_metrics": metrics,
+            "diagnostics": diagnostics,
         },
     }
 

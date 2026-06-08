@@ -1,11 +1,10 @@
 [Unit]
-Description=Refresh Hearthstone data cache once per day
+Description=Daily Hearthstone data refresh
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=24h
-RandomizedDelaySec=15min
+OnCalendar=*-*-* 04:30:00
 Persistent=true
+RandomizedDelaySec=900
 
 [Install]
 WantedBy=timers.target

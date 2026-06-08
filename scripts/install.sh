@@ -34,12 +34,13 @@ else
 fi
 
 cd "$INSTALL_DIR"
+chmod +x scripts/*.sh 2>/dev/null || true
 python3 -m venv venv
 ./venv/bin/pip install -U pip
 ./venv/bin/pip install -r requirements.txt
 ./venv/bin/patchright install chromium
 
-mkdir -p "$DATA_DIR/datasets" "$DATA_DIR/statuses"
+mkdir -p "$DATA_DIR/datasets" "$DATA_DIR/statuses" "$DATA_DIR/logs"
 chown -R "${SUDO_USER:-root}:${SUDO_USER:-root}" "$DATA_DIR" 2>/dev/null || true
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -47,20 +48,35 @@ if [[ ! -f "$ENV_FILE" ]]; then
   chmod 600 "$ENV_FILE"
   echo "Created $ENV_FILE — edit proxy URL, API key, optional HSReplay/Telegram."
 else
-  echo "Keeping existing $ENV_FILE"
+  ./scripts/merge-env-example.sh "$ENV_FILE"
 fi
 
 if command -v docker >/dev/null 2>&1 && [[ -f docker-compose.yml ]]; then
-  docker compose up -d 2>/dev/null || true
+  docker compose up -d flaresolverr 2>/dev/null || true
 fi
 
 if [[ "$USE_SYSTEMD" -eq 1 ]]; then
-  sed "s|/opt/hs-data-api|$INSTALL_DIR|g" systemd/hs-data-api.service > /etc/systemd/system/hs-data-api.service
-  sed "s|/opt/hs-data-api|$INSTALL_DIR|g" systemd/hs-data-api-refresh.service > /etc/systemd/system/hs-data-api-refresh.service
-  cp systemd/hs-data-api-refresh.timer /etc/systemd/system/
+  install_unit() {
+    local unit="$1"
+    if [[ -f "systemd/$unit" ]]; then
+      sed "s|/opt/hs-data-api|$INSTALL_DIR|g" "systemd/$unit" > "/etc/systemd/system/$unit"
+    fi
+  }
+  for unit in \
+    hs-data-api.service \
+    hs-data-api-refresh.service \
+    hs-data-api-refresh.timer \
+    hs-data-api-refresh-protected.service \
+    hs-data-api-refresh-protected.timer \
+    hs-flaresolverr.service \
+    hs-scrape-proxy.service; do
+    install_unit "$unit"
+  done
   systemctl daemon-reload
-  systemctl enable hs-data-api.service hs-data-api-refresh.timer
-  echo "Enabled systemd: hs-data-api, hs-data-api-refresh.timer"
+  systemctl enable hs-data-api.service hs-data-api-refresh.timer hs-data-api-refresh-protected.timer
+  systemctl enable hs-flaresolverr.service 2>/dev/null || true
+  systemctl start hs-flaresolverr.service 2>/dev/null || true
+  echo "Enabled systemd: hs-data-api, refresh timers, hs-flaresolverr"
 fi
 
 echo ""
@@ -72,5 +88,6 @@ echo ""
 echo "Next steps:"
 echo "  1. Edit $ENV_FILE (HS_FETCH_PROXY_URL, HS_API_KEY)"
 echo "  2. $INSTALL_DIR/venv/bin/python -m app.cli proxy-check"
-echo "  3. $INSTALL_DIR/venv/bin/python -m app.cli refresh --all"
-echo "  4. systemctl start hs-data-api   # if systemd enabled"
+echo "  3. $INSTALL_DIR/venv/bin/python -m app.cli preflight"
+echo "  4. $INSTALL_DIR/venv/bin/python -m app.cli refresh --all"
+echo "  5. systemctl start hs-data-api"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -9,6 +10,7 @@ from typing import Any
 import httpx
 
 from .config import data_dir
+from .refresh_log import log_action
 
 HSJSON_URL_EN = "https://api.hearthstonejson.com/v1/latest/enUS/cards.json"
 HSJSON_URL_RU = "https://api.hearthstonejson.com/v1/latest/ruRU/cards.json"
@@ -118,6 +120,18 @@ def resolve_card_name(name: str) -> dict[str, Any]:
     if not card:
         card = cards_by_name("ruRU").get(clean.lower())
     return card_label(card)
+
+
+def prefetch_hearthstonejson() -> None:
+    """Load enUS + ruRU card indexes into memory before parallel API refresh."""
+    _load_raw_cards("enUS")
+    _load_raw_cards("ruRU")
+    cards_by_id()
+    log_action("refresh.prefetch.cards", extra={"locales": ["enUS", "ruRU"]})
+
+
+async def prefetch_hearthstonejson_async() -> None:
+    await asyncio.to_thread(prefetch_hearthstonejson)
 
 
 def card_label(card: dict[str, Any] | None) -> dict[str, Any]:

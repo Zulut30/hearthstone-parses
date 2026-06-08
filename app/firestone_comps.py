@@ -4,16 +4,84 @@ import asyncio
 import gzip
 import json
 import logging
+import random
 import re
 from typing import Any
 
 import httpx
 
 from .cards_index import card_from_id
+from .refresh_log import log_action
 from .scrapers.proxy import httpx_client_kwargs
 from .sources import Source
 
 logger = logging.getLogger(__name__)
+
+FIRESTONE_STATIC_HOST = "static.zerotoheroes.com"
+
+
+def _firestone_http_kwargs() -> dict:
+    """Firestone CDN is stable; fetch directly without residential proxy."""
+    from .config import request_timeout_seconds
+
+    return {
+        "timeout": request_timeout_seconds(),
+        "follow_redirects": True,
+        "limits": httpx.Limits(max_connections=4, max_keepalive_connections=0),
+    }
+
+
+async def _get_static_json(
+    url: str,
+    *,
+    headers: dict[str, str],
+    retries: int = 3,
+    source_id: str | None = None,
+) -> httpx.Response:
+    import time
+
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        started = time.monotonic()
+        log_action(
+            "firestone.static.try",
+            source_id=source_id,
+            url=url,
+            attempt=attempt,
+            extra={"direct": True},
+        )
+        try:
+            async with httpx.AsyncClient(**_firestone_http_kwargs()) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                log_action(
+                    "firestone.static.ok",
+                    source_id=source_id,
+                    url=url,
+                    attempt=attempt,
+                    http_status=response.status_code,
+                    bytes_out=len(response.content),
+                    duration_ms=(time.monotonic() - started) * 1000,
+                )
+                return response
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Firestone static fetch %s attempt %d failed: %s", url, attempt, exc)
+            log_action(
+                "firestone.static.fail",
+                source_id=source_id,
+                url=url,
+                attempt=attempt,
+                error_type=type(exc).__name__,
+                detail=str(exc)[:1000],
+                duration_ms=(time.monotonic() - started) * 1000,
+                level="error",
+            )
+            if attempt < retries:
+                await asyncio.sleep(random.uniform(2.5, 6.0) * attempt)  # FIX: jitter
+    assert last_exc is not None
+    raise last_exc
+
 
 FIRESTONE_STRATEGIES_URL = "https://static.zerotoheroes.com/hearthstone/data/battlegrounds-strategies/bgs-comps-strategies.gz.json"
 FIRESTONE_STATS_URL = "https://static.zerotoheroes.com/api/bgs/comp-stats/past-three/overview-from-hourly.gz.json?v=2"
@@ -106,26 +174,22 @@ async def fetch_firestone_comps(source: Source) -> dict[str, Any]:
         "user-agent": "KolodaHS BattlegroundsCrawler/1.0 (+https://kolodahs.ru)",
     }
     
-    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
-        resp_strategies, resp_stats = await asyncio.gather(
-            client.get(FIRESTONE_STRATEGIES_URL, headers=headers),
-            client.get(FIRESTONE_STATS_URL, headers=headers),
-        )
-        
-        resp_strategies.raise_for_status()
-        resp_stats.raise_for_status()
-        
-        content_strategies = resp_strategies.content
-        if content_strategies.startswith(b'\x1f\x8b'):
-            content_strategies = gzip.decompress(content_strategies)
-            
-        content_stats = resp_stats.content
-        if content_stats.startswith(b'\x1f\x8b'):
-            content_stats = gzip.decompress(content_stats)
-            
-        strategies_data = json.loads(content_strategies)
-        stats_data = json.loads(content_stats)
-        
+    resp_strategies, resp_stats = await asyncio.gather(
+        _get_static_json(FIRESTONE_STRATEGIES_URL, headers=headers, source_id=source.id),
+        _get_static_json(FIRESTONE_STATS_URL, headers=headers, source_id=source.id),
+    )
+
+    content_strategies = resp_strategies.content
+    if content_strategies.startswith(b"\x1f\x8b"):
+        content_strategies = gzip.decompress(content_strategies)
+
+    content_stats = resp_stats.content
+    if content_stats.startswith(b"\x1f\x8b"):
+        content_stats = gzip.decompress(content_stats)
+
+    strategies_data = json.loads(content_strategies)
+    stats_data = json.loads(content_stats)
+
     # Index stats by archetype (compId) for fast lookup
     comp_stats_list = stats_data.get("compStats") or []
     stats_by_archetype = {s.get("archetype"): s for s in comp_stats_list if s.get("archetype")}
@@ -218,16 +282,13 @@ async def fetch_firestone_cards(source: Source) -> dict[str, Any]:
     
     is_spell = "type=spell" in source.url or source.id.endswith("_spells")
     
-    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
-        resp = await client.get(FIRESTONE_CARDS_URL, headers=headers)
-        resp.raise_for_status()
-        
-        content = resp.content
-        if content.startswith(b'\x1f\x8b'):
-            content = gzip.decompress(content)
-            
-        data = json.loads(content)
-        
+    resp = await _get_static_json(FIRESTONE_CARDS_URL, headers=headers, source_id=source.id)
+    content = resp.content
+    if content.startswith(b"\x1f\x8b"):
+        content = gzip.decompress(content)
+
+    data = json.loads(content)
+
     card_stats_list = data.get("cardStats") or []
     
     # We will group cards by Tavern Tier (1 to 7)
@@ -323,35 +384,26 @@ async def fetch_firestone_arena(source: Source) -> dict[str, Any]:
         "accept-encoding": "gzip",
         "user-agent": "KolodaHS ArenaCrawler/1.0 (+https://kolodahs.ru)",
     }
-    
-    async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
-        resps = await asyncio.gather(
-            client.get(card_stats_url, headers=headers),
-            client.get(draft_stats_url, headers=headers),
-            return_exceptions=True,
+
+    resp_cards = await _get_static_json(
+        card_stats_url, headers=headers, source_id=source.id
+    )
+    content_cards = resp_cards.content
+    if content_cards.startswith(b"\x1f\x8b"):
+        content_cards = gzip.decompress(content_cards)
+    cards_data = json.loads(content_cards.decode("utf-8"))
+
+    draft_data: dict[str, Any] = {}
+    try:
+        resp_draft = await _get_static_json(
+            draft_stats_url, headers=headers, source_id=source.id
         )
-        
-        resp_cards = resps[0]
-        resp_draft = resps[1]
-        
-        if isinstance(resp_cards, Exception):
-            raise resp_cards
-        resp_cards.raise_for_status()
-        
-        content_cards = resp_cards.content
-        if content_cards.startswith(b'\x1f\x8b'):
-            content_cards = gzip.decompress(content_cards)
-        cards_data = json.loads(content_cards.decode('utf-8'))
-        
-        draft_data = {}
-        if not isinstance(resp_draft, Exception) and resp_draft.status_code == 200:
-            try:
-                content_draft = resp_draft.content
-                if content_draft.startswith(b'\x1f\x8b'):
-                    content_draft = gzip.decompress(content_draft)
-                draft_data = json.loads(content_draft.decode('utf-8'))
-            except Exception as e:
-                logger.warning("Failed to parse draft stats: %s", e)
+        content_draft = resp_draft.content
+        if content_draft.startswith(b"\x1f\x8b"):
+            content_draft = gzip.decompress(content_draft)
+        draft_data = json.loads(content_draft.decode("utf-8"))
+    except Exception as e:
+        logger.warning("Failed to parse draft stats: %s", e)
                 
     draft_stats_list = draft_data.get("stats") or []
     draft_by_card = {d.get("cardId"): d for d in draft_stats_list if d.get("cardId")}

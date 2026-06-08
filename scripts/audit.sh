@@ -16,19 +16,29 @@ echo "=== HS Data API audit ==="
 echo "Data dir: $HS_API_DATA_DIR"
 echo
 
+echo "=== Unit tests ==="
+if "$VENV" -m unittest discover -s tests -p 'test_*.py' -q 2>/dev/null; then
+  echo "tests: OK"
+else
+  echo "tests: FAILED or skipped (install dependencies in venv)"
+fi
+echo
+
 "$VENV" -m app.cli proxy-check 2>/dev/null || echo "(proxy-check skipped)"
+"$VENV" -m app.cli preflight 2>/dev/null || echo "(preflight skipped)"
 
 echo
 "$VENV" <<'PY'
 from app.cli import load_env_file
 load_env_file()
-import json
+
 from pathlib import Path
-from app.sources import SOURCES, SOURCE_BY_ID
+
+from app.config import data_dir
+from app.sources import SOURCES
 from app.storage import load_dataset, load_status
 from app.scrapers.quality import validate_parsed_data
 
-data_dir = Path(__import__("app.config").config.data_dir())
 ok_n = fail_n = missing_n = 0
 rows = []
 
@@ -44,22 +54,20 @@ for source in SOURCES:
     state = st.get("state", "?")
     backend = st.get("backend") or data.get("_backend") or "-"
     flag = "OK" if valid and state == "ok" else "WARN"
-    if not valid:
+    if not valid or state != "ok":
         fail_n += 1
-    elif state == "ok":
-        ok_n += 1
     else:
-        fail_n += 1
+        ok_n += 1
     rows.append((source.id, flag, state, f"{backend} | {reason if not valid else 'ok'}"))
 
+print(f"Data dir: {Path(data_dir())}")
 print(f"Sources in config: {len(SOURCES)}")
 print(f"Strict quality OK: {ok_n} | Issues: {fail_n} | Missing cache: {missing_n}")
 print()
 for sid, flag, state, detail in rows:
     if flag != "OK":
-        print(f"  [{flag}] {sid}: status={state} — {detail}")
+        print(f"  [{flag}] {sid}: status={state} - {detail}")
 
-# API health if running
 try:
     import httpx
     r = httpx.get("http://127.0.0.1:8000/health", timeout=3.0)

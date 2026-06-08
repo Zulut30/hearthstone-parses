@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+from urllib.parse import parse_qs
+
+from bs4 import BeautifulSoup
+
+from .hsreplay_client import fetch_hsreplay_json, fetch_text_via_flaresolverr
+from .sources import Source
+
+HSREPLAY_ANALYTICS_BASE = "https://hsreplay.net/analytics/query"
+ARCHETYPE_DICT_URL = "https://hsreplay.net/api/v1/archetypes/?hl=ru"
+
+CLASS_RU_NAMES = {
+    "DEATHKNIGHT": "Рыцарь смерти",
+    "DEMONHUNTER": "Охотник на демонов",
+    "DRUID": "Друид",
+    "HUNTER": "Охотник",
+    "MAGE": "Маг",
+    "PALADIN": "Паладин",
+    "PRIEST": "Жрец",
+    "ROGUE": "Разбойник",
+    "SHAMAN": "Шаман",
+    "WARLOCK": "Чернокнижник",
+    "WARRIOR": "Воин",
+}
+
+
+def _query_param(source: Source, key: str) -> str | None:
+    params = parse_qs(source.fragment or "", keep_blank_values=True)
+    values = params.get(key)
+    return values[0] if values else None
+
+
+def _fmt_pct(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    return f"{float(value):.2f}%"
+
+
+def _num(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _meta_archetypes_url(source: Source) -> str:
+    rank = (_query_param(source, "rankRange") or "LEGEND").upper()
+    region = (_query_param(source, "region") or "REGION_EU").upper()
+    time_range = (_query_param(source, "timeFrame") or _query_param(source, "timeRange") or "LAST_1_DAY").upper()
+    game_type = (_query_param(source, "gameType") or "RANKED_STANDARD").upper()
+    return (
+        f"{HSREPLAY_ANALYTICS_BASE}/archetype_popularity_distribution_stats_v2/"
+        f"?GameType={game_type}&LeagueRankRange={rank}&Region={region}&TimeRange={time_range}"
+    )
+
+
+def _json_from_pre_wrapped_text(text: str) -> Any:
+    soup = BeautifulSoup(text, "html.parser")
+    pre = soup.find("pre")
+    raw = pre.get_text() if pre else text
+    return json.loads(raw)
+
+
+async def _archetype_name_map(source_id: str) -> dict[int, dict[str, Any]]:
+    text = await fetch_text_via_flaresolverr(ARCHETYPE_DICT_URL, source_id=source_id)
+    raw = _json_from_pre_wrapped_text(text)
+    if not isinstance(raw, list):
+        return {}
+    out: dict[int, dict[str, Any]] = {}
+    for item in raw:
+        if not isinstance(item, dict) or item.get("id") is None:
+            continue
+        out[int(item["id"])] = item
+    return out
+
+
+def _fallback_archetype_name(archetype_id: int, class_key: str) -> str:
+    if archetype_id < 0:
+        return f"Другое ({CLASS_RU_NAMES.get(class_key, class_key.title())})"
+    return f"Архетип #{archetype_id}"
+
+
+def normalize_meta_archetypes(
+    payload: dict[str, Any],
+    archetype_names: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    data = ((payload.get("series") or {}).get("data") or {})
+    if not isinstance(data, dict):
+        return []
+
+    classes: list[dict[str, Any]] = []
+    for class_key in sorted(data):
+        rows = data.get(class_key) or []
+        if not isinstance(rows, list):
+            continue
+        archetypes: list[dict[str, Any]] = []
+        class_games = 0
+        for row in rows:
+            if not isinstance(row, dict) or row.get("archetype_id") is None:
+                continue
+            archetype_id = int(row["archetype_id"])
+            archetype_meta = archetype_names.get(archetype_id) or {}
+            games = int(row.get("total_games") or 0)
+            class_games += games
+            archetypes.append(
+                {
+                    "archetype_id": archetype_id,
+                    "archetype": archetype_meta.get("name")
+                    or _fallback_archetype_name(archetype_id, class_key),
+                    "url": archetype_meta.get("url") or None,
+                    "winrate": _fmt_pct(row.get("win_rate")),
+                    "popularity": _fmt_pct(row.get("pct_of_total")),
+                    "class_popularity": _fmt_pct(row.get("pct_of_class")),
+                    "games": games,
+                    "raw_winrate": _num(row.get("win_rate")),
+                    "raw_popularity": _num(row.get("pct_of_total")),
+                }
+            )
+        archetypes.sort(key=lambda item: (item["games"], item["raw_popularity"]), reverse=True)
+        if archetypes:
+            classes.append(
+                {
+                    "class": class_key,
+                    "class_name": CLASS_RU_NAMES.get(class_key, class_key.title()),
+                    "games": class_games,
+                    "archetypes": archetypes,
+                }
+            )
+    classes.sort(key=lambda item: item["games"], reverse=True)
+    return classes
+
+
+async def fetch_hsreplay_meta_archetypes(source: Source) -> dict[str, Any]:
+    api_url = _meta_archetypes_url(source)
+    payload = await fetch_hsreplay_json(
+        api_url,
+        source_id=source.id,
+        cache_key=f"meta-archetypes:{source.fragment or source.id}",
+    )
+    archetype_names = await _archetype_name_map(source.id)
+    classes = normalize_meta_archetypes(payload, archetype_names)
+    total_archetypes = sum(len(item.get("archetypes") or []) for item in classes)
+    return {
+        "type": "hsreplay_meta_archetypes",
+        "classes": classes,
+        "total_classes": len(classes),
+        "total_archetypes": total_archetypes,
+        "filters": {
+            "game_type": _query_param(source, "gameType") or "RANKED_STANDARD",
+            "rank_range": _query_param(source, "rankRange") or "LEGEND",
+            "region": _query_param(source, "region") or "REGION_EU",
+            "time_range": _query_param(source, "timeFrame") or "LAST_1_DAY",
+        },
+        "as_of": payload.get("as_of"),
+        "source": {
+            "key": "hsreplay",
+            "url": source.url,
+            "api_url": api_url,
+            "backend": "hsreplay_meta_api",
+            "classes": len(classes),
+            "archetypes": total_archetypes,
+        },
+    }

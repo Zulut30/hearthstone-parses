@@ -40,11 +40,32 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     refresh = sub.add_parser("refresh")
     refresh.add_argument("--all", action="store_true", help="Refresh every configured source.")
     refresh.add_argument("--source", action="append", default=[], help="Refresh one source id.")
+    refresh.add_argument(
+        "--tier",
+        choices=[
+            "light_api",
+            "medium_api",
+            "browser_patchright",
+            "browser_protected",
+        ],
+        help="Refresh only sources in this tier (for split cron).",
+    )
+    refresh.add_argument(
+        "--lab-backends",
+        action="store_true",
+        help="Use HS_FETCH_BACKENDS_LAB (includes cloakbrowser) for this run only.",
+    )
     sub.add_parser("proxy-check", help="Verify HS_FETCH_PROXY_URL egress IP.")
     sub.add_parser(
         "proxy-rotation-check",
         help="Sample egress IPs (rotation test; set HS_IPROYAL_ROTATE_PER_FETCH=true for max spread).",
     )
+    pf = sub.add_parser("preflight", help="Run refresh preflight checks (proxy, FlareSolverr, HSReplay probe).")
+    pf.add_argument("--strict", action="store_true", help="Exit 1 if any required check fails.")
+    canary = sub.add_parser("canary", help="Run parser canary checks for proxy, auth and key API endpoints.")
+    canary.add_argument("--strict", action="store_true", help="Exit 1 if any canary check fails.")
+    hsguru_recon = sub.add_parser("hsguru-recon", help="Inspect a HSGuru page for embedded JSON/API candidates.")
+    hsguru_recon.add_argument("--url", default="https://www.hsguru.com/meta?format=2&min_games=100&rank=legend")
     login = sub.add_parser("hsreplay-login", help="Log into HSReplay Premium and save browser session.")
     imp = sub.add_parser(
         "hsreplay-import-storage",
@@ -76,6 +97,48 @@ def main(argv: list[str] | None = None) -> int:
         info = asyncio.run(check_proxy_rotation(8))
         print(json.dumps(info, ensure_ascii=False, indent=2))
         return 0 if info.get("rotating") or info.get("unique_ips", 0) >= 1 else 1
+    if args.command == "preflight":
+        from .preflight import run_refresh_preflight
+
+        async def _pf() -> dict:
+            return (
+                await run_refresh_preflight(needs_proxy=True, needs_flaresolverr=True)
+            ).to_dict()
+
+        result = asyncio.run(_pf())
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if args.strict and not result.get("ok"):
+            return 1
+        return 0
+    if args.command == "canary":
+        from .canary import run_canary
+
+        result = asyncio.run(run_canary(strict=bool(args.strict)))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if args.strict and not result.get("ok"):
+            return 1
+        return 0
+    if args.command == "hsguru-recon":
+        import httpx
+
+        from .hsguru_api import discover_hsguru_api_candidates
+        from .scrapers.http_resilience import build_fetch_headers
+        from .scrapers.proxy import httpx_client_kwargs
+
+        async def _recon() -> dict:
+            async with httpx.AsyncClient(
+                headers=build_fetch_headers(args.url),
+                **httpx_client_kwargs("hsguru_recon", page_url=args.url, timeout=45.0),
+            ) as client:
+                response = await client.get(args.url)
+                payload = discover_hsguru_api_candidates(response.text, page_url=args.url)
+                payload["http_status"] = response.status_code
+                payload["bytes"] = len(response.content)
+                return payload
+
+        result = asyncio.run(_recon())
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
     if args.command == "hsreplay-login":
         from .config import hsreplay_storage_path
         from .hsreplay_auth import ensure_hsreplay_login
@@ -113,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
             print("ERROR: TELEGRAM_BOT_TOKEN is not configured in /etc/hs-data-api.env", file=sys.stderr)
             return 1
 
-        print(f"Connecting to Telegram Bot with token: {token}")
+        redacted = f"{token[:6]}...{token[-4:]}" if len(token) > 12 else "***"
+        print(f"Connecting to Telegram Bot with token: {redacted}")
         print("Please send a message (e.g. /start) to your bot in Telegram now.")
         print("Waiting for updates...")
 
@@ -242,14 +306,21 @@ def main(argv: list[str] | None = None) -> int:
             print(sid, json.dumps(summary, ensure_ascii=False))
         return 0
     if args.command == "refresh":
-        if not args.all and not args.source:
-            print("Use --all or --source SOURCE_ID", file=sys.stderr)
+        if not args.all and not args.source and not args.tier:
+            print("Use --all, --tier TIER, or --source SOURCE_ID", file=sys.stderr)
             return 2
+        if getattr(args, "lab_backends", False):
+            from .config import fetch_backends_lab
+
+            os.environ["HS_FETCH_BACKENDS"] = ",".join(fetch_backends_lab())
         missing = [source_id for source_id in args.source if source_id not in SOURCE_BY_ID]
         if missing:
             print(f"Unknown source ids: {', '.join(missing)}", file=sys.stderr)
             return 2
-        results = asyncio.run(refresh_sources(None if args.all else args.source))
+        source_ids = None if args.all else (args.source or None)
+        results = asyncio.run(
+            refresh_sources(source_ids, tier=args.tier)
+        )
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0
     return 2

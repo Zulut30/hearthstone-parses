@@ -8,7 +8,7 @@ from hearthstone.enums import CardClass
 
 from .cards_index import card_from_id, card_label, cards_by_id
 from .deck_decode import decode_deck_code
-from .hsreplay_client import fetch_hsreplay_json
+from .hsreplay_client import extract_json_payload, fetch_hsreplay_json, fetch_text_via_curl_cffi
 from .storage import load_dataset
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,13 @@ def _pct(value: float | int | None) -> str | None:
     if value is None:
         return None
     return f"{float(value):.2f}%"
+
+
+def _first_present(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return None
 
 
 def _class_name(class_id: int | None) -> str | None:
@@ -202,8 +209,29 @@ def normalize_arena_card_row(row: dict[str, Any], *, locale: str = "ruRU") -> di
         "offer_rate": row.get("offer_rate"),
         "offer_bin": row.get("offer_bin"),
         "popularity": row.get("popularity"),
+        "in_runs": _pct(_first_present(row, "popularity", "in_runs", "in_runs_pct", "run_popularity")),
         "avg_copies": row.get("avg_copies_in_deck"),
         "times_played": row.get("num_games"),
+        "winrate_when_drawn": _pct(
+            _first_present(
+                row,
+                "winrate_when_drawn",
+                "winrateWhenDrawn",
+                "drawn_winrate",
+                "drawn_win_rate",
+                "drawn_wr",
+            )
+        ),
+        "winrate_when_played": _pct(
+            _first_present(
+                row,
+                "winrate_when_played",
+                "winrateWhenPlayed",
+                "played_winrate",
+                "played_win_rate",
+                "played_wr",
+            )
+        ),
         "score": row.get("score"),
     }
 
@@ -244,6 +272,13 @@ async def _fetch_arena_cards_payload(source_id: str) -> tuple[dict[str, Any], st
     last_error: Exception | None = None
     for url in ARENA_CARDS_API_URLS:
         try:
+            if url == ARENA_CARD_STATS_API_URL:
+                body = await fetch_text_via_curl_cffi(url, source_id=source_id)
+                payload = extract_json_payload(body)
+                if isinstance(payload, list):
+                    payload = {"data": payload}
+                if isinstance(payload, dict) and _parse_arena_cards_payload(payload):
+                    return payload, url
             payload = await fetch_hsreplay_json(url, source_id=source_id)
             if _parse_arena_cards_payload(payload):
                 return payload, url
@@ -290,23 +325,30 @@ async def fetch_arena_card_tiers(
     locale: str = "ruRU",
     primary_class: str = "ALL",
 ) -> dict[str, Any]:
-    payload, api_url = await _fetch_arena_cards_payload(source_id)
-    by_class = _parse_arena_cards_payload(payload, locale=locale)
-    cards = by_class.get(primary_class) or by_class.get("ALL") or next(iter(by_class.values()), [])
-
-    return {
-        "type": "arena_card_tiers",
-        "cards": cards,
-        "by_class": {key: len(rows) for key, rows in by_class.items()},
-        "total_cards": len(cards),
-        "primary_class": primary_class,
-        "source": {
-            "key": "hsreplay",
-            "url": ARENA_CARDS_PAGE_URL,
-            "api_url": api_url,
-            "backend": "hsreplay_api",
-        },
-    }
+    try:
+        payload, api_url = await _fetch_arena_cards_payload(source_id)
+        by_class = _parse_arena_cards_payload(payload, locale=locale)
+        cards = by_class.get(primary_class) or by_class.get("ALL") or next(iter(by_class.values()), [])
+        if not cards:
+            raise RuntimeError("arena card stats payload empty")
+        return {
+            "type": "arena_card_tiers",
+            "cards": cards,
+            "by_class": {key: len(rows) for key, rows in by_class.items()},
+            "total_cards": len(cards),
+            "primary_class": primary_class,
+            "source": {
+                "key": "hsreplay",
+                "url": ARENA_CARDS_PAGE_URL,
+                "api_url": api_url,
+                "backend": "hsreplay_api",
+            },
+        }
+    except Exception as exc:
+        logger.warning("HSReplay arena card tiers API failed for %s: %s", source_id, exc)
+        raise RuntimeError(
+            "HSReplay Arena advanced API unavailable; preserving previous complete Arenasmith dataset"
+        ) from exc
 
 
 def _deck_identity_key(deck: dict[str, Any]) -> str:

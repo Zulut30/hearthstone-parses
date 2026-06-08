@@ -5,9 +5,64 @@ import re
 from typing import Any
 
 from .cards_index import card_from_id, card_label, cards_by_dbfid, cards_by_id
-from .hsreplay_client import fetch_hsreplay_markdown, jina_url
+from .hsreplay_client import fetch_hsreplay_html, fetch_hsreplay_markdown, jina_url
+
+# --- simple on-disk cache for comp *detail* pages (to dampen 403/451/504 noise) ---
+import time
+
+from .config import bg_comp_detail_cache_ttl_hours, data_dir
+
+
+def _bg_comp_detail_cache_dir() -> Path:
+    d = data_dir() / "cache" / "bg_comp_details"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _bg_comp_detail_cache_path(url: str) -> Path | None:
+    # urls like https://hsreplay.net/battlegrounds/comps/73/dragons-spells/
+    m = re.search(r"/comps/(\d+)/", url)
+    if not m:
+        return None
+    comp_id = m.group(1)
+    return _bg_comp_detail_cache_dir() / f"{comp_id}.md"
+
+
+def _read_bg_comp_detail_cache(url: str) -> str | None:
+    p = _bg_comp_detail_cache_path(url)
+    if not p or not p.exists():
+        return None
+    ttl = bg_comp_detail_cache_ttl_hours() * 3600
+    if time.time() - p.stat().st_mtime > ttl:
+        return None
+    try:
+        txt = p.read_text(encoding="utf-8", errors="replace")
+        return txt if len(txt) > 200 else None
+    except Exception:
+        return None
+
+
+def _write_bg_comp_detail_cache(url: str, markdown: str) -> None:
+    p = _bg_comp_detail_cache_path(url)
+    if not p:
+        return
+    try:
+        p.write_text(markdown, encoding="utf-8")
+    except Exception:
+        pass  # best effort cache
 
 HSREPLAY_COMPS_URL = "https://hsreplay.net/battlegrounds/comps/"
+HSREPLAY_ORIGIN = "https://hsreplay.net"
+
+
+def _abs_hsreplay_url(url: str) -> str:
+    if not url:
+        return url
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("/"):
+        return f"{HSREPLAY_ORIGIN}{url}"
+    return f"{HSREPLAY_ORIGIN}/{url.lstrip('/')}"
 
 COMP_MD_HEADER_RE = re.compile(
     r"^\[(.*)\]\(https://hsreplay\.net/battlegrounds/comps/(\d+)/([^)]+)\)\s*$",
@@ -180,11 +235,78 @@ def _dedupe_additional(
     return out
 
 
+def _comps_from_html(html: str) -> list[dict[str, Any]]:
+    from bs4 import BeautifulSoup
+
+    from .hsreplay_extract import extract_bg_comps, extract_bg_comps_from_links
+
+    soup = BeautifulSoup(html, "html.parser")
+    raw = extract_bg_comps(soup)
+    if len(raw) < 3:
+        links = [
+            {"text": a.get_text(), "href": a.get("href", "")}
+            for a in soup.find_all("a", href=True)
+        ]
+        raw = extract_bg_comps_from_links(links)
+    comps: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        comp_id = int(item.get("comp_id") or 0)
+        slug = str(item.get("slug") or "")
+        comps.append(
+            {
+                "id": f"hsreplay-{comp_id}",
+                "comp_id": comp_id,
+                "source": "hsreplay",
+                "source_id": str(comp_id),
+                "slug": slug,
+                "name": item.get("name") or _title_from_slug(slug),
+                "title": item.get("name") or _title_from_slug(slug),
+                "description": item.get("description") or "",
+                "main_cards": [],
+                "additional_cards": [],
+                "minions": item.get("minions") or [],
+                "url": _abs_hsreplay_url(
+                    item.get("url")
+                    or f"/battlegrounds/comps/{comp_id}/{slug}/"
+                ),
+                "_fetch_detail": index < 24,
+                "_detail_url": _abs_hsreplay_url(
+                    item.get("url")
+                    or f"/battlegrounds/comps/{comp_id}/{slug}/"
+                ),
+            }
+        )
+    return comps
+
+
 async def parse_hsreplay_comp_detail(url: str, *, source_id: str) -> dict[str, Any]:
+    # Try cache first (reduces load and transient 4xx on detail pages)
+    cached = _read_bg_comp_detail_cache(url)
+    if cached:
+        try:
+            all_images = parse_hearthstonejson_images(cached)
+            all_minions = parse_hsreplay_minion_cards(cached)
+            main_cards: list[dict[str, Any]] = []
+            seen_main: set[str] = set()
+            for card in all_images:
+                cid = str(card.get("card_id") or card.get("id") or "")
+                if not cid or cid in seen_main:
+                    continue
+                seen_main.add(cid)
+                main_cards.append(card)
+                if len(main_cards) >= 6:
+                    break
+            additional_cards = _dedupe_additional(main_cards, all_minions)
+            return {"main_cards": main_cards, "additional_cards": additional_cards, "_from_cache": True}
+        except Exception:
+            pass  # fall through to live fetch
+
     last_error: Exception | None = None
+    markdown_used = ""
     for attempt in range(3):
         try:
-            markdown = await fetch_hsreplay_markdown(url, source_id=source_id)
+            markdown, _backend = await fetch_hsreplay_markdown(url, source_id=source_id)
+            markdown_used = markdown
             all_images = parse_hearthstonejson_images(markdown)
             all_minions = parse_hsreplay_minion_cards(markdown)
             main_cards: list[dict[str, Any]] = []
@@ -198,6 +320,8 @@ async def parse_hsreplay_comp_detail(url: str, *, source_id: str) -> dict[str, A
                 if len(main_cards) >= 6:
                     break
             additional_cards = _dedupe_additional(main_cards, all_minions)
+            # populate cache on success
+            _write_bg_comp_detail_cache(url, markdown)
             return {"main_cards": main_cards, "additional_cards": additional_cards}
         except Exception as exc:
             last_error = exc
@@ -205,6 +329,7 @@ async def parse_hsreplay_comp_detail(url: str, *, source_id: str) -> dict[str, A
         import logging
 
         logging.getLogger(__name__).warning("Comp detail fetch failed for %s: %s", url, last_error)
+    # even on final failure, if we had a markdown from a previous attempt in the loop (unlikely), cache it? no.
     return {}
 
 
@@ -236,9 +361,9 @@ def parse_hsreplay_markdown(markdown: str, *, detail_limit: int = 12) -> list[di
                 "main_cards": main_cards,
                 "additional_cards": additional_cards,
                 "minions": [c.get("name") for c in additional_cards if c.get("name")],
-                "url": header["url"],
+                "url": _abs_hsreplay_url(header["url"]),
                 "_fetch_detail": i < detail_limit,
-                "_detail_url": header["url"],
+                "_detail_url": _abs_hsreplay_url(header["url"]),
             }
         )
 
@@ -253,7 +378,7 @@ async def _enrich_comp_cards(
 ) -> dict[str, Any]:
     if comp.get("main_cards") or comp.get("additional_cards"):
         return comp
-    url = comp.get("url") or comp.get("_detail_url")
+    url = _abs_hsreplay_url(comp.get("url") or comp.get("_detail_url") or "")
     if not url:
         return comp
     async with sem:
@@ -273,8 +398,23 @@ async def fetch_battlegrounds_comps(
     source_id: str = "hsreplay_battlegrounds_comps",
     detail_limit: int = 32,
 ) -> dict[str, Any]:
-    markdown = await fetch_hsreplay_markdown(HSREPLAY_COMPS_URL, source_id=source_id)
-    comps = parse_hsreplay_markdown(markdown, detail_limit=detail_limit)
+    backend = "hsreplay_flaresolverr"
+    markdown = ""
+    errors: list[str] = []
+    comps: list[dict[str, Any]] = []
+    try:
+        markdown, backend = await fetch_hsreplay_markdown(
+            HSREPLAY_COMPS_URL, source_id=source_id
+        )
+        comps = parse_hsreplay_markdown(markdown, detail_limit=detail_limit)
+    except Exception as exc:
+        errors.append(f"markdown: {type(exc).__name__}: {str(exc)[:180]}")
+    if len(comps) < 3:
+        try:
+            html, backend = await fetch_hsreplay_html(HSREPLAY_COMPS_URL, source_id=source_id)
+            comps = _comps_from_html(html)
+        except Exception as exc:
+            errors.append(f"html: {type(exc).__name__}: {str(exc)[:180]}")
     if not comps:
         headers = _find_comp_headers(markdown)
         comps = [
@@ -294,6 +434,20 @@ async def fetch_battlegrounds_comps(
             }
             for h in headers[:detail_limit]
         ]
+    if not comps:
+        return {
+            "type": "bg_comps",
+            "comps": [],
+            "blocked": True,
+            "source": {
+                "key": "hsreplay",
+                "url": HSREPLAY_COMPS_URL,
+                "backend": backend,
+                "comps_with_cards": 0,
+                "comps_total": 0,
+                "errors": errors,
+            },
+        }
 
     sem = asyncio.Semaphore(4)
     enriched = await asyncio.gather(
@@ -310,8 +464,9 @@ async def fetch_battlegrounds_comps(
         "source": {
             "key": "hsreplay",
             "url": HSREPLAY_COMPS_URL,
-            "backend": "hsreplay_jina_markdown",
+            "backend": backend,
             "comps_with_cards": with_cards,
             "comps_total": len(comps),
+            "errors": errors,
         },
     }

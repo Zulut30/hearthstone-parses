@@ -800,5 +800,25 @@ def extract_for_source(
                 if m2:
                     total = m2.group(1).replace(",", "")
                     break
+        from .hsreplay_arena_api import winrate_to_tier
+
+        for card in cards:
+            if card.get("tier"):
+                continue
+            win_rate = card.get("win_rate")
+            if win_rate is None:
+                for key in ("deck_winrate", "played_winrate", "pick_rate", "mulligan_winrate"):
+                    raw = card.get(key)
+                    if not raw:
+                        continue
+                    text = str(raw).replace("%", "").strip()
+                    try:
+                        win_rate = float(text)
+                        break
+                    except ValueError:
+                        continue
+            tier = winrate_to_tier(win_rate if isinstance(win_rate, (int, float)) else None)
+            if tier:
+                card["tier"] = tier
         return {"type": "arena_card_tiers", "cards": cards, "total_cards": total}
     return {}

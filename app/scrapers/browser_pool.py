@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 from typing import ClassVar
 
-from ..config import hsreplay_storage_path
 from ..sources import Source
 from .base import FetchResult
+from .fingerprint_profile import browser_context_kwargs
 from .navigation import navigate_page
+from .playwright_stealth_apply import apply_playwright_stealth
 from .proxy import playwright_proxy
 
 
@@ -54,34 +55,14 @@ class PatchrightPool:
     async def fetch(self, source: Source) -> FetchResult:
         if self._browser is None:
             raise RuntimeError("PatchrightPool is not started")
-        proxy = playwright_proxy(source.id)
-        
-        import hashlib
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
-        ]
-        ua_idx = int(hashlib.md5(source.id.encode("utf-8")).hexdigest(), 16) % len(user_agents)
-        selected_ua = user_agents[ua_idx]
-
-        context_kwargs: dict = {
-            "user_agent": selected_ua,
-            "locale": "en-US",
-            "timezone_id": "America/New_York",
-            "viewport": {"width": 1440, "height": 900},
-        }
+        proxy = playwright_proxy(source.id, page_url=source.url)
+        context_kwargs = await browser_context_kwargs(source)
         if proxy:
             context_kwargs["proxy"] = proxy
-        storage = hsreplay_storage_path()
-        if source.site == "hsreplay" and storage.exists():
-            context_kwargs["storage_state"] = str(storage)
         context = await self._browser.new_context(**context_kwargs)
         page = await context.new_page()
+        await apply_playwright_stealth(page)
         try:
-            return await navigate_page(page, source)
+            return await navigate_page(page, source, backend="patchright")
         finally:
             await context.close()

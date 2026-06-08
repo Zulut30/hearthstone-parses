@@ -19,6 +19,11 @@ const LABELS = {
   hsreplay_decks_trending: "Трендовые колоды",
   hsreplay_cards_legend_included_winrate: "Карты · winrate",
   hsreplay_cards_legend_included_popularity: "Карты · popularity",
+  hsreplay_cards_legend_1d: "Карты · Legend · 1 день",
+  hsreplay_cards_wild_legend_1d: "Карты Wild · Legend · 1 день",
+  hsreplay_meta_archetypes_legend_eu_1d: "HSReplay · Архетипы Legend EU 1 день",
+  hsreplay_battlegrounds_minions: "BG · существа",
+  hsreplay_battlegrounds_compositions: "BG · составы",
   firestone_battlegrounds_cards: "Firestone · BG существа по тавернам",
   firestone_battlegrounds_spells: "Firestone · BG заклинания по тавернам",
   firestone_battlegrounds_comps: "Firestone · BG компы",
@@ -30,6 +35,7 @@ const LABELS = {
   metastats_decks: "MetaStats · Архетипы и колоды",
   metastats_matchups: "MetaStats · Матрица матчапов",
   hearthstone_decks: "HS-Decks · Топ легенды (Std/Wild)",
+  vicious_syndicate_live_beta: "vS · Data Reaper Live",
   vicious_syndicate_radars: "vS · Радар карт (Связи)",
   hsreplay_battlegrounds_comps: "BG · компы",
   hsreplay_battlegrounds_trinkets_lesser: "BG · малые тринкеты",
@@ -123,10 +129,13 @@ async function loadOverview() {
       btn.className = "source-btn";
       btn.dataset.id = s.source_id;
       const label = LABELS[s.source_id] || s.source_id;
+      const cachedBadge = s.status?.serving_cached_dataset
+        ? `<span class="badge err" title="Live refresh failed; serving last good dataset">cached</span>`
+        : "";
       btn.innerHTML = `
       <span class="id">${label}</span>
       <span class="meta">${s.category}</span>
-      <span class="badge ${s.state === "ok" ? "ok" : "err"}">${s.state}</span>
+      <span class="badge ${s.state === "ok" ? "ok" : "err"}">${s.status?.effective_state || s.state}</span>${cachedBadge}
     `;
       btn.onclick = () => selectSource(s.source_id, btn);
       list.appendChild(btn);
@@ -192,14 +201,32 @@ function renderCardStatsTable(cards) {
   return renderTableFromObjects(
     cards.map((c) => ({
       Карта: c.name,
-      Мана: c.mana ?? c.cost ?? "",
-      "Deck WR": c.deck_winrate || c.deck_popularity || "",
-      "Avg copies": c.avg_copies || "",
-      "Times played": c.times_played || "",
-      "Pick rate": c.pick_rate || "",
-      "id / dbfId": `${c.id || "?"} / ${c.dbfId ?? "?"}`,
+      id: c.id || "",
+      "В % колодах": c.deck_popularity || c.pick_rate || "",
+      Копий: c.avg_copies || "",
+      "Винрейт колод": c.deck_winrate || "",
+      "Сыграно игр": c.times_played || "",
+      Взятие: c.winrate_when_drawn || "",
+      "Побед с картой": c.winrate_when_played || "",
+      Оставили: c.keep_percentage || "",
+      "Turn held": c.avg_turns_in_hand ?? "",
+      "Turn played": c.avg_turn_played_on ?? "",
+      dbfId: c.dbfId ?? "",
     })),
-    ["Карта", "Мана", "Deck WR", "Avg copies", "Times played", "Pick rate", "id / dbfId"]
+    [
+      "Карта",
+      "id",
+      "В % колодах",
+      "Копий",
+      "Винрейт колод",
+      "Сыграно игр",
+      "Взятие",
+      "Побед с картой",
+      "Оставили",
+      "Turn held",
+      "Turn played",
+      "dbfId",
+    ]
   );
 }
 
@@ -265,13 +292,86 @@ function renderDetail(p) {
     body += renderTableFromObjects(
       v.heroes.map((h) => ({
         Герой: h.hero,
+        Тир: h.tier || "",
+        "Лучший состав": h.best_comp || h.best_tribe || "",
         "Среднее место": h.avg_placement ?? h.average_position ?? "",
         "Pick rate": h.pick_rate || "",
+        "Распределение мест": (h.placement_distribution || []).join(" · "),
         Игры: h.games ?? h.data_points ?? "",
         "id / dbfId": `${h.hero_card_id || h.id || "?"} / ${h.dbfId ?? "?"}`,
       })),
-      ["Герой", "Среднее место", "Pick rate", "Игры", "id / dbfId"]
+      ["Герой", "Тир", "Лучший состав", "Среднее место", "Pick rate", "Распределение мест", "Игры", "id / dbfId"]
     );
+    body += "</div>";
+  } else if (t === "bg_minions" && v.minions) {
+    body = `<div class="block"><h3>Существа Battlegrounds (${v.minions.length})</h3>`;
+    body += renderTableFromObjects(
+      v.minions.map((m) => ({
+        Существо: m.minion || m.name,
+        id: m.id || "",
+        "Влияние на игру": m.impact ?? "",
+        "Доля побед": m.win_share || m.combat_winrate || "",
+        Популярность: m.popularity || "",
+        "Уровень таверны": m.tavern_tier ?? "",
+        dbfId: m.dbfId ?? m.minion_dbf_id ?? "",
+      })),
+      ["Существо", "id", "Влияние на игру", "Доля побед", "Популярность", "Уровень таверны", "dbfId"]
+    );
+    body += "</div>";
+  } else if (t === "bg_compositions" && v.compositions) {
+    body = `<div class="block"><h3>Составы Battlegrounds (${v.compositions.length})</h3>`;
+    body += renderTableFromObjects(
+      v.compositions.map((c) => ({
+        "Тип существ": c.type,
+        "Первое место": c.first_place || "",
+        "Средняя позиция": c.avg_placement ?? "",
+        Популярность: c.popularity || "",
+        "Распределение мест": (c.placement_distribution || []).join(" · "),
+        Игры: c.games ?? "",
+      })),
+      ["Тип существ", "Первое место", "Средняя позиция", "Популярность", "Распределение мест", "Игры"]
+    );
+    body += "</div>";
+  } else if (t === "vicious_live") {
+    body = `<div class="block"><h3>Vicious Syndicate Live · ${escapeHtml(v.format || "Standard")}</h3>`;
+    body += `<p class="muted">Pie chart: ${escapeHtml(v.pie_time_range || "?")} · games: ${escapeHtml(String(v.games || "?"))}. Tier-list: ladder ${escapeHtml(v.tier_ladder_time_range || "?")} + matchup ${escapeHtml(v.tier_matchup_time_range || "?")}.</p>`;
+    if (v.class_distribution?.length) {
+      body += `<h4>Распределение классов</h4>`;
+      body += renderTableFromObjects(
+        v.class_distribution.map((c) => ({
+          Класс: c.class,
+          Частота: c.frequency || "",
+        })),
+        ["Класс", "Частота"]
+      );
+    }
+    if (v.deck_distribution?.length) {
+      body += `<h4>Распределение колод</h4>`;
+      body += renderTableFromObjects(
+        v.deck_distribution.map((d) => ({
+          Колода: d.deck,
+          Класс: d.class || "",
+          Частота: d.frequency || "",
+        })),
+        ["Колода", "Класс", "Частота"]
+      );
+    }
+    if (v.tier_list?.length) {
+      body += `<h4>Power Tier List</h4>`;
+      for (const bracket of v.tier_list) {
+        body += `<div class="strategy" style="scroll-margin-top: 20px;">`;
+        body += `<h4>${escapeHtml(bracket.rank_bracket || "")}</h4>`;
+        body += renderTableFromObjects(
+          (bracket.decks || []).map((d) => ({
+            Место: d.rank,
+            Колода: d.deck,
+            Winrate: d.winrate || "",
+          })),
+          ["Место", "Колода", "Winrate"]
+        );
+        body += `</div>`;
+      }
+    }
     body += "</div>";
   } else if (t === "arena_class_matrix") {
     body = `<div class="block"><h3>Арена · классы и матчапы</h3>`;
@@ -339,18 +439,59 @@ function renderDetail(p) {
       <p>Импортируйте cookies и выполните refresh.</p></div>`;
   } else if (t === "card_stats" && v.cards && v.cards.length) {
     body = `<div class="block"><h3>Карты (${v.cards.length})</h3>${renderCardStatsTable(v.cards)}</div>`;
+  } else if (t === "hsreplay_meta_archetypes" && v.classes) {
+    body = `<div class="block"><h3>HSReplay · Архетипы по классам</h3>`;
+    if (v.filters) {
+      body += `<p class="muted">${escapeHtml(v.filters.rank_range || "?")} · ${escapeHtml(v.filters.region || "?")} · ${escapeHtml(v.filters.time_range || "?")}${v.as_of ? " · as of: " + escapeHtml(String(v.as_of)) : ""}</p>`;
+    }
+    for (const classGroup of v.classes) {
+      const rows = classGroup.archetypes || [];
+      body += `<div class="strategy" style="scroll-margin-top: 20px;">`;
+      body += `<h4>${escapeHtml(classGroup.class_name || classGroup.class || "?")} (${rows.length} арх., ${escapeHtml(String(classGroup.games || 0))} игр)</h4>`;
+      body += renderTableFromObjects(
+        rows.map((a) => ({
+          Архетип: a.archetype,
+          Winrate: a.winrate || "",
+          Популярность: a.popularity || "",
+          "В классе": a.class_popularity || "",
+          Игры: a.games ?? "",
+          id: a.archetype_id ?? "",
+        })),
+        ["Архетип", "Winrate", "Популярность", "В классе", "Игры", "id"]
+      );
+      body += `</div>`;
+    }
+    body += "</div>";
   } else if (t === "arena_card_tiers" && v.cards && v.cards.length) {
     body = `<div class="block"><h3>Тир-лист арены (${v.cards.length} карт)</h3>`;
     if (v.total_cards) body += `<p class="muted">Всего в базе: ${escapeHtml(v.total_cards)}</p>`;
     body += renderTableFromObjects(
       v.cards.map((c) => ({
-        Карта: c.name,
-        Тир: c.tier || "",
-        Winrate: c.deck_winrate || c.pick_rate || "",
-        Мана: c.mana ?? c.cost ?? "",
-        "id / dbfId": `${c.id || "?"} / ${c.dbfId ?? "?"}`,
+        "Название карты": c.name,
+        id: c.id || c.card_id || "",
+        "Винрейт колоды": c.deck_winrate || "",
+        Взятие: c.winrate_when_drawn || "",
+        "Played Winrate": c.winrate_when_played || "",
+        "In % Runs": c.in_runs || (c.popularity !== null && c.popularity !== undefined ? `${c.popularity}%` : ""),
+        "Avg Copies": c.avg_copies ?? "",
+        "Всего партий": c.times_played ?? "",
+        "Arenasmith Score": c.score ?? "",
+        "Частота выбора": c.pick_rate !== null && c.pick_rate !== undefined ? `${c.pick_rate}%` : "",
+        dbfId: c.dbfId ?? "",
       })),
-      ["Карта", "Тир", "Winrate", "Мана", "id / dbfId"]
+      [
+        "Название карты",
+        "id",
+        "Винрейт колоды",
+        "Взятие",
+        "Played Winrate",
+        "In % Runs",
+        "Avg Copies",
+        "Всего партий",
+        "Arenasmith Score",
+        "Частота выбора",
+        "dbfId",
+      ]
     );
     body += "</div>";
   } else if (t === "heartharena_tierlist" && v.classes) {
@@ -672,6 +813,34 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+async function loadTechStack() {
+  const tbody = document.getElementById("tech-table-body");
+  if (!tbody) return;
+  try {
+    const res = await fetch("/system/technologies");
+    const data = await res.json();
+    const rows = data.technologies || [];
+    tbody.innerHTML = rows
+      .map((t) => {
+        const name = t.link
+          ? `<a href="${t.link}" target="_blank" rel="noopener">${escapeHtml(t.name)}</a>`
+          : escapeHtml(t.name);
+        const notes = t.notes ? `<div class="muted">${escapeHtml(t.notes)}</div>` : "";
+        const statusClass = `tech-status tech-status--${(t.status || "optional").replace(/\s+/g, "-")}`;
+        return `<tr>
+          <td>${name}${notes}</td>
+          <td>${escapeHtml(t.role)}</td>
+          <td>${escapeHtml(t.layer)}</td>
+          <td><span class="${statusClass}">${escapeHtml(t.status)}</span></td>
+        </tr>`;
+      })
+      .join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="muted">Не удалось загрузить: ${escapeHtml(String(e))}</td></tr>`;
+  }
+}
+
+loadTechStack().catch(() => {});
 loadOverview().catch((e) => {
   $("#stats").textContent = "Ошибка: " + e.message;
 });

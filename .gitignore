@@ -4,9 +4,38 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+.credentials.local
+hs-data-api.credentials
 *.log
 .refresh.lock
 /var/lib/hs-data-api/
 .pytest_cache/
 .mypy_cache/
 .DS_Store
+.cursor/
+.codegraph/
+agent-tools/
+agent-transcripts/
+*.bak
+*.tmp
+
+# Runtime secrets/state
+hsreplay-auth.json
+vicious-auth.json
+*.credentials
+*.credentials.local
+
+# Accidental copies from deployment root
+/app.js
+/browser_pool.py
+/config.py
+/hsreplay_auth.py
+/index.html
+/main.py
+/playwright_stealth_apply.py
+/style.css
+/tech_stack.py
+
+# Generated JS dependencies
+node_modules/
+scripts/fingerprint-node/

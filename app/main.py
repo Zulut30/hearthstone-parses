@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import api_key
+from .config import api_key, cors_allowed_origins
 from .demo import build_demo_view, build_overview
 from .fetcher import refresh_sources
 from .sources import SOURCES, SOURCE_BY_ID
@@ -26,14 +26,23 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Accept", "Content-Type", "X-API-Key"],
 )
 
 if WEB_DIR.is_dir():
     app.mount("/ui/assets", StaticFiles(directory=WEB_DIR), name="ui-assets")
+
+
+def require_admin(x_api_key: Annotated[str | None, Header()] = None) -> None:
+    expected = api_key()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Admin API key is not configured")
+    if x_api_key == expected:
+        return
+    raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key")
 
 
 @app.get("/")
@@ -49,6 +58,77 @@ def demo_index() -> FileResponse:
     return FileResponse(index)
 
 
+@app.get("/ui/logs")
+def ops_logs_ui() -> FileResponse:
+    page = WEB_DIR / "logs.html"
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="Ops logs UI not installed")
+    return FileResponse(page)
+
+
+@app.get("/ui/technologies")
+def technologies_ui() -> FileResponse:
+    page = WEB_DIR / "technologies.html"
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="Technologies UI not installed")
+    return FileResponse(page)
+
+
+@app.get("/ops/summary", dependencies=[Depends(require_admin)])
+def ops_summary(since_hours: float = Query(24.0, ge=1.0, le=168.0)) -> dict:
+    from .refresh_log import build_summary
+
+    return build_summary(since_hours=since_hours)
+
+
+@app.get("/ops/events", dependencies=[Depends(require_admin)])
+def ops_events(
+    limit: int = Query(200, ge=1, le=2000),
+    source_id: str | None = None,
+    event: str | None = None,
+    action: str | None = None,
+    action_group: str | None = None,
+    level: str | None = None,
+    trace_id: str | None = None,
+    run_id: str | None = None,
+    since_hours: float | None = Query(None, ge=0.1, le=168.0),
+) -> dict:
+    from .refresh_log import read_events
+
+    return {
+        "events": read_events(
+            limit=limit,
+            source_id=source_id,
+            event=event,
+            action=action,
+            action_group=action_group,
+            level=level,
+            trace_id=trace_id,
+            run_id=run_id,
+            since_hours=since_hours,
+        )
+    }
+
+
+@app.get("/ops/trace/{trace_id}", dependencies=[Depends(require_admin)])
+def ops_trace(trace_id: str) -> dict:
+    from .refresh_log import build_trace_timeline
+
+    return build_trace_timeline(trace_id)
+
+
+@app.get("/ops/run/{run_id}", dependencies=[Depends(require_admin)])
+def ops_run(run_id: str) -> dict:
+    from .refresh_log import build_run_timeline
+
+    return build_run_timeline(run_id)
+
+
+@app.get("/ops/health", dependencies=[Depends(require_admin)])
+def ops_health() -> dict:
+    return build_health_diagnostics()
+
+
 @app.get("/demo/overview")
 def demo_overview() -> dict:
     return build_overview()
@@ -59,13 +139,6 @@ def demo_view(source_id: str) -> dict:
     if source_id not in SOURCE_BY_ID:
         raise HTTPException(status_code=404, detail="Unknown source")
     return build_demo_view(source_id)
-
-
-def require_admin(x_api_key: Annotated[str | None, Header()] = None) -> None:
-    expected = api_key()
-    if expected and x_api_key == expected:
-        return
-    raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key")
 
 
 def source_payload(source_id: str) -> dict:
@@ -86,19 +159,63 @@ def source_payload(source_id: str) -> dict:
     }
 
 
+@app.get("/system/technologies")
+def system_technologies() -> dict:
+    from .tech_stack import build_technologies_payload
+
+    return build_technologies_payload()
+
+
 @app.get("/health")
 def health() -> dict:
-    statuses = [load_status(source.id) for source in SOURCES]
-    states: dict[str, int] = {}
-    for status in statuses:
-        state = status["state"] if status else "never_fetched"
-        states[state] = states.get(state, 0) + 1
     return {
         "ok": True,
+        "serving_ok": True,
+        "degraded": False,
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def build_health_diagnostics() -> dict:
+    statuses = [load_status(source.id) for source in SOURCES]
+    states: dict[str, int] = {}
+    cached_sources: list[str] = []
+    hard_failed_sources: list[str] = []
+    for source, status in zip(SOURCES, statuses, strict=True):
+        state = status["state"] if status else "never_fetched"
+        states[state] = states.get(state, 0) + 1
+        if status and status.get("serving_cached_dataset"):
+            cached_sources.append(source.id)
+        if state != "ok":
+            hard_failed_sources.append(source.id)
+
+    from .stale_monitor import find_stale_sources
+
+    stale_sources = find_stale_sources(include_ok=True)
+    stale_ids = [str(item["source_id"]) for item in stale_sources]
+    serving_ok = not hard_failed_sources
+    freshness_ok = not stale_ids and not cached_sources
+    return {
+        "ok": serving_ok,
+        "serving_ok": serving_ok,
+        "freshness_ok": freshness_ok,
+        "degraded": not (serving_ok and freshness_ok),
         "data_dir": str(root_dir()),
         "sources": len(SOURCES),
         "states": states,
+        "hard_failed_sources": hard_failed_sources,
+        "cached_sources": cached_sources,
+        "stale_sources": stale_ids,
+        "stale_count": len(stale_ids),
+        "cached_count": len(cached_sources),
     }
+
+
+@app.get("/health/premium", dependencies=[Depends(require_admin)])
+async def premium_health(live: bool = Query(False)) -> dict:
+    from .premium_auth_health import build_premium_auth_health
+
+    return await build_premium_auth_health(live=live)
 
 
 @app.get("/sources")
@@ -196,13 +313,13 @@ def upload_dataset(
 
 @app.get("/api/db/decks")
 def db_decks(
-    class_name: str | None = None,
-    format_name: str | None = None,
-    source_id: str | None = None,
+    class_name: str | None = Query(None, min_length=1, max_length=80),
+    format_name: str | None = Query(None, min_length=1, max_length=80),
+    source_id: str | None = Query(None, min_length=1, max_length=120),
     min_win_rate: float | None = None,
-    q: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    q: str | None = Query(None, min_length=1, max_length=120),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=10000),
 ) -> dict:
     from .db import get_db_connection
     conn = get_db_connection()
@@ -241,18 +358,18 @@ def db_decks(
             "offset": offset,
             "decks": decks
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database query failed: {e}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Database query failed")
     finally:
         conn.close()
 
 
 @app.get("/api/db/cards/trends")
 def db_card_trends(
-    card_name: str,
-    source_id: str | None = None,
-    class_name: str | None = None,
-    limit: int = 100,
+    card_name: str = Query(..., min_length=1, max_length=120),
+    source_id: str | None = Query(None, min_length=1, max_length=120),
+    class_name: str | None = Query(None, min_length=1, max_length=80),
+    limit: int = Query(100, ge=1, le=500),
 ) -> dict:
     from .db import get_db_connection
     conn = get_db_connection()
@@ -275,7 +392,7 @@ def db_card_trends(
             "card_name": card_name,
             "trends": trends
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database query failed: {e}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Database query failed")
     finally:
         conn.close()

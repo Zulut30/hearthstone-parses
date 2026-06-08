@@ -57,8 +57,37 @@ async def _wait_cloudflare(page, timeout_ms: int) -> None:
         await page.wait_for_timeout(3000)
 
 
+async def _maybe_revisit_hsguru(page, target_url: str, timeout_ms: int) -> None:
+    """Second pass after CF — reload often aborts on CloakBrowser (ERR_ABORTED)."""
+    await page.wait_for_timeout(5000)
+    try:
+        title = (await page.title()).lower()
+        html_snip = (await page.content())[:12_000].lower()
+    except Exception:
+        return
+    still_cf = (
+        "just a moment" in title
+        or "attention required" in title
+        or "just a moment" in html_snip
+        or "challenges.cloudflare.com" in html_snip
+    )
+    if not still_cf:
+        return
+    cap = min(timeout_ms, 90_000)
+    for wait_until in ("domcontentloaded", "commit"):
+        try:
+            await page.goto(target_url, wait_until=wait_until, timeout=cap)
+            await _wait_cloudflare(page, cap)
+            return
+        except Exception as exc:
+            logger.debug("cloakbrowser re-goto (%s) skipped: %s", wait_until, exc)
+
+
 async def _wait_content(page, source: Source, timeout_ms: int) -> None:
-    per_selector = min(max(timeout_ms // len(_selectors_for(source)) // 2, 8000), 15000)
+    if source.site == "hsguru":
+        per_selector = min(max(timeout_ms // 3, 15000), 30000)
+    else:
+        per_selector = min(max(timeout_ms // len(_selectors_for(source)) // 2, 8000), 15000)
     for selector in _selectors_for(source):
         try:
             await page.wait_for_selector(selector, timeout=per_selector, state="attached")
@@ -80,7 +109,12 @@ async def _apply_cards_filters(page, source: Source) -> None:
             continue
 
 
-async def navigate_page(page, source: Source) -> FetchResult:
+async def navigate_page(
+    page,
+    source: Source,
+    *,
+    backend: str = "patchright",
+) -> FetchResult:
     timeout_ms = int(request_timeout_seconds() * 1000)
     target_url = source.url if source.fragment else source.fetch_url
     api_payloads: list[tuple[str, Any]] = []
@@ -101,13 +135,20 @@ async def navigate_page(page, source: Source) -> FetchResult:
     if source.id.startswith("hsreplay_cards_"):
         page.on("response", on_response)
 
-    wait_until = "commit" if source.id.startswith("hsreplay_cards_") else "domcontentloaded"
+    if source.id.startswith("hsreplay_cards_"):
+        wait_until = "commit"
+    elif source.site == "hsguru":
+        wait_until = "networkidle"
+    else:
+        wait_until = "domcontentloaded"
     try:
         await page.goto(target_url, wait_until=wait_until, timeout=timeout_ms)
     except Exception:
         await page.goto(target_url, wait_until="domcontentloaded", timeout=timeout_ms)
 
     await _wait_cloudflare(page, timeout_ms)
+    if backend == "cloakbrowser" and source.site == "hsguru":
+        await _maybe_revisit_hsguru(page, target_url, timeout_ms)
     await _wait_content(page, source, timeout_ms)
 
     if source.fragment and "#" not in page.url:
@@ -127,6 +168,18 @@ async def navigate_page(page, source: Source) -> FetchResult:
         await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 60000))
     except Exception:
         await page.wait_for_timeout(4000)
+
+    if source.site == "hsguru" and source.category == "meta":
+        min_rows = 8
+        max_polls = 24 if backend == "cloakbrowser" else 18
+        for _ in range(max_polls):
+            try:
+                count = await page.locator("table tbody tr").count()
+            except Exception:
+                count = 0
+            if count >= min_rows:
+                break
+            await page.wait_for_timeout(5000)
 
     if source.id.startswith("hsreplay_cards_") and not any(
         "card_list" in url for url, _ in api_payloads
@@ -153,7 +206,7 @@ async def navigate_page(page, source: Source) -> FetchResult:
     return FetchResult(
         html=html,
         final_url=page.url,
-        backend="patchright",
+        backend=backend,
         http_status=200,
         snapshot=snapshot or None,
         api_payloads=tuple(api_payloads),

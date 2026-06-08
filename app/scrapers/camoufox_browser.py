@@ -12,7 +12,7 @@ def _fetch_sync(source: Source) -> FetchResult:
     from camoufox.sync_api import Camoufox
 
     assert_proxy_configured()
-    proxy_url = proxy_url_for_source(source.id)
+    proxy_url = proxy_url_for_source(source.id, page_url=source.fetch_url or source.url)
     options: dict = {"headless": True}
     if proxy_url:
         options["proxy"] = {"server": proxy_url}

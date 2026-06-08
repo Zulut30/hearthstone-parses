@@ -14,8 +14,9 @@ def _fetch_sync(source: Source) -> FetchResult:
     session = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "linux", "mobile": False},
     )
-    proxies = cloudscraper_proxies(source.id)
-    response = session.get(source.url, proxies=proxies, timeout=60)
+    url = source.fetch_url or source.url
+    proxies = cloudscraper_proxies(source.id, page_url=url)
+    response = session.get(url, proxies=proxies, timeout=60)
     response.raise_for_status()
     return FetchResult(
         html=response.text,
