@@ -1,0 +1,18 @@
+[Unit]
+Description=Intraday refresh for API-tier Hearthstone sources (light_api + medium_api)
+After=network-online.target hs-flaresolverr.service
+Wants=network-online.target hs-flaresolverr.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/hs-data-api
+EnvironmentFile=/etc/hs-data-api.env
+ExecStartPre=/opt/hs-data-api/scripts/ensure-flaresolverr.sh
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --tier light_api
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --tier medium_api
+# Refresh runs as root, so restore data ownership for the API user.
+ExecStartPost=-/usr/bin/chown -R hs-data-api:hs-data-api /var/lib/hs-data-api
+
+# UMask must keep written files world-readable: the API service runs as hs-data-api.
+UMask=0022
+NoNewPrivileges=true

@@ -152,6 +152,17 @@ def _fetch_text_via_curl_cffi_sync(url: str, source_id: str | None) -> str:
     assert_proxy_configured()
     max_attempts = http_retry_attempts()
     headers = build_fetch_headers(url, accept="application/json,text/plain,*/*")
+    # HSReplay premium endpoints (arena card_stats, analytics) reject anonymous
+    # requests with 403, so reuse the stored session cookies like FlareSolverr does.
+    cookies: dict[str, str] = {}
+    if "hsreplay.net" in url:
+        cookies = {
+            c["name"]: c["value"]
+            for c in (hsreplay_cookies_for_fetch() or [])
+            if c.get("name") and c.get("value")
+        }
+        if cookies:
+            headers.setdefault("Referer", "https://hsreplay.net/")
     last_exc: Exception | None = None
 
     for attempt in range(1, max_attempts + 1):
@@ -165,6 +176,7 @@ def _fetch_text_via_curl_cffi_sync(url: str, source_id: str | None) -> str:
                 timeout=request_timeout_seconds(),
                 allow_redirects=True,
                 headers=headers,
+                cookies=cookies or None,
             )
             if response.status_code == 407:
                 raise ProxyPaymentRequiredError(f"Proxy payment required (407) for {url[:120]}")

@@ -1,0 +1,13 @@
+[Unit]
+Description=Intraday API-tier refresh (keeps daily-volatile data fresh between full runs)
+
+[Timer]
+# Full refresh runs at 04:30; these keep API-tier data fresh during the day.
+OnCalendar=*-*-* 10:30:00
+OnCalendar=*-*-* 16:30:00
+OnCalendar=*-*-* 22:30:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
