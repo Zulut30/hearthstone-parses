@@ -88,12 +88,25 @@ def _backup_existing_json(path: Path) -> None:
     _prune_backups(backup_path)
 
 
+def _match_parent_permissions(path: Path) -> None:
+    try:
+        parent_stat = path.parent.stat()
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            os.chown(path, parent_stat.st_uid, parent_stat.st_gid)
+        path.chmod(0o644)
+    except OSError:
+        # Permission normalization is best-effort; write success should not be hidden.
+        pass
+
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     _assert_not_test_prod_write(path)
     _backup_existing_json(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _match_parent_permissions(tmp)
     tmp.replace(path)
+    _match_parent_permissions(path)
 
 
 def read_json(path: Path) -> dict[str, Any] | None:

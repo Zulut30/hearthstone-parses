@@ -2,7 +2,12 @@
 # Audit parser cache health and re-run quality checks on stored datasets.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -d "$SCRIPT_DIR/app" ]]; then
+  ROOT="$SCRIPT_DIR"
+else
+  ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 cd "$ROOT"
 
 VENV="${VENV_PYTHON:-$ROOT/venv/bin/python}"
