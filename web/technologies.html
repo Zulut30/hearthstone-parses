@@ -4,14 +4,29 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hearthstone Parses — Технологии</title>
-  <link rel="stylesheet" href="/ui/assets/style.css?v=technologies-page-v1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/ui/assets/style.css?v=ui-redesign-v5" />
 </head>
 <body class="tech-page-body">
+  <nav class="topnav">
+    <a class="topnav-brand" href="/ui">
+      <span class="topnav-logo">⚔️</span>
+      <span class="topnav-title">Hearthstone <b>Parses</b></span>
+    </a>
+    <div class="topnav-links">
+      <a class="topnav-link" href="/ui">Данные</a>
+      <a class="topnav-link" href="/ui/technologies" aria-current="page">Технологии</a>
+      <a class="topnav-link" href="/ui/logs">Логи</a>
+      <a class="topnav-link topnav-link--ext" href="/docs" target="_blank" rel="noopener">API ↗</a>
+    </div>
+  </nav>
   <header class="header">
-    <h1>Технологии источников</h1>
+    <h1>Технологии парсинга</h1>
     <p class="sub">
-      Подробная карта сайтов, API, backend-сигналов и parser strategy.
-      <a href="/ui">Назад к данным</a> · <a href="/ui/logs">Логи</a> · <a href="/system/technologies" target="_blank" rel="noopener">JSON API</a>
+      Стек парсинга и подробная карта источников: API, backend-сигналы, parser strategy и риски стабильности.
+      JSON-версия: <a href="/system/technologies" target="_blank" rel="noopener">/system/technologies ↗</a>
     </p>
     <div id="tech-page-stats" class="stats">Загрузка…</div>
   </header>
@@ -22,22 +37,25 @@
       <div id="tech-site-nav" class="source-list"></div>
     </aside>
     <section class="tech-page-content">
+      <section class="block block--accent">
+        <h3><span class="block-eyebrow">Parser stack</span>Технологии парсинга</h3>
+        <p class="muted" style="margin-top:-0.35rem">
+          Полный стек инструментов и компонентов, на которых работает парсер. Секреты, cookies и токены здесь не показываются.
+        </p>
+        <div id="tech-components"></div>
+      </section>
+
       <section class="block">
-        <h3>Как читать эту страницу</h3>
+        <h3>Карта источников</h3>
         <p class="muted">
-          Это техническая карта наших источников: где сайт хостится, какие признаки frontend/backend видны,
-          какие API или HTML routes мы используем, где нужна авторизация, и какие риски ломают parser.
-          Секреты, cookies и токены здесь не показываются.
+          Где сайт хостится, какие признаки frontend/backend видны, какие API или HTML-routes мы используем,
+          где нужна авторизация и какие риски ломают parser. Выберите сайт в списке слева для быстрого перехода.
         </p>
       </section>
       <section id="tech-sites" class="tech-sites"></section>
-      <section class="block">
-        <h3>Наш parser stack</h3>
-        <div id="tech-components"></div>
-      </section>
     </section>
   </main>
 
-  <script src="/ui/assets/technologies.js?v=technologies-page-v1"></script>
+  <script src="/ui/assets/technologies.js?v=ui-redesign-v5"></script>
 </body>
 </html>

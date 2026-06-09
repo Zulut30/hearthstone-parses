@@ -3,15 +3,29 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hearthstone Parses — Ops Logs</title>
-  <link rel="stylesheet" href="/ui/assets/style.css?v=ops-logs-v4" />
+  <title>Hearthstone Parses — Логи</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/ui/assets/style.css?v=ui-redesign-v5" />
 </head>
 <body class="ops-body">
+  <nav class="topnav">
+    <a class="topnav-brand" href="/ui">
+      <span class="topnav-logo">⚔️</span>
+      <span class="topnav-title">Hearthstone <b>Parses</b></span>
+    </a>
+    <div class="topnav-links">
+      <a class="topnav-link" href="/ui">Данные</a>
+      <a class="topnav-link" href="/ui/technologies">Технологии</a>
+      <a class="topnav-link" href="/ui/logs" aria-current="page">Логи</a>
+      <a class="topnav-link topnav-link--ext" href="/docs" target="_blank" rel="noopener">API ↗</a>
+    </div>
+  </nav>
   <header class="header">
     <h1>Панель логов парсера</h1>
     <p class="sub">
-      Пошаговые действия (action), trace_id на каждый источник, уровни info/warn/error.
-      <a href="/ui">← Демо данных</a> · <a href="/docs">API</a>
+      Пошаговые действия (action), trace_id на каждый источник, уровни info / warn / error.
     </p>
     <div id="ops-stats" class="stats"></div>
   </header>
@@ -148,6 +162,6 @@
     </section>
   </main>
 
-  <script src="/ui/assets/logs.js?v=ops-logs-v4"></script>
+  <script src="/ui/assets/logs.js?v=ui-redesign-v5"></script>
 </body>
 </html>

@@ -98,9 +98,14 @@ function groupSources(sources) {
 async function loadOverview() {
   const res = await fetch("/demo/overview");
   const data = await res.json();
+  const failCount = (data.total ?? 0) - (data.ok_count ?? 0);
   $("#stats").innerHTML =
-    `Источников OK: <strong>${data.ok_count}</strong> / ${data.total} · ` +
-    `<a href="/docs">API</a>`;
+    `<span class="stat-chip stat-chip--ok"><span class="stat-dot"></span>OK: <strong>${data.ok_count}</strong></span>` +
+    (failCount > 0
+      ? `<span class="stat-chip stat-chip--err"><span class="stat-dot"></span>Проблемных: <strong>${failCount}</strong></span>`
+      : "") +
+    `<span class="stat-chip">Всего: <strong>${data.total}</strong></span>` +
+    `<a class="stat-chip stat-chip--link" href="/docs" target="_blank" rel="noopener">API ↗</a>`;
 
   const list = $("#source-list");
   list.innerHTML = "";
@@ -798,7 +803,7 @@ function renderDetail(p) {
   return `
     <h2>${escapeHtml(LABELS[p.source_id] || p.source_id)}</h2>
     <p class="meta-line">
-      ${escapeHtml(p.site)} · ${escapeHtml(p.category)} · обновлено: ${escapeHtml(p.fetched_at || "?")}
+      ${escapeHtml(p.site)} · ${escapeHtml(p.category)} · обновлено: <time datetime="${escapeHtml(p.fetched_at || "")}" title="${escapeHtml(p.fetched_at || "")}">${escapeHtml(formatDateRu(p.fetched_at))}</time>
       · <a href="${escapeHtml(p.url)}" target="_blank">источник</a>
     </p>
     ${body || "<p class='muted'>Нет структурированных данных.</p>"}
@@ -811,6 +816,32 @@ function escapeHtml(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+const RU_MONTHS = [
+  "января", "февраля", "марта", "апреля", "мая", "июня",
+  "июля", "августа", "сентября", "октября", "ноября", "декабря",
+];
+
+// "2026-06-08T07:10:22.780533+00:00" -> "8 июня в 10:10" (в местном времени браузера)
+function formatDateRu(value) {
+  if (value == null || value === "") return "?";
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return String(value);
+  const now = new Date();
+  const day = d.getDate();
+  const month = RU_MONTHS[d.getMonth()];
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const yearPart = d.getFullYear() === now.getFullYear() ? "" : ` ${d.getFullYear()}`;
+
+  const startOfDay = (dt) => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  let dayLabel = `${day} ${month}${yearPart}`;
+  if (dayDiff === 0) dayLabel = "сегодня";
+  else if (dayDiff === 1) dayLabel = "вчера";
+
+  return `${dayLabel} в ${hh}:${mm}`;
 }
 
 async function loadTechStack() {

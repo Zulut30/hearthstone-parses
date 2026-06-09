@@ -3,37 +3,29 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hearthstone Parses — Demo</title>
-  <link rel="stylesheet" href="/ui/assets/style.css?v=hsguru-meta-ranks-v2" />
+  <title>Hearthstone Parses — Демо данных</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/ui/assets/style.css?v=ui-redesign-v5" />
 </head>
 <body>
+  <nav class="topnav">
+    <a class="topnav-brand" href="/ui">
+      <span class="topnav-logo">⚔️</span>
+      <span class="topnav-title">Hearthstone <b>Parses</b></span>
+    </a>
+    <div class="topnav-links">
+      <a class="topnav-link" href="/ui" aria-current="page">Данные</a>
+      <a class="topnav-link" href="/ui/technologies">Технологии</a>
+      <a class="topnav-link" href="/ui/logs">Логи</a>
+      <a class="topnav-link topnav-link--ext" href="/docs" target="_blank" rel="noopener">API ↗</a>
+    </div>
+  </nav>
   <header class="header">
-    <h1>Hearthstone Parses</h1>
-    <p class="sub">Демо: парсинг HSGuru / HSReplay + карты из <a href="https://hearthstonejson.com" target="_blank">HearthstoneJSON</a> · <a href="/ui/technologies">Технологии</a> · <a href="/ui/logs">Панель логов</a></p>
+    <h1>Демо данных</h1>
+    <p class="sub">Парсинг HSGuru / HSReplay + карты из <a href="https://hearthstonejson.com" target="_blank" rel="noopener">HearthstoneJSON</a>. Выберите источник слева, чтобы увидеть распарсенные данные.</p>
     <div id="stats" class="stats"></div>
-    <section class="tech-stack" aria-labelledby="tech-stack-title">
-      <h2 id="tech-stack-title">Технологии парсинга</h2>
-      <p class="tech-stack-sub">
-        Стек <a href="/ui/technologies">подробно по сайтам</a>
-        · API <a href="/system/technologies" target="_blank" rel="noopener">/system/technologies</a>
-        · лаборатория: mitmproxy, Scrapy
-      </p>
-      <div class="tech-table-wrap">
-        <table class="tech-table" id="tech-table">
-          <thead>
-            <tr>
-              <th>Компонент</th>
-              <th>Назначение</th>
-              <th>Слой</th>
-              <th>Статус</th>
-            </tr>
-          </thead>
-          <tbody id="tech-table-body">
-            <tr><td colspan="4" class="muted">Загрузка…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
   </header>
 
   <main class="layout">
@@ -43,12 +35,14 @@
     </aside>
     <section class="content">
       <div id="placeholder" class="placeholder">
-        Выберите источник слева, чтобы увидеть распарсенные данные.
+        <span class="placeholder-icon">📊</span>
+        <span class="placeholder-title">Выберите источник</span>
+        <span class="placeholder-text">Откройте источник в списке слева, чтобы увидеть распарсенные данные.</span>
       </div>
       <article id="detail" class="detail hidden"></article>
     </section>
   </main>
 
-  <script src="/ui/assets/app.js?v=technologies-page-v1"></script>
+  <script src="/ui/assets/app.js?v=ui-redesign-v5"></script>
 </body>
 </html>
