@@ -8,9 +8,12 @@ from .sources import SOURCE_BY_ID, Source
 
 PERCENT_RE = re.compile(r"^\d+(\.\d+)?%$")
 INT_RE = re.compile(r"^\d+$")
+# HSReplay serves localized deck rows ("Winrate ... Games" or "Побед ... Игр"),
+# with either dot or comma decimals and space/nbsp thousand separators.
 DECK_LINK_RE = re.compile(
-    r"^(?P<name>.+?)\s+(?:Live now|\d[\d,]*)\s+Winrate\s+(?P<winrate>\d+(?:\.\d+)?%)"
-    r"\s+Games\s+(?P<games>[\d,]+)(?:\s+Avg Duration\s+(?P<duration>[\d.]+ min))?",
+    r"^(?P<name>.+?)\s+(?:Live now|\d[\d,.\s\u00a0]*)\s*(?:Winrate|Побед)\s+(?P<winrate>\d+(?:[.,]\d+)?%)"
+    r"\s+(?:Games|Игр)\s+(?P<games>\d(?:[\d,.\s\u00a0]*\d)?)"
+    r"(?:\s+Avg Duration\s+(?P<duration>[\d.,]+\s*(?:min|мин)))?",
     re.I,
 )
 

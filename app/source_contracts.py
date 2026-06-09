@@ -200,6 +200,94 @@ CONTRACTS: dict[str, SourceContract] = {
         regression_drop_ratio=0.35,
         fallback_policy="html_allowed",
     ),
+    "hsreplay_decks_trending": SourceContract(
+        source_id="hsreplay_decks_trending",
+        structured_type="trending_decks",
+        allow_browser_fallback=True,
+        min_rows=5,
+        critical_fields=("name", "winrate", "games"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.50,
+        fallback_policy="html_allowed",
+        recommendation="Trending page is localized; deck rows must parse in both EN and RU UI.",
+    ),
+    "hsreplay_arena": SourceContract(
+        source_id="hsreplay_arena",
+        structured_type="arena_class_matrix",
+        preferred_channels=HSREPLAY_JSON_CHANNELS,
+        allow_browser_fallback=False,
+        min_rows=8,
+        critical_fields=("win_rate", "pick_rate"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.30,
+        fallback_policy="api_only",
+    ),
+    "hsreplay_battlegrounds_comps": SourceContract(
+        source_id="hsreplay_battlegrounds_comps",
+        structured_type="bg_comps",
+        allow_browser_fallback=True,
+        min_rows=5,
+        critical_fields=("name",),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.35,
+        fallback_policy="html_allowed",
+    ),
+    "firestone_battlegrounds_comps": SourceContract(
+        source_id="firestone_battlegrounds_comps",
+        structured_type="bg_comps",
+        allow_browser_fallback=False,
+        min_rows=10,
+        critical_fields=("name", "main_cards"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.35,
+        fallback_policy="api_only",
+    ),
+    "firestone_battlegrounds_cards": SourceContract(
+        source_id="firestone_battlegrounds_cards",
+        structured_type="bg_card_stats",
+        allow_browser_fallback=False,
+        min_rows=100,
+        regression_drop_ratio=0.35,
+        fallback_policy="api_only",
+    ),
+    "firestone_battlegrounds_spells": SourceContract(
+        source_id="firestone_battlegrounds_spells",
+        structured_type="bg_card_stats",
+        allow_browser_fallback=False,
+        min_rows=30,
+        regression_drop_ratio=0.35,
+        fallback_policy="api_only",
+    ),
+    "heartharena_tierlist": SourceContract(
+        source_id="heartharena_tierlist",
+        structured_type="heartharena_tierlist",
+        allow_browser_fallback=True,
+        min_rows=300,
+        critical_fields=("name",),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.35,
+        fallback_policy="html_allowed",
+    ),
+    "metastats_decks": SourceContract(
+        source_id="metastats_decks",
+        structured_type="metastats_decks",
+        allow_browser_fallback=False,
+        min_rows=40,
+        critical_fields=("archetype_name", "win_rate", "games"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.35,
+        fallback_policy="api_only",
+    ),
+    "metastats_matchups": SourceContract(
+        source_id="metastats_matchups",
+        structured_type="metastats_matchups",
+        allow_browser_fallback=False,
+        min_rows=50,
+        critical_fields=("archetype", "vs", "winrate"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.35,
+        fallback_policy="api_only",
+    ),
     "hearthstone_decks": SourceContract(
         source_id="hearthstone_decks",
         structured_type="hearthstone_decks",
@@ -213,6 +301,42 @@ CONTRACTS: dict[str, SourceContract] = {
     ),
 }
 
+
+for _sid in (
+    "firestone_arena_cards_normal",
+    "firestone_arena_cards_underground",
+):
+    CONTRACTS.setdefault(
+        _sid,
+        SourceContract(
+            source_id=_sid,
+            structured_type="arena_card_tiers",
+            allow_browser_fallback=False,
+            min_rows=300,
+            critical_fields=("name", "deck_winrate"),
+            min_field_fill_rate=0.80,
+            regression_drop_ratio=0.35,
+            fallback_policy="api_only",
+        ),
+    )
+
+for _sid in (
+    "firestone_arena_legendaries_normal",
+    "firestone_arena_legendaries_underground",
+):
+    CONTRACTS.setdefault(
+        _sid,
+        SourceContract(
+            source_id=_sid,
+            structured_type="arena_card_tiers",
+            allow_browser_fallback=False,
+            min_rows=40,
+            critical_fields=("name", "deck_winrate"),
+            min_field_fill_rate=0.80,
+            regression_drop_ratio=0.35,
+            fallback_policy="api_only",
+        ),
+    )
 
 for _sid in (
     "hsguru_streamer_decks_legend_1000",
@@ -307,6 +431,32 @@ def _rows_for_structured(structured: dict[str, Any]) -> list[dict[str, Any]]:
         return [row for row in (structured.get("matchups") or []) if isinstance(row, dict)]
     if stype == "streamer_decks":
         return [row for row in (structured.get("rows") or []) if isinstance(row, dict)]
+    if stype == "bg_card_stats":
+        return [
+            row
+            for tier_rows in (structured.get("tiers") or {}).values()
+            if isinstance(tier_rows, list)
+            for row in tier_rows
+            if isinstance(row, dict)
+        ]
+    if stype == "bg_comps":
+        return [row for row in (structured.get("comps") or []) if isinstance(row, dict)]
+    if stype == "heartharena_tierlist":
+        return [
+            card
+            for cls in (structured.get("classes") or [])
+            if isinstance(cls, dict)
+            for card in (cls.get("cards") or [])
+            if isinstance(card, dict)
+        ]
+    if stype == "metastats_decks":
+        return [row for row in (structured.get("decks") or []) if isinstance(row, dict)]
+    if stype == "metastats_matchups":
+        return [row for row in (structured.get("matchups") or []) if isinstance(row, dict)]
+    if stype == "trending_decks":
+        return [row for row in (structured.get("decks") or []) if isinstance(row, dict)]
+    if stype == "arena_class_matrix":
+        return [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
     return []
 
 

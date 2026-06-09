@@ -62,6 +62,12 @@ def estimate_metric_count(source: Source, data: dict[str, Any]) -> int:
         return len(structured.get("class_distribution") or []) + sum(
             len(row.get("decks") or []) for row in (structured.get("tier_list") or [])
         )
+    if stype == "trending_decks":
+        return len(structured.get("decks") or [])
+    if stype == "metastats_decks":
+        return len(structured.get("decks") or [])
+    if stype == "metastats_matchups":
+        return len(structured.get("matchups") or [])
 
     tables = data.get("tables") or []
     table_rows = sum(len(t.get("objects") or t.get("rows") or []) for t in tables)
