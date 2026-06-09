@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
+from urllib.parse import urlparse
 
 from ..config import http_retry_attempts, proxy_check_url, request_timeout_seconds
 from ..proxy_errors import ProxyPaymentRequiredError
@@ -101,8 +103,8 @@ def _fetch_sync(source: Source) -> FetchResult:
 def proxy_session_label(proxy_url: str | None) -> str:
     if not proxy_url:
         return "direct"
-    user = __import__("urllib.parse").urlparse(proxy_url).username or ""
-    match = __import__("re").search(r"_session-([^:@]+)", user)
+    user = urlparse(proxy_url).username or ""
+    match = re.search(r"_session-([^:@]+)", user)
     return match.group(1) if match else "sticky"
 
 
