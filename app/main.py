@@ -483,6 +483,9 @@ def db_decks(
         if source_id:
             query += " AND source_id = ?"
             params.append(source_id)
+        else:
+            query += " AND source_id != ?"
+            params.append("hsreplay_arena_winning_decks")
         if min_win_rate is not None:
             query += " AND win_rate >= ?"
             params.append(min_win_rate)

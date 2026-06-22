@@ -1483,7 +1483,6 @@ async function selectDbSearch(btn) {
             <option value="">Все источники</option>
             <option value="hearthstone_decks">Hearthstone-Decks.net</option>
             <option value="metastats_decks">MetaStats.net</option>
-            <option value="hsreplay_arena_winning_decks">HSReplay · виновые колоды арены</option>
             <option value="vicious_syndicate_radars">Vicious Syndicate Radars</option>
           </select>
         </div>
