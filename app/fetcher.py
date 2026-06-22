@@ -809,6 +809,12 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
         structured = await fetch_class_stats(source_id=source.id)
         backend = structured.get("source", {}).get("backend", "hsreplay_api")
         return _dataset_from_structured(source, structured, backend=backend)
+    if source.id == "hsreplay_arena_class_pages_firecrawl":
+        from .hsreplay_arena_classes_firecrawl import fetch_arena_class_pages_firecrawl
+
+        structured = await fetch_arena_class_pages_firecrawl(source.id)
+        backend = structured.get("source", {}).get("backend", "firecrawl+hsreplay_arena_api")
+        return _dataset_from_structured(source, structured, backend=backend)
     if source.id == "hsreplay_arena_cards_advanced":
         from .hsreplay_arena_api import fetch_arena_card_tiers
 
@@ -876,7 +882,12 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
         structured = await fetch_hsreplay_ranked_cards(source)
         backend = structured.get("source", {}).get("backend", "hsreplay_cards_browser")
         return _dataset_from_structured(source, structured, backend=backend)
-    if source.id == "hsreplay_meta_archetypes_legend_eu_1d":
+    if source.id in {
+        "hsreplay_meta_archetypes_legend_eu_1d",
+        "hsreplay_meta_top_1000_legend_1d_firecrawl",
+        "hsreplay_meta_legend_1d_firecrawl",
+        "hsreplay_meta_diamond_4to1_1d_firecrawl",
+    }:
         from .hsreplay_meta_api import fetch_hsreplay_meta_archetypes
 
         structured = await fetch_hsreplay_meta_archetypes(source)

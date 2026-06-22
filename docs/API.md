@@ -504,6 +504,10 @@ Query parameters:
 - `hsreplay_cards_legend_1d`
 - `hsreplay_cards_wild_legend_1d`
 - `hsreplay_meta_archetypes_legend_eu_1d`
+- `hsreplay_meta_top_1000_legend_1d_firecrawl`
+- `hsreplay_meta_legend_1d_firecrawl`
+- `hsreplay_meta_diamond_4to1_1d_firecrawl`
+- `hsreplay_arena_class_pages_firecrawl`
 
 ### Firestone
 
@@ -532,6 +536,7 @@ Query parameters:
 | --- | --- | --- |
 | `card_stats` | `cards[]` with `id`, `dbfId`, `deck_popularity`, `copies`, `deck_winrate`, `games_played`, `wins_when_played`, `kept`, `winrate_when_drawn`, `avg_turns_in_hand`, `avg_turn_played_on` | HSReplay cards |
 | `arena_card_tiers` | `cards[]`, `by_class`, `total_cards`, `primary_class` | HSReplay Arena advanced |
+| `arena_class_pages` | `classes[]` with `class`, `slug`, `win_rate`, `pct_7_plus`, `pick_rate`, `num_drafts`, per-class Firecrawl status | HSReplay Arena class pages |
 | `bg_heroes` | `heroes[]` with `hero`, `dbfId`, `pick_rate`, `best_comp`, `avg_placement`, `tier`, `placement_distribution` | HSReplay BG heroes |
 | `bg_minions` | `minions[]` with `minion`, `minion_dbf_id`, `impact`, `win_share`, `popularity` | HSReplay BG minions |
 | `bg_compositions` | `compositions[]` with `type`, `first_place`, `avg_placement`, `popularity`, `placement_distribution` | HSReplay BG compositions |

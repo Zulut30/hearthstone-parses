@@ -44,7 +44,7 @@ def _scrape_sync(
         raise RuntimeError("FIRECRAWL_API_KEY/HS_FIRECRAWL_API_KEY is not configured")
 
     payload = {
-        "url": source.fetch_url,
+        "url": source.url,
         "formats": formats or ["html", "markdown"],
         "onlyMainContent": only_main_content,
         "maxAge": firecrawl_max_age_ms(),

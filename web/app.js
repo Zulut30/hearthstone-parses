@@ -22,6 +22,10 @@ const LABELS = {
   hsreplay_cards_legend_1d: "Карты · Legend · 1 день",
   hsreplay_cards_wild_legend_1d: "Карты Wild · Legend · 1 день",
   hsreplay_meta_archetypes_legend_eu_1d: "HSReplay · Архетипы Legend EU 1 день",
+  hsreplay_meta_top_1000_legend_1d_firecrawl: "HSReplay · Meta Top 1000 Legend 1 день",
+  hsreplay_meta_legend_1d_firecrawl: "HSReplay · Meta Legend 1 день",
+  hsreplay_meta_diamond_4to1_1d_firecrawl: "HSReplay · Meta Diamond 4-1 1 день",
+  hsreplay_arena_class_pages_firecrawl: "HSReplay · Arena классы Firecrawl",
   hsreplay_battlegrounds_minions: "BG · существа",
   hsreplay_battlegrounds_compositions: "BG · составы",
   firestone_battlegrounds_cards: "Firestone · BG существа по тавернам",
@@ -478,6 +482,24 @@ function renderDetail(p) {
         body += renderTableFromObjects(v.matchups.slice(0, 25));
       }
     }
+    body += "</div>";
+  } else if (t === "arena_class_pages" && v.classes) {
+    body = `<div class="block"><h3>Arena классы (${v.classes.length})</h3>`;
+    if (v.source) {
+      body += `<p class="muted">Backend: ${escapeHtml(v.source.backend || "")} · Firecrawl ok: ${escapeHtml(String(v.source.firecrawl_ok ?? ""))}/${escapeHtml(String(v.source.classes ?? ""))}</p>`;
+    }
+    body += renderTableFromObjects(
+      v.classes.map((c) => ({
+        Класс: c.class_ru || c.class_name || c.class,
+        "Class URL": c.url || "",
+        Winrate: c.winrate || (c.win_rate != null ? `${Number(c.win_rate).toFixed(2)}%` : ""),
+        "7+ побед": c.pct_7_plus != null ? `${Number(c.pct_7_plus).toFixed(2)}%` : "",
+        "Pick rate": c.pick_rate != null ? `${Number(c.pick_rate).toFixed(2)}%` : "",
+        Заходы: c.num_drafts ?? "",
+        Firecrawl: c.firecrawl?.ok ? "ok" : (c.firecrawl?.error || "—"),
+      })),
+      ["Класс", "Winrate", "7+ побед", "Pick rate", "Заходы", "Firecrawl"]
+    );
     body += "</div>";
   } else if (t === "matchups" && v.matchups && v.matchups.length) {
     body = `<div class="block"><h3>Матрица матчапов (${v.matchups.length} ячеек)</h3>`;

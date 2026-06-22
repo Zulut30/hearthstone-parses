@@ -51,6 +51,10 @@ MEDIUM_API_IDS: frozenset[str] = frozenset(
         "hsreplay_cards_legend_1d",
         "hsreplay_cards_wild_legend_1d",
         "hsreplay_meta_archetypes_legend_eu_1d",
+        "hsreplay_meta_top_1000_legend_1d_firecrawl",
+        "hsreplay_meta_legend_1d_firecrawl",
+        "hsreplay_meta_diamond_4to1_1d_firecrawl",
+        "hsreplay_arena_class_pages_firecrawl",
         "vicious_syndicate_live_beta",
         "vicious_syndicate_radars",
     }

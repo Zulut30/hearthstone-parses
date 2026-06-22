@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh HSReplay Arena class pages through Firecrawl every two days
+
+[Timer]
+OnCalendar=*-*-1/2 03:35:00 Europe/Warsaw
+AccuracySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

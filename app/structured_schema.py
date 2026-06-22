@@ -83,6 +83,17 @@ def _validate_arena_card_tiers(data: dict[str, Any]) -> None:
         _require(card.get("name"), f"arena_card_tiers.cards[{idx}] missing name")
 
 
+def _validate_arena_class_pages(data: dict[str, Any]) -> None:
+    classes = data.get("classes")
+    _require(isinstance(classes, list), "arena_class_pages.classes must be a list")
+    for idx, row in enumerate(classes):
+        _require(isinstance(row, dict), f"arena_class_pages.classes[{idx}] must be an object")
+        _require(row.get("class") or row.get("class_name"), f"arena_class_pages.classes[{idx}] missing class")
+        _require("win_rate" in row, f"arena_class_pages.classes[{idx}] missing win_rate")
+        _require("pick_rate" in row, f"arena_class_pages.classes[{idx}] missing pick_rate")
+        _require("pct_7_plus" in row, f"arena_class_pages.classes[{idx}] missing pct_7_plus")
+
+
 def _validate_vicious_live(data: dict[str, Any]) -> None:
     _require(isinstance(data.get("class_distribution"), list), "vicious_live.class_distribution must be a list")
     _require(isinstance(data.get("deck_distribution"), list), "vicious_live.deck_distribution must be a list")
@@ -112,6 +123,7 @@ def _validate_hsreplay_meta_archetypes(data: dict[str, Any]) -> None:
 
 
 _VALIDATORS = {
+    "arena_class_pages": _validate_arena_class_pages,
     "arena_card_tiers": _validate_arena_card_tiers,
     "bg_compositions": _validate_bg_compositions,
     "bg_heroes": _validate_bg_heroes,

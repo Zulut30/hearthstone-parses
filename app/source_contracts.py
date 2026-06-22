@@ -180,6 +180,36 @@ CONTRACTS: dict[str, SourceContract] = {
         regression_drop_ratio=0.35,
         fallback_policy="api_only",
     ),
+    "hsreplay_meta_top_1000_legend_1d_firecrawl": SourceContract(
+        source_id="hsreplay_meta_top_1000_legend_1d_firecrawl",
+        structured_type="hsreplay_meta_archetypes",
+        min_rows=20,
+        critical_fields=("winrate", "popularity", "games"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.45,
+        volatility="daily",
+        fallback_policy="api_only",
+    ),
+    "hsreplay_meta_legend_1d_firecrawl": SourceContract(
+        source_id="hsreplay_meta_legend_1d_firecrawl",
+        structured_type="hsreplay_meta_archetypes",
+        min_rows=20,
+        critical_fields=("winrate", "popularity", "games"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.45,
+        volatility="daily",
+        fallback_policy="api_only",
+    ),
+    "hsreplay_meta_diamond_4to1_1d_firecrawl": SourceContract(
+        source_id="hsreplay_meta_diamond_4to1_1d_firecrawl",
+        structured_type="hsreplay_meta_archetypes",
+        min_rows=20,
+        critical_fields=("winrate", "popularity", "games"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.45,
+        volatility="daily",
+        fallback_policy="api_only",
+    ),
     "vicious_syndicate_live_beta": SourceContract(
         source_id="vicious_syndicate_live_beta",
         structured_type="vicious_live",
@@ -220,6 +250,16 @@ CONTRACTS: dict[str, SourceContract] = {
         critical_fields=("win_rate", "pick_rate"),
         min_field_fill_rate=0.80,
         regression_drop_ratio=0.30,
+        fallback_policy="api_only",
+    ),
+    "hsreplay_arena_class_pages_firecrawl": SourceContract(
+        source_id="hsreplay_arena_class_pages_firecrawl",
+        structured_type="arena_class_pages",
+        min_rows=10,
+        critical_fields=("win_rate", "pick_rate", "pct_7_plus", "num_drafts"),
+        min_field_fill_rate=0.80,
+        regression_drop_ratio=0.30,
+        volatility="daily",
         fallback_policy="api_only",
     ),
     "hsreplay_battlegrounds_comps": SourceContract(
@@ -456,6 +496,8 @@ def _rows_for_structured(structured: dict[str, Any]) -> list[dict[str, Any]]:
     if stype == "trending_decks":
         return [row for row in (structured.get("decks") or []) if isinstance(row, dict)]
     if stype == "arena_class_matrix":
+        return [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    if stype == "arena_class_pages":
         return [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
     return []
 

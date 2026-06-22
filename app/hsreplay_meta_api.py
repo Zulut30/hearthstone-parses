@@ -7,6 +7,7 @@ from urllib.parse import parse_qs
 from bs4 import BeautifulSoup
 
 from .hsreplay_client import fetch_hsreplay_json, fetch_text_via_flaresolverr
+from .firecrawl_backend import scrape_source
 from .sources import Source
 
 HSREPLAY_ANALYTICS_BASE = "https://hsreplay.net/analytics/query"
@@ -135,6 +136,19 @@ def normalize_meta_archetypes(
 
 async def fetch_hsreplay_meta_archetypes(source: Source) -> dict[str, Any]:
     api_url = _meta_archetypes_url(source)
+    firecrawl_page: dict[str, Any] = {}
+    try:
+        scraped = await scrape_source(source)
+        firecrawl_page = {
+            "ok": True,
+            "final_url": scraped.final_url,
+            "status_code": scraped.status_code,
+            "content_length": scraped.content_length,
+            "markdown_length": len(scraped.markdown),
+            "credits_used": scraped.metadata.get("creditsUsed"),
+        }
+    except Exception as exc:
+        firecrawl_page = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:180]}"}
     payload = await fetch_hsreplay_json(
         api_url,
         source_id=source.id,
@@ -159,7 +173,8 @@ async def fetch_hsreplay_meta_archetypes(source: Source) -> dict[str, Any]:
             "key": "hsreplay",
             "url": source.url,
             "api_url": api_url,
-            "backend": "hsreplay_meta_api",
+            "backend": "firecrawl+hsreplay_meta_api" if firecrawl_page.get("ok") else "hsreplay_meta_api",
+            "firecrawl_page": firecrawl_page,
             "classes": len(classes),
             "archetypes": total_archetypes,
         },

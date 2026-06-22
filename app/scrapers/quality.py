@@ -226,6 +226,14 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             if len(matchups) < 50:
                 return False, f"arena dual-class matchups too few ({len(matchups)})"
             return True, "ok"
+        if structured.get("type") == "arena_class_pages":
+            classes = structured.get("classes") or []
+            if len(classes) < 10:
+                return False, f"arena class pages too few ({len(classes)})"
+            with_stats = sum(1 for row in classes if row.get("win_rate") is not None and row.get("pick_rate") is not None)
+            if with_stats < 10:
+                return False, f"arena class pages missing stats ({with_stats}/{len(classes)})"
+            return True, "ok"
         if structured.get("type") == "bg_heroes":
             heroes = structured.get("heroes") or []
             if structured.get("blocked"):
