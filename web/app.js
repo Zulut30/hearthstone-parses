@@ -671,14 +671,25 @@ function renderDetail(p) {
   } else if (t === "bg_comps" && v.comps && v.comps.length) {
     body = `<div class="block"><h3>Компы Battlegrounds (${v.comps.length})</h3>`;
     for (const c of v.comps) {
-      const title = c.title || c.name || c.slug || "?";
-      body += `<div class="strategy"><h4>${escapeHtml(title)} <span class="muted">#${escapeHtml(String(c.comp_id || c.source_id || ""))}</span></h4>`;
+      const title = c.strategy_title || c.title || c.name || c.slug || "?";
+      const meta = [
+        c.tier ? `Тир ${c.tier}` : "",
+        c.difficulty ? `Сложность: ${c.difficulty}` : "",
+        `#${c.comp_id || c.source_id || ""}`,
+      ].filter(Boolean).join(" · ");
+      body += `<div class="strategy"><h4>${escapeHtml(title)} <span class="muted">${escapeHtml(meta)}</span></h4>`;
       if (c.url) body += `<p class="muted"><a href="${escapeHtml(c.url)}" target="_blank" rel="noopener">${escapeHtml(c.url)}</a></p>`;
       if (c.main_cards?.length) {
-        body += `<p><strong>Основа (${c.main_cards.length})</strong></p>${renderCards(c.main_cards)}`;
+        body += `<p><strong>Ключевые карты (${c.main_cards.length})</strong></p>${renderCards(c.main_cards)}`;
       }
       if (c.additional_cards?.length) {
-        body += `<p><strong>Доп. миньоны (${c.additional_cards.length})</strong></p>${renderCards(c.additional_cards)}`;
+        body += `<p><strong>Дополнительные карты (${c.additional_cards.length})</strong></p>${renderCards(c.additional_cards)}`;
+      }
+      if (c.when_to_commit_cards?.length) {
+        body += `<p><strong>Когда выходить в стратегию (${c.when_to_commit_cards.length})</strong></p>${renderCards(c.when_to_commit_cards)}`;
+      }
+      if (c.enabler_cards?.length) {
+        body += `<p><strong>Открывают стратегию (${c.enabler_cards.length})</strong></p>${renderCards(c.enabler_cards)}`;
       }
       body += "</div>";
     }

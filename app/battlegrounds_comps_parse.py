@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import re
+from pathlib import Path
 from typing import Any
 
 from .cards_index import card_from_id, card_label, cards_by_dbfid, cards_by_id
+from .firecrawl_backend import scrape_source
 from .hsreplay_client import fetch_hsreplay_html, fetch_hsreplay_markdown, jina_url
+from .sources import Source
 
 # --- simple on-disk cache for comp *detail* pages (to dampen 403/451/504 noise) ---
 import time
@@ -94,6 +97,22 @@ def _title_from_slug(slug: str) -> str:
     return slug.replace("-", " ").strip().title()
 
 
+def _clean_md_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value.replace("\\", " ")).strip()
+
+
+def _strip_comp_season(title: str) -> str:
+    return re.sub(r"\s+Comp\s+Season\s+\d+\s*$", "", title, flags=re.I).strip()
+
+
+def _split_comp_title(title: str) -> tuple[str, str]:
+    clean = _strip_comp_season(title)
+    if " - " in clean:
+        family, strategy = [part.strip() for part in clean.split(" - ", 1)]
+        return family, clean if strategy else family
+    return clean, clean
+
+
 def _group_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for card in cards:
@@ -164,6 +183,81 @@ def parse_hsreplay_minion_cards(section: str) -> list[dict[str, Any]]:
         seen.add(card_id)
         cards.append(_card_from_hsjson("", card_id))
     return cards
+
+
+def _extract_markdown_links(section: str) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for label, url in re.findall(r"\[([^\]]+)\]\((https://hsreplay\.net/battlegrounds/minions/\d+/[^)]+)\)", section):
+        out.append({"label": _clean_md_text(label), "url": url})
+    return out
+
+
+def _section_after_heading(markdown: str, heading_re: str) -> str:
+    match = re.search(heading_re, markdown, flags=re.I | re.M)
+    if not match:
+        return ""
+    start = match.end()
+    next_heading = re.search(r"^#{2,3}\s+", markdown[start:], flags=re.M)
+    end = start + next_heading.start() if next_heading else len(markdown)
+    return markdown[start:end].strip()
+
+
+def _cards_from_section(section: str) -> list[dict[str, Any]]:
+    return _group_cards(parse_hsreplay_minion_cards(section) + parse_hearthstonejson_images(section))
+
+
+def _summary_text_from_section(section: str) -> str:
+    lines = []
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("[![") or line.startswith("!["):
+            continue
+        if "hearthstonejson.com" in line or "hsreplay.net/battlegrounds/minions/" in line:
+            continue
+        line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+        line = _clean_md_text(line)
+        if line:
+            lines.append(line)
+    return " ".join(lines)[:1200]
+
+
+def parse_hsreplay_comp_detail_markdown(markdown: str, *, url: str = "") -> dict[str, Any]:
+    lines = [line.strip() for line in markdown.splitlines() if line.strip()]
+    title_line = next((line for line in lines if line.startswith("# ")), "")
+    title = _strip_comp_season(title_line[2:].strip()) if title_line else ""
+    name, strategy_title = _split_comp_title(title or _title_from_slug(url.rstrip("/").split("/")[-1]))
+    difficulty = next((line for line in lines[:12] if line in {"Easy", "Medium", "Hard"}), None)
+    tier = next((line.upper() for line in lines[:12] if line.lower() in {"s", "a", "b", "c", "d", "e", "f"}), None)
+
+    core_section = _section_after_heading(markdown, r"^##\s+Core Cards for .+$")
+    addon_section = _section_after_heading(markdown, r"^##\s+Addon Cards for .+$")
+    how_section = _section_after_heading(markdown, r"^##\s+How to Play .+$")
+    commit_section = _section_after_heading(markdown, r"^##\s+When to Commit to .+$")
+    enabler_section = _section_after_heading(markdown, r"^##\s+Common Enablers for .+$")
+
+    main_cards = _cards_from_section(core_section)
+    additional_cards = _dedupe_additional(main_cards, _cards_from_section(addon_section))
+    how_cards = _dedupe_additional([], _cards_from_section(how_section))
+    when_to_commit_cards = _dedupe_additional([], _cards_from_section(commit_section))
+    enabler_cards = _dedupe_additional([], _cards_from_section(enabler_section))
+
+    return {
+        "name": name,
+        "title": strategy_title,
+        "strategy_title": strategy_title,
+        "tier": tier,
+        "difficulty": difficulty,
+        "main_cards": main_cards,
+        "core_cards": main_cards,
+        "additional_cards": additional_cards,
+        "addon_cards": additional_cards,
+        "how_to_play": _summary_text_from_section(how_section),
+        "how_to_play_cards": how_cards,
+        "when_to_commit": _summary_text_from_section(commit_section),
+        "when_to_commit_cards": when_to_commit_cards,
+        "enabler_cards": enabler_cards,
+        "minions": [c.get("name") for c in main_cards + additional_cards if c.get("name")],
+    }
 
 
 def _find_comp_headers(markdown: str) -> list[dict[str, Any]]:
@@ -347,6 +441,17 @@ def parse_hsreplay_markdown(markdown: str, *, detail_limit: int = 12) -> list[di
         additional_cards = _group_cards(
             parse_hsreplay_minion_cards(section) + parse_hearthstonejson_images(section)
         )
+        caption_text = _clean_md_text(re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", caption))
+        difficulty = next((d for d in ("Easy", "Medium", "Hard") if re.search(rf"\b{d}\b", caption_text)), None)
+        tier = None
+        for prev in reversed(lines[max(0, header["line"] - 80):header["line"]]):
+            if prev.strip().lower() in {"s", "a", "b", "c", "d", "e", "f"}:
+                tier = prev.strip().upper()
+                break
+        title = _title_from_slug(header["slug"])
+        if " - " not in title:
+            title = title.replace(" ", " - ", 1)
+        name, strategy_title = _split_comp_title(title)
 
         comps.append(
             {
@@ -355,11 +460,18 @@ def parse_hsreplay_markdown(markdown: str, *, detail_limit: int = 12) -> list[di
                 "source": "hsreplay",
                 "source_id": header["remote_id"],
                 "slug": header["slug"],
-                "name": _title_from_slug(header["slug"]),
-                "title": _title_from_slug(header["slug"]),
+                "name": name,
+                "title": strategy_title,
+                "strategy_title": strategy_title,
+                "tier": tier,
+                "difficulty": difficulty,
                 "description": "",
                 "main_cards": main_cards,
+                "core_cards": main_cards,
                 "additional_cards": additional_cards,
+                "addon_cards": additional_cards,
+                "when_to_commit_cards": [],
+                "enabler_cards": [],
                 "minions": [c.get("name") for c in additional_cards if c.get("name")],
                 "url": _abs_hsreplay_url(header["url"]),
                 "_fetch_detail": i < detail_limit,
@@ -387,21 +499,84 @@ async def _enrich_comp_cards(
     additional_cards = _group_cards(detail.get("additional_cards") or [])
     if main_cards or additional_cards:
         comp = dict(comp)
-        comp["main_cards"] = main_cards
-        comp["additional_cards"] = additional_cards
-        comp["minions"] = [c.get("name") for c in additional_cards if c.get("name")]
+        comp.update(detail)
+        comp["main_cards"] = main_cards or comp.get("main_cards") or []
+        comp["core_cards"] = comp["main_cards"]
+        comp["additional_cards"] = additional_cards or comp.get("additional_cards") or []
+        comp["addon_cards"] = comp["additional_cards"]
+        comp["minions"] = [c.get("name") for c in comp["main_cards"] + comp["additional_cards"] if c.get("name")]
     return comp
+
+
+async def _firecrawl_detail(url: str, *, source_id: str) -> dict[str, Any]:
+    source = Source(f"{source_id}_detail", url, "hsreplay", "battlegrounds", description=f"HSReplay BG comp detail {url}")
+    scraped = await scrape_source(source)
+    detail = parse_hsreplay_comp_detail_markdown(scraped.markdown, url=url)
+    detail["_detail_backend"] = "firecrawl"
+    return detail
+
+
+async def fetch_battlegrounds_comps_firecrawl(
+    *,
+    source_id: str = "hsreplay_battlegrounds_comps",
+    detail_limit: int = 40,
+) -> dict[str, Any]:
+    source = Source(source_id, HSREPLAY_COMPS_URL, "hsreplay", "battlegrounds", description="HSReplay Battlegrounds comps.")
+    scraped = await scrape_source(source)
+    comps = parse_hsreplay_markdown(scraped.markdown, detail_limit=detail_limit)
+    errors: list[str] = []
+    sem = asyncio.Semaphore(4)
+
+    async def enrich(comp: dict[str, Any]) -> dict[str, Any]:
+        url = _abs_hsreplay_url(comp.get("url") or "")
+        if not url:
+            return comp
+        async with sem:
+            try:
+                detail = await _firecrawl_detail(url, source_id=source_id)
+            except Exception as exc:
+                errors.append(f"{url}: {type(exc).__name__}: {str(exc)[:160]}")
+                return comp
+        merged = {**comp, **{k: v for k, v in detail.items() if v not in (None, "", [])}}
+        merged["url"] = url
+        merged["main_cards"] = merged.get("main_cards") or []
+        merged["core_cards"] = merged["main_cards"]
+        merged["additional_cards"] = merged.get("additional_cards") or []
+        merged["addon_cards"] = merged["additional_cards"]
+        merged["minions"] = [c.get("name") for c in merged["main_cards"] + merged["additional_cards"] if c.get("name")]
+        return merged
+
+    comps = await asyncio.gather(*[enrich(comp) for comp in comps[:detail_limit]])
+    with_cards = sum(1 for c in comps if c.get("main_cards") or c.get("additional_cards"))
+    return {
+        "type": "bg_comps",
+        "comps": list(comps),
+        "blocked": len(comps) < 3,
+        "source": {
+            "key": "hsreplay",
+            "url": HSREPLAY_COMPS_URL,
+            "backend": "firecrawl",
+            "listing_final_url": scraped.final_url,
+            "comps_with_cards": with_cards,
+            "comps_total": len(comps),
+            "errors": errors,
+        },
+    }
 
 
 async def fetch_battlegrounds_comps(
     *,
     source_id: str = "hsreplay_battlegrounds_comps",
-    detail_limit: int = 32,
+    detail_limit: int = 40,
 ) -> dict[str, Any]:
     backend = "hsreplay_flaresolverr"
     markdown = ""
     errors: list[str] = []
     comps: list[dict[str, Any]] = []
+    try:
+        return await fetch_battlegrounds_comps_firecrawl(source_id=source_id, detail_limit=detail_limit)
+    except Exception as exc:
+        errors.append(f"firecrawl: {type(exc).__name__}: {str(exc)[:180]}")
     try:
         markdown, backend = await fetch_hsreplay_markdown(
             HSREPLAY_COMPS_URL, source_id=source_id

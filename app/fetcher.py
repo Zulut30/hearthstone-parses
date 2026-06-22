@@ -776,7 +776,7 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
     if source.id == "hsreplay_battlegrounds_comps":
         from .battlegrounds_comps_parse import fetch_battlegrounds_comps
 
-        structured = await fetch_battlegrounds_comps(source_id=source.id, detail_limit=24)
+        structured = await fetch_battlegrounds_comps(source_id=source.id, detail_limit=40)
         backend = structured.get("source", {}).get("backend", "hsreplay_jina_markdown")
         return _dataset_from_structured(source, structured, backend=backend)
     if source.id == "hsreplay_battlegrounds_heroes":

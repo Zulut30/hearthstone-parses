@@ -169,6 +169,31 @@ Query parameters:
 curl -s "https://api.hs-manacost.ru/api/bg/trinkets?trinket_tier=lesser" | jq '.trinkets[] | select(.name=="Colorful Compass")'
 ```
 
+### `GET /datasets/hsreplay_battlegrounds_comps`
+
+HSReplay BG strategies парсятся через Firecrawl: список стратегий берется с `/battlegrounds/comps/`, затем каждая detail-страница обогащает карточку стратегии.
+
+Ключевые поля `data.structured.comps[]`:
+
+| Field | Описание |
+| --- | --- |
+| `tier` | HSReplay tier стратегии (`S`, `A`, `B`...). |
+| `name` | Семейство стратегии, например `Mechs`. |
+| `title` / `strategy_title` | Полное название, например `Mechs - Magnetics`. |
+| `difficulty` | Сложность HSReplay: `Easy`, `Medium`, `Hard`. |
+| `main_cards` / `core_cards` | Ключевые карты стратегии. |
+| `additional_cards` / `addon_cards` | Дополнительные синергичные карты. |
+| `when_to_commit_cards` | Карты из блока `When to Commit`; использовать как “когда выходить в стратегию”. |
+| `enabler_cards` | Карты из блока `Common Enablers`. |
+| `how_to_play_cards` | Карты, упомянутые в гайде `How to Play`. |
+
+Пример:
+
+```bash
+curl -s "https://api.hs-manacost.ru/datasets/hsreplay_battlegrounds_comps" \
+  | jq '.data.structured.comps[] | {tier, title, difficulty, core: [.main_cards[].name], when: [.when_to_commit_cards[].name]}'
+```
+
 ## HSReplay Archetype Database
 
 Полная архитектура и эксплуатация описаны в
