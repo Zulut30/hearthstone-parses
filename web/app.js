@@ -1490,7 +1490,7 @@ async function selectDbSearch(btn) {
       </div>
       
       <div style="display: flex; gap: 10px; align-items: center;">
-        <input type="text" id="db-search-query" placeholder="Название колоды, архетип, карта или код..." style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.6rem 1rem; border-radius: 6px; font-size: 0.95rem; flex: 1;" />
+        <input type="text" id="db-search-query" placeholder="Название колоды, архетип или код..." style="background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 0.6rem 1rem; border-radius: 6px; font-size: 0.95rem; flex: 1;" />
         <button id="db-search-btn" class="source-btn" style="background: #ff9f1c; color: #000; font-weight: bold; border: none; padding: 0.6rem 1.5rem; border-radius: 6px; cursor: pointer;">Найти</button>
       </div>
     </div>
