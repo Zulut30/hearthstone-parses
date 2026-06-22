@@ -39,6 +39,7 @@ X-API-Key: <HS_API_KEY>
 | `GET` | `/ui` | Web UI. |
 | `GET` | `/ui/logs` | UI логов. |
 | `GET` | `/ui/technologies` | UI страницы технологий. |
+| `GET` | `/api/bg/trinkets` | Объединенный BG endpoint малых/больших аксессуаров с tier и race variants. |
 | `GET` | `/api/db/decks` | SQL-backed поиск колод. |
 | `GET` | `/api/db/cards/trends` | SQL-backed история популярности карт. |
 | `GET` | `/api/db/archetypes` | SQL-backed список последних HSReplay archetype snapshots. |
@@ -140,6 +141,33 @@ curl -s "https://api.hs-manacost.ru/sources?site=hsreplay" | jq .
 ```
 
 Если live refresh упал, но старый cache рабочий, endpoint может продолжать отдавать старый dataset. В status тогда появляются `serving_cached_dataset`, `effective_state=ok_cached`, `last_refresh_state`, `last_refresh_error`, `cached_dataset_age_hours`. Это не ломает публичный `/health`, но видно в `/ops/health`, `/ops/summary` и `python -m app.cli freshness-check`.
+
+### `GET /api/bg/trinkets`
+
+Публичный endpoint для `bg.kolodahearthstone.ru`: объединяет `hsreplay_battlegrounds_trinkets_lesser` и `hsreplay_battlegrounds_trinkets_greater` и сохраняет варианты одной карты по расе.
+
+Query parameters:
+
+| Parameter | Type | Описание |
+| --- | --- | --- |
+| `trinket_tier` | `all`, `lesser`, `greater` | Фильтр по малым/большим аксессуарам. По умолчанию `all`. |
+| `active_only` | boolean | Показывать только строки с `pick_rate` или `avg_placement`. По умолчанию `true`. |
+
+Важные поля строки:
+
+| Field | Описание |
+| --- | --- |
+| `trinket_tier` / `type` | Lesser или Greater. |
+| `tier` | HSReplay tier-группа (`S`, `A`, `B`...), если есть в странице. |
+| `cost` | Число на медальоне аксессуара. |
+| `tribe`, `race`, `tribe_ru` | Вариант расы для карт вроде `Colorful Compass`. |
+| `variant_key` | Стабильный ключ варианта: не дедупить Compass только по `name`. |
+
+Пример:
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/bg/trinkets?trinket_tier=lesser" | jq '.trinkets[] | select(.name=="Colorful Compass")'
+```
 
 ## HSReplay Archetype Database
 

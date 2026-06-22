@@ -191,6 +191,62 @@ def public_dataset_payload(source_id: str, dataset: dict[str, Any]) -> dict[str,
     return payload
 
 
+def _trinket_rows_for_api(source_id: str, *, active_only: bool = True) -> list[dict[str, Any]]:
+    from .structured import enrich_trinket_variant_fields
+
+    trinket_type = "Lesser" if source_id.endswith("_lesser") else "Greater"
+    dataset = load_dataset(source_id) or {}
+    structured = (dataset.get("data") or {}).get("structured") or {}
+    rows = structured.get("trinkets") or []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if active_only and not (row.get("pick_rate") or row.get("avg_placement")):
+            continue
+        item = enrich_trinket_variant_fields(dict(row), trinket_type=trinket_type)
+        item["source_id"] = source_id
+        item["source_url"] = SOURCE_BY_ID[source_id].url
+        out.append(item)
+    return out
+
+
+@app.get("/api/bg/trinkets")
+def bg_trinkets(
+    trinket_tier: str = Query("all", pattern="^(all|lesser|greater)$"),
+    active_only: bool = Query(True),
+) -> dict[str, Any]:
+    source_ids = list(ACTIVE_TRINKET_SOURCE_IDS)
+    if trinket_tier == "lesser":
+        source_ids = ["hsreplay_battlegrounds_trinkets_lesser"]
+    elif trinket_tier == "greater":
+        source_ids = ["hsreplay_battlegrounds_trinkets_greater"]
+    rows: list[dict[str, Any]] = []
+    fetched_at: list[str] = []
+    for source_id in source_ids:
+        dataset = load_dataset(source_id)
+        if dataset and dataset.get("fetched_at"):
+            fetched_at.append(str(dataset["fetched_at"]))
+        rows.extend(_trinket_rows_for_api(source_id, active_only=active_only))
+    rows.sort(
+        key=lambda row: (
+            row.get("trinket_tier") or "",
+            str(row.get("tier") or "Z"),
+            float(row.get("avg_placement") or 99),
+            row.get("name") or "",
+            row.get("tribe") or "",
+        )
+    )
+    return {
+        "type": "bg_trinkets",
+        "count": len(rows),
+        "active_only": active_only,
+        "trinket_tier": trinket_tier,
+        "fetched_at": max(fetched_at) if fetched_at else None,
+        "trinkets": rows,
+    }
+
+
 @app.get("/system/technologies")
 def system_technologies() -> dict:
     from .tech_stack import build_technologies_payload

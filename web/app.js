@@ -246,10 +246,10 @@ function renderTrinketCards(rows) {
       return `<article class="trinket-card">
         <div class="trinket-card__head">
           <div>
-            <h5>${escapeHtml(x.name || "Unknown trinket")}</h5>
-            <p>${escapeHtml(x.localized_name || "")}</p>
+            <h5>${escapeHtml(x.name || "Unknown trinket")}${x.tribe ? ` · ${escapeHtml(x.tribe)}` : ""}</h5>
+            <p>${escapeHtml([x.localized_name, x.tribe_ru].filter(Boolean).join(" · "))}</p>
           </div>
-          <span class="badge ok">${escapeHtml(x.type || "")}</span>
+          <span class="badge ok">${escapeHtml([x.trinket_tier || x.type, x.tier ? `Tier ${x.tier}` : ""].filter(Boolean).join(" · "))}</span>
         </div>
         <div class="trinket-card__stats">
           <span>Cost <b>${escapeHtml(String(x.cost ?? ""))}</b></span>
@@ -598,7 +598,10 @@ function renderDetail(p) {
     const toRow = (x) => ({
       Тринкет: x.name || "",
       "RU название": x.localized_name || "",
-      Тип: x.type || "",
+      Раса: x.tribe || "",
+      "Раса RU": x.tribe_ru || "",
+      Тип: x.trinket_tier || x.type || "",
+      Тир: x.tier || "",
       Cost: x.cost ?? "",
       "Pick Rate": x.pick_rate || "",
       "Avg placement": x.avg_placement || "",
@@ -617,7 +620,7 @@ function renderDetail(p) {
     body += `<h4>Таблица со статистикой (${withStats.length})</h4>`;
     body += renderTableFromObjects(
       withStats.map(toRow),
-      ["Тринкет", "RU название", "Тип", "Cost", "Pick Rate", "Avg placement", "1 место", "ID"],
+      ["Тринкет", "RU название", "Раса", "Раса RU", "Тип", "Тир", "Cost", "Pick Rate", "Avg placement", "1 место", "ID"],
       { limit: null }
     );
     body += "</div>";

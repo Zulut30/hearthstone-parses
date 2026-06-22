@@ -380,6 +380,35 @@ _TRINKET_SKIP = {
     "s", "—", ".",
 }
 
+TRINKET_TRIBE_RU_TO_EN = {
+    "Зверь": "Beast",
+    "Демон": "Demon",
+    "Дракон": "Dragon",
+    "Элементаль": "Elemental",
+    "Механизм": "Mech",
+    "Робот": "Mech",
+    "Мурлок": "Murloc",
+    "Нага": "Naga",
+    "Пират": "Pirate",
+    "Свинобраз": "Quilboar",
+    "Кабан": "Quilboar",
+    "Нежить": "Undead",
+}
+TRINKET_TRIBE_EN_TO_RU = {
+    "Beast": "Зверь",
+    "Demon": "Демон",
+    "Dragon": "Дракон",
+    "Elemental": "Элементаль",
+    "Mech": "Механизм",
+    "Murloc": "Мурлок",
+    "Naga": "Нага",
+    "Pirate": "Пират",
+    "Quilboar": "Свинобраз",
+    "Undead": "Нежить",
+}
+TRINKET_TRIBES = set(TRINKET_TRIBE_EN_TO_RU) | set(TRINKET_TRIBE_RU_TO_EN)
+TRINKET_TIER_MARKERS = {"s", "a", "b", "c", "d", "e", "f"}
+
 
 def _looks_like_trinket_name(line: str) -> bool:
     if line in _TRINKET_SKIP or len(line) < 4 or len(line) > 80:
@@ -395,6 +424,69 @@ def _looks_like_trinket_name(line: str) -> bool:
     return True
 
 
+def normalize_trinket_tribe(value: Any) -> tuple[str | None, str | None]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    if raw in TRINKET_TRIBE_RU_TO_EN:
+        tribe = TRINKET_TRIBE_RU_TO_EN[raw]
+        return tribe, raw
+    if raw in TRINKET_TRIBE_EN_TO_RU:
+        return raw, TRINKET_TRIBE_EN_TO_RU[raw]
+    return None, None
+
+
+def _is_trinket_tribe(value: str) -> bool:
+    return normalize_trinket_tribe(value)[0] is not None
+
+
+def _active_trinket_tier(lines: list[str], index: int) -> str | None:
+    for prev in reversed(lines[max(0, index - 80):index]):
+        marker = prev.strip().lower()
+        if marker in TRINKET_TIER_MARKERS:
+            return marker.upper()
+        if prev in ("Tier", "Trinket", "Placement Distribution"):
+            return None
+    return None
+
+
+def trinket_variant_key(row: dict[str, Any], trinket_type: str | None = None) -> str:
+    name = str(row.get("name") or "").strip().lower()
+    tribe = str(row.get("tribe") or row.get("race") or "").strip().lower()
+    description = str(row.get("description") or "").strip().lower()
+    card_id = str(row.get("trinket_id") or row.get("id") or "").strip().lower()
+    type_key = str(row.get("trinket_tier") or row.get("type") or trinket_type or "").strip().lower()
+    return "|".join([type_key, name, tribe, card_id, description[:80]])
+
+
+def trinket_identity_key(row: dict[str, Any], trinket_type: str | None = None) -> str:
+    name = str(row.get("name") or "").strip().lower()
+    tribe = str(row.get("tribe") or row.get("race") or "").strip().lower()
+    card_id = str(row.get("trinket_id") or row.get("id") or "").strip().lower()
+    type_key = str(row.get("trinket_tier") or row.get("type") or trinket_type or "").strip().lower()
+    return "|".join([type_key, name, tribe, card_id])
+
+
+def enrich_trinket_variant_fields(row: dict[str, Any], *, trinket_type: str | None = None) -> dict[str, Any]:
+    out = dict(row)
+    if trinket_type:
+        out.setdefault("type", trinket_type)
+        out.setdefault("trinket_tier", trinket_type)
+    if out.get("type") and not out.get("trinket_tier"):
+        out["trinket_tier"] = out["type"]
+    tribe, tribe_ru = normalize_trinket_tribe(out.get("tribe") or out.get("race"))
+    if not tribe:
+        tribe, tribe_ru = normalize_trinket_tribe(out.get("description"))
+    if tribe:
+        out["tribe"] = tribe
+        out["race"] = tribe
+        out["tribe_ru"] = tribe_ru
+        if str(out.get("description") or "").strip() in TRINKET_TRIBE_RU_TO_EN:
+            out.pop("description", None)
+    out["variant_key"] = trinket_variant_key(out, trinket_type)
+    return out
+
+
 def parse_bg_trinkets(lines: list[str]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     start = 0
@@ -404,8 +496,13 @@ def parse_bg_trinkets(lines: list[str]) -> list[dict[str, Any]]:
             break
     i = start
     current: dict[str, Any] | None = None
+    current_tier: str | None = None
     while i < len(lines):
         line = lines[i]
+        if line.strip().lower() in TRINKET_TIER_MARKERS:
+            current_tier = line.strip().upper()
+            i += 1
+            continue
         if _is_percent(line) and "Place" not in line:
             if current is not None:
                 current["pick_rate"] = line
@@ -421,8 +518,16 @@ def parse_bg_trinkets(lines: list[str]) -> list[dict[str, Any]]:
         if _looks_like_trinket_name(line):
             if current is not None:
                 items.append(current)
-            current = {"name": line, "description": ""}
+            current = {"name": line, "description": "", "tier": current_tier or _active_trinket_tier(lines, i)}
+            if i > 0 and lines[i - 1].isdigit():
+                current["cost"] = int(lines[i - 1])
             i += 1
+            if i < len(lines) and _is_trinket_tribe(lines[i]):
+                tribe, tribe_ru = normalize_trinket_tribe(lines[i])
+                current["tribe"] = tribe
+                current["race"] = tribe
+                current["tribe_ru"] = tribe_ru
+                i += 1
             continue
         if current is not None and not _looks_like_trinket_name(line):
             current["description"] = (current.get("description", "") + " " + line).strip()[:180]
@@ -437,12 +542,13 @@ def parse_bg_trinkets(lines: list[str]) -> list[dict[str, Any]]:
         name = str(t.get("name") or "").strip()
         if len(name) < 4 or not name[0].isalnum():
             continue
-        key = name.lower()
+        t = enrich_trinket_variant_fields(t)
+        key = trinket_variant_key(t)
         if key in seen:
             continue
         seen.add(key)
         out.append(t)
-    return out[:80]
+    return out[:140]
 
 
 def parse_arena_matrix(tables: list[dict[str, Any]], lines: list[str]) -> list[dict[str, Any]]:

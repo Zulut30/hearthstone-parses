@@ -544,7 +544,12 @@ def _dedupe_streamer_decks_parsed(parsed: dict[str, Any]) -> dict[str, Any]:
 
 
 def _enrich_firecrawl_trinkets_from_cache(source: Source, parsed: dict[str, Any]) -> dict[str, Any]:
-    import re
+    from .structured import (
+        enrich_trinket_variant_fields,
+        normalize_trinket_tribe,
+        trinket_identity_key,
+        trinket_variant_key,
+    )
 
     if source.id not in {
         "hsreplay_battlegrounds_trinkets_lesser",
@@ -561,28 +566,45 @@ def _enrich_firecrawl_trinkets_from_cache(source: Source, parsed: dict[str, Any]
     previous = load_dataset(source.id) or {}
     previous_structured = (previous.get("data") or {}).get("structured") or {}
     canonical_rows = previous_structured.get("trinkets") or []
-    by_name = {
-        str(row.get("name") or "").strip().lower(): row
+    trinket_type = "Lesser" if source.id.endswith("_lesser") else "Greater"
+    normalized_canonical = [
+        enrich_trinket_variant_fields(dict(row), trinket_type=trinket_type)
         for row in canonical_rows
         if isinstance(row, dict) and row.get("name")
+    ]
+    by_id = {
+        str(row.get("trinket_id") or row.get("id") or "").strip().lower(): row
+        for row in normalized_canonical
+        if row.get("trinket_id") or row.get("id")
     }
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for row in normalized_canonical:
+        by_name.setdefault(str(row.get("name") or "").strip().lower(), []).append(row)
 
     previous_active = [
-        dict(row)
-        for row in canonical_rows
+        enrich_trinket_variant_fields(dict(row), trinket_type=trinket_type)
+        for row in normalized_canonical
         if isinstance(row, dict) and (row.get("pick_rate") or row.get("avg_placement"))
     ]
     enriched_by_key: dict[str, dict[str, Any]] = {
-        str(row.get("name") or "").strip().lower(): row
+        trinket_variant_key(row, trinket_type): row
         for row in previous_active
         if row.get("name")
     }
-    trinket_type = "Lesser" if source.id.endswith("_lesser") else "Greater"
     for row in rows:
         if not isinstance(row, dict):
             continue
+        row = enrich_trinket_variant_fields(dict(row), trinket_type=trinket_type)
         name_key = str(row.get("name") or "").strip().lower()
-        canonical = by_name.get(name_key) or {}
+        id_key = str(row.get("trinket_id") or row.get("id") or "").strip().lower()
+        tribe, _ = normalize_trinket_tribe(row.get("tribe") or row.get("race"))
+        candidates = by_name.get(name_key) or []
+        canonical = by_id.get(id_key) if id_key else None
+        if not canonical and tribe:
+            canonical = next((item for item in candidates if item.get("tribe") == tribe), None)
+        if not canonical and len(candidates) == 1:
+            canonical = candidates[0]
+        canonical = canonical or {}
         if not canonical:
             continue
         merged = {**canonical, **row}
@@ -602,8 +624,13 @@ def _enrich_firecrawl_trinkets_from_cache(source: Source, parsed: dict[str, Any]
             merged["localized_name"] = canonical["localized_name"]
         if canonical.get("description") and not merged.get("description"):
             merged["description"] = canonical["description"]
+        merged = enrich_trinket_variant_fields(merged, trinket_type=trinket_type)
         if merged.get("trinket_id") and (merged.get("pick_rate") or merged.get("avg_placement")):
-            enriched_by_key[name_key] = merged
+            identity = trinket_identity_key(merged, trinket_type)
+            for existing_key, existing in list(enriched_by_key.items()):
+                if trinket_identity_key(existing, trinket_type) == identity:
+                    enriched_by_key.pop(existing_key, None)
+            enriched_by_key[trinket_variant_key(merged, trinket_type)] = merged
 
     enriched = list(enriched_by_key.values())
     if enriched:
@@ -652,7 +679,16 @@ async def _try_firecrawl_html(
             detail=reason,
         )
         scraped = await scrape_source(source)
-        parsed = parse_html(source, scraped.html)
+        snapshot = None
+        if scraped.markdown:
+            snapshot = {
+                "lines": [
+                    line.strip()
+                    for line in scraped.markdown.splitlines()
+                    if line.strip()
+                ]
+            }
+        parsed = parse_html(source, scraped.html, snapshot=snapshot)
         if not parsed.get("title"):
             parsed["title"] = source.description or source.id
         if source.id == "hsguru_streamer_decks_legend_1000":
