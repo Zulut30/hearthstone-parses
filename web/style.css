@@ -451,6 +451,62 @@ a:hover { color: #9cc3ff; }
   font-size: 0.78rem;
 }
 
+.bg-db-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 1rem;
+  align-items: start;
+}
+.bg-shot-block {
+  overflow: hidden;
+}
+.bg-compositions-shot {
+  display: block;
+  width: 100%;
+  max-height: 620px;
+  object-fit: contain;
+  background: #140b18;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+}
+.bg-minion-controls {
+  grid-template-columns: minmax(140px, 180px) minmax(180px, 1fr) auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  margin: 0;
+}
+.table-scroll {
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+}
+.table-scroll table.simple th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+.bg-minions-table td:first-child {
+  min-width: 220px;
+}
+.metric-good { color: var(--ok); }
+.metric-bad { color: var(--err); }
+.bg-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.bg-chart-card canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 5 / 2;
+  min-height: 240px;
+  background: #0f131b;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-sm);
+}
+
 .content {
   padding: 1.5rem 1.75rem;
   overflow-y: auto;
@@ -969,6 +1025,14 @@ table.simple tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   .header { padding: 1.25rem 1rem 1.1rem; }
   .content, .tech-page-content { padding: 1.1rem 1rem; }
   .ops-layout { padding: 1rem; }
+  .bg-db-grid,
+  .bg-chart-grid,
+  .archetype-controls.bg-minion-controls {
+    grid-template-columns: 1fr;
+  }
+  .bg-chart-card canvas {
+    min-height: 220px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -135,6 +135,18 @@ async function loadOverview() {
   archetypeBtn.onclick = () => selectArchetypeDb(archetypeBtn);
   list.appendChild(archetypeBtn);
 
+  const bgMinionsBtn = document.createElement("button");
+  bgMinionsBtn.className = "source-btn";
+  bgMinionsBtn.style.border = "1px solid #45d6a0";
+  bgMinionsBtn.style.boxShadow = "0 0 10px rgba(69, 214, 160, 0.12)";
+  bgMinionsBtn.innerHTML = `
+    <span class="id" style="color: #7ee7bd; font-weight: bold;">BG существа · SQLite</span>
+    <span class="meta">265 minions · графики · compositions screenshot</span>
+    <span class="badge ok">firecrawl</span>
+  `;
+  bgMinionsBtn.onclick = () => selectBgMinionsDb(bgMinionsBtn);
+  list.appendChild(bgMinionsBtn);
+
   for (const group of groupSources(data.sources)) {
     const heading = document.createElement("h3");
     heading.className = "source-group-title";
@@ -1656,6 +1668,331 @@ async function selectArchetypeDb(btn) {
   };
   $("#archetype-class-filter").onchange = loadArchetypeDbList;
   await loadArchetypeDbList();
+}
+
+async function selectBgMinionsDb(btn) {
+  document.querySelectorAll(".source-btn").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  $("#placeholder").classList.add("hidden");
+  const detail = $("#detail");
+  detail.classList.remove("hidden");
+  detail.innerHTML = `
+    <h2>BG существа HSReplay</h2>
+    <p class="meta-line">Локальная SQLite-база: latest snapshots, combat-round статистика и история для графиков.</p>
+    <div class="bg-db-grid">
+      <section class="block bg-shot-block">
+        <div class="archetype-db-head">
+          <div>
+            <h3>Compositions screenshot</h3>
+            <p class="muted" id="bg-shot-meta">Загрузка скриншота Firecrawl...</p>
+          </div>
+          <a href="/api/bg/compositions/screenshot/latest/image" target="_blank" rel="noopener">PNG</a>
+        </div>
+        <img id="bg-compositions-shot" class="bg-compositions-shot" alt="Battlegrounds compositions table" />
+      </section>
+      <section class="block">
+        <h3>Фильтры существ</h3>
+        <div class="archetype-controls bg-minion-controls">
+          <label>
+            <span>Таверна</span>
+            <select id="bg-minion-tier-filter">
+              <option value="">Все уровни</option>
+              <option value="1">Таверна 1</option>
+              <option value="2">Таверна 2</option>
+              <option value="3">Таверна 3</option>
+              <option value="4">Таверна 4</option>
+              <option value="5">Таверна 5</option>
+              <option value="6">Таверна 6</option>
+              <option value="7">Таверна 7</option>
+            </select>
+          </label>
+          <label>
+            <span>Поиск</span>
+            <input id="bg-minion-query" type="text" placeholder="Scrap Scraper, Картежница или dbfId" />
+          </label>
+          <button id="bg-minion-search-btn" class="mini-action">Обновить</button>
+        </div>
+      </section>
+    </div>
+    <div id="bg-minions-results" class="block"><p>Загрузка...</p></div>
+  `;
+  $("#bg-minion-search-btn").onclick = loadBgMinionsList;
+  $("#bg-minion-query").onkeydown = (e) => {
+    if (e.key === "Enter") loadBgMinionsList();
+  };
+  $("#bg-minion-tier-filter").onchange = loadBgMinionsList;
+  await Promise.all([loadBgCompositionsScreenshot(), loadBgMinionsList()]);
+}
+
+async function loadBgCompositionsScreenshot() {
+  const img = document.getElementById("bg-compositions-shot");
+  const meta = document.getElementById("bg-shot-meta");
+  if (!img || !meta) return;
+  try {
+    const res = await fetch("/api/bg/compositions/screenshot/latest");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Screenshot API error");
+    meta.textContent = `Firecrawl · ${formatDateRu(data.captured_at)} · ${Math.round((data.image_bytes || 0) / 1024)} KB`;
+    img.src = `/api/bg/compositions/screenshot/latest/image?t=${encodeURIComponent(data.captured_at || Date.now())}`;
+  } catch (err) {
+    meta.textContent = `Не удалось загрузить screenshot: ${err.message}`;
+    img.removeAttribute("src");
+  }
+}
+
+async function loadBgMinionsList() {
+  const box = $("#bg-minions-results");
+  if (!box) return;
+  box.innerHTML = "<p>Загрузка существ...</p>";
+  const tier = $("#bg-minion-tier-filter")?.value || "";
+  const q = $("#bg-minion-query")?.value.trim() || "";
+  let url = "/api/db/bg/minions?limit=265";
+  if (tier) url += `&tavern_tier=${encodeURIComponent(tier)}`;
+  if (q) url += `&q=${encodeURIComponent(q)}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "API error");
+    const latest = data.latest_run || {};
+    let html = `
+      <div class="archetype-db-head">
+        <div>
+          <h3>Существа (${data.total || 0})</h3>
+          <p class="muted">Последний run: ${escapeHtml(latest.state || "нет данных")} · ${escapeHtml(formatDateRu(latest.completed_at || latest.started_at))} · ok ${escapeHtml(String(latest.minions_ok ?? 0))}/${escapeHtml(String(latest.minions_total ?? 0))}</p>
+        </div>
+        <a href="/api/db/bg/minions?limit=265" target="_blank" rel="noopener">JSON</a>
+      </div>
+    `;
+    if (!data.minions?.length) {
+      box.innerHTML = html + `<p class="muted">Существа не найдены.</p>`;
+      return;
+    }
+    html += `<div class="table-scroll"><table class="simple bg-minions-table"><thead><tr>
+      <th>Существо</th><th>Таверна</th><th>Impact</th><th>Combat WR</th><th>Popularity</th><th>Avg with</th><th>Игры</th><th>Детали</th>
+    </tr></thead><tbody>`;
+    for (const m of data.minions) {
+      html += `<tr>
+        <td>
+          <button class="link-button" data-bg-minion-id="${escapeHtml(String(m.dbf_id))}">${escapeHtml(m.name)}</button>
+          <div class="muted">${escapeHtml(m.name_ru || "")} · dbfId ${escapeHtml(String(m.dbf_id))}</div>
+        </td>
+        <td>${escapeHtml(String(m.tavern_tier ?? ""))}</td>
+        <td><strong class="${Number(m.impact || 0) >= 0 ? "metric-good" : "metric-bad"}">${numberCell(m.impact)}</strong></td>
+        <td>${numberCell(m.combat_winrate)}%</td>
+        <td>${numberCell(m.popularity)}%</td>
+        <td>${numberCell(m.avg_placement_with)}</td>
+        <td>${escapeHtml(formatInt(m.games_with_minion))}</td>
+        <td><button class="mini-action" data-bg-minion-id="${escapeHtml(String(m.dbf_id))}">Открыть</button></td>
+      </tr>`;
+    }
+    html += "</tbody></table></div>";
+    box.innerHTML = html;
+    box.querySelectorAll("[data-bg-minion-id]").forEach((el) => {
+      el.addEventListener("click", () => loadBgMinionDetail(el.dataset.bgMinionId));
+    });
+  } catch (err) {
+    box.innerHTML = `<p class="muted" style="color: var(--err);">Ошибка загрузки: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadBgMinionDetail(dbfId) {
+  const box = $("#bg-minions-results");
+  if (!box) return;
+  box.innerHTML = "<p>Загрузка существа...</p>";
+  try {
+    const [detailRes, historyRes] = await Promise.all([
+      fetch(`/api/db/bg/minions/${encodeURIComponent(dbfId)}`),
+      fetch(`/api/db/bg/minions/${encodeURIComponent(dbfId)}/history`),
+    ]);
+    const detail = await detailRes.json();
+    const history = await historyRes.json();
+    if (!detailRes.ok) throw new Error(detail.detail || "Detail API error");
+    const raw = detail.raw || {};
+    const rounds = detail.rounds || [];
+    let html = `
+      <button class="mini-action" id="bg-minion-back-btn">Назад к списку</button>
+      <div class="archetype-title">
+        <div>
+          <h3>${escapeHtml(detail.name || raw.name || "Unknown")}</h3>
+          <p class="muted">${escapeHtml(detail.name_ru || "")} · dbfId ${escapeHtml(String(detail.dbf_id))} · ${escapeHtml(formatDateRu(detail.fetched_at))}</p>
+        </div>
+        <a href="/api/db/bg/minions/${escapeHtml(String(detail.dbf_id))}" target="_blank" rel="noopener">JSON</a>
+      </div>
+      <div class="archetype-kpis">
+        <span>Impact <b>${numberCell(detail.impact)}</b></span>
+        <span>Combat WR <b>${numberCell(detail.combat_winrate)}%</b></span>
+        <span>Popularity <b>${numberCell(detail.popularity)}%</b></span>
+        <span>Games <b>${escapeHtml(formatInt(detail.games_with_minion))}</b></span>
+      </div>
+      <div class="bg-chart-grid">
+        <section class="block bg-chart-card">
+          <h3>Combat rounds</h3>
+          <canvas id="bg-minion-round-chart" width="900" height="360"></canvas>
+          <p class="muted">Линии: impact, combat winrate, avg placement with.</p>
+        </section>
+        <section class="block bg-chart-card">
+          <h3>История refresh</h3>
+          <canvas id="bg-minion-history-chart" width="900" height="320"></canvas>
+          <p class="muted">${escapeHtml(String(history.history?.length || 0))} точек истории. После следующих понедельника/четверга граф начнет расти.</p>
+        </section>
+      </div>
+      <section class="block">
+        <h3>Round stats (${rounds.length})</h3>
+        ${renderTableFromObjects(
+          rounds.map((r) => ({
+            Раунд: r.combat_round,
+            Impact: numberCell(r.impact),
+            "Combat WR": `${numberCell(r.combat_winrate)}%`,
+            "Avg with": numberCell(r.avg_placement_with),
+            "Avg without": numberCell(r.avg_placement_without),
+            "Games with": formatInt(r.games_with_minion),
+            "Games without": formatInt(r.games_without_minion),
+          })),
+          ["Раунд", "Impact", "Combat WR", "Avg with", "Avg without", "Games with", "Games without"],
+          { limit: null }
+        )}
+      </section>
+    `;
+    box.innerHTML = html;
+    $("#bg-minion-back-btn").onclick = loadBgMinionsList;
+    drawBgRoundChart(rounds);
+    drawBgHistoryChart(history.history || []);
+  } catch (err) {
+    box.innerHTML = `<button class="mini-action" onclick="loadBgMinionsList()">Назад</button><p class="muted" style="color: var(--err);">Ошибка: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function numberCell(value, digits = 2) {
+  if (value === null || value === undefined || value === "") return "";
+  const n = Number(value);
+  if (Number.isNaN(n)) return escapeHtml(String(value));
+  return n.toFixed(digits);
+}
+
+function formatInt(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const n = Number(value);
+  if (Number.isNaN(n)) return String(value);
+  return new Intl.NumberFormat("ru-RU").format(n);
+}
+
+function drawBgRoundChart(rounds) {
+  const canvas = document.getElementById("bg-minion-round-chart");
+  if (!canvas) return;
+  const rows = (rounds || []).filter((r) => r.combat_round != null);
+  drawMultiLineChart(canvas, rows, {
+    xField: "combat_round",
+    series: [
+      { field: "impact", label: "Impact", color: "#45d6a0" },
+      { field: "combat_winrate", label: "Combat WR", color: "#6ea8fe" },
+      { field: "avg_placement_with", label: "Avg with", color: "#f5b740" },
+    ],
+  });
+}
+
+function drawBgHistoryChart(rows) {
+  const canvas = document.getElementById("bg-minion-history-chart");
+  if (!canvas) return;
+  const prepared = (rows || []).map((row, index) => ({
+    ...row,
+    index: index + 1,
+  }));
+  drawMultiLineChart(canvas, prepared, {
+    xField: "index",
+    series: [
+      { field: "impact", label: "Impact", color: "#45d6a0" },
+      { field: "popularity", label: "Popularity", color: "#8b7bfb" },
+      { field: "combat_winrate", label: "Combat WR", color: "#6ea8fe" },
+    ],
+  });
+}
+
+function drawMultiLineChart(canvas, rows, config) {
+  const ctx = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#0f131b";
+  ctx.fillRect(0, 0, width, height);
+  if (!rows.length) {
+    ctx.fillStyle = "#8392a6";
+    ctx.font = "18px Inter, sans-serif";
+    ctx.fillText("Нет данных для графика", 32, 52);
+    return;
+  }
+  const pad = { l: 54, r: 24, t: 34, b: 46 };
+  const chartW = width - pad.l - pad.r;
+  const chartH = height - pad.t - pad.b;
+  const values = [];
+  for (const row of rows) {
+    for (const s of config.series) {
+      const n = Number(row[s.field]);
+      if (!Number.isNaN(n)) values.push(n);
+    }
+  }
+  let yMin = Math.min(...values);
+  let yMax = Math.max(...values);
+  if (yMin === yMax) {
+    yMin -= 1;
+    yMax += 1;
+  }
+  const xValues = rows.map((r) => Number(r[config.xField]));
+  const xMin = Math.min(...xValues);
+  const xMax = Math.max(...xValues);
+  const xScale = (x) => pad.l + ((Number(x) - xMin) / Math.max(1, xMax - xMin)) * chartW;
+  const yScale = (y) => pad.t + (1 - (Number(y) - yMin) / (yMax - yMin)) * chartH;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#8392a6";
+  ctx.font = "12px Inter, sans-serif";
+  for (let i = 0; i <= 4; i += 1) {
+    const y = pad.t + (chartH / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y);
+    ctx.lineTo(width - pad.r, y);
+    ctx.stroke();
+    const label = yMax - ((yMax - yMin) / 4) * i;
+    ctx.fillText(label.toFixed(1), 8, y + 4);
+  }
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
+  ctx.beginPath();
+  ctx.moveTo(pad.l, pad.t);
+  ctx.lineTo(pad.l, height - pad.b);
+  ctx.lineTo(width - pad.r, height - pad.b);
+  ctx.stroke();
+
+  config.series.forEach((s, idx) => {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    let started = false;
+    for (const row of rows) {
+      const n = Number(row[s.field]);
+      if (Number.isNaN(n)) continue;
+      const x = xScale(row[config.xField]);
+      const y = yScale(n);
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+    ctx.fillStyle = s.color;
+    ctx.fillRect(pad.l + idx * 170, 10, 10, 10);
+    ctx.fillStyle = "#c2ccda";
+    ctx.fillText(s.label, pad.l + 16 + idx * 170, 20);
+  });
+
+  ctx.fillStyle = "#8392a6";
+  ctx.font = "12px Inter, sans-serif";
+  const ticks = rows.length <= 10 ? rows : rows.filter((_, i) => i % Math.ceil(rows.length / 8) === 0);
+  for (const row of ticks) {
+    const x = xScale(row[config.xField]);
+    ctx.fillText(String(row[config.xField]), x - 4, height - 18);
+  }
 }
 
 function pctCell(value) {
