@@ -1809,6 +1809,7 @@ async function loadBgMinionDetail(dbfId) {
     if (!detailRes.ok) throw new Error(detail.detail || "Detail API error");
     const raw = detail.raw || {};
     const rounds = detail.rounds || [];
+    const chartApiUrl = `/api/db/bg/minions/${encodeURIComponent(detail.dbf_id)}/history`;
     let html = `
       <button class="mini-action" id="bg-minion-back-btn">Назад к списку</button>
       <div class="archetype-title">
@@ -1824,18 +1825,26 @@ async function loadBgMinionDetail(dbfId) {
         <span>Popularity <b>${numberCell(detail.popularity)}%</b></span>
         <span>Games <b>${escapeHtml(formatInt(detail.games_with_minion))}</b></span>
       </div>
-      <div class="bg-chart-grid">
-        <section class="block bg-chart-card">
-          <h3>Combat rounds</h3>
-          <canvas id="bg-minion-round-chart" width="900" height="360"></canvas>
-          <p class="muted">Линии: impact, combat winrate, avg placement with.</p>
-        </section>
-        <section class="block bg-chart-card">
-          <h3>История refresh</h3>
-          <canvas id="bg-minion-history-chart" width="900" height="320"></canvas>
-          <p class="muted">${escapeHtml(String(history.history?.length || 0))} точек истории. После следующих понедельника/четверга граф начнет расти.</p>
-        </section>
-      </div>
+      <section class="block bg-api-data-block">
+        <h3>Данные для внешнего графика</h3>
+        <p class="muted">UI показывает только таблицы. Для красивого графика на другом сайте берите готовые JSON endpoints.</p>
+        <div class="bg-api-links">
+          <a href="/api/db/bg/minions/${escapeHtml(String(detail.dbf_id))}" target="_blank" rel="noopener">Latest detail JSON</a>
+          <a href="${escapeHtml(chartApiUrl)}" target="_blank" rel="noopener">History + chart_series JSON</a>
+        </div>
+        ${renderTableFromObjects(
+          (history.history || []).map((row) => ({
+            Дата: formatDateRu(row.fetched_at),
+            Impact: numberCell(row.impact),
+            "Combat WR": `${numberCell(row.combat_winrate)}%`,
+            Popularity: `${numberCell(row.popularity)}%`,
+            "Avg with": numberCell(row.avg_placement_with),
+            Игры: formatInt(row.games_with_minion),
+          })),
+          ["Дата", "Impact", "Combat WR", "Popularity", "Avg with", "Игры"],
+          { limit: null }
+        )}
+      </section>
       <section class="block">
         <h3>Round stats (${rounds.length})</h3>
         ${renderTableFromObjects(
@@ -1855,8 +1864,6 @@ async function loadBgMinionDetail(dbfId) {
     `;
     box.innerHTML = html;
     $("#bg-minion-back-btn").onclick = loadBgMinionsList;
-    drawBgRoundChart(rounds);
-    drawBgHistoryChart(history.history || []);
   } catch (err) {
     box.innerHTML = `<button class="mini-action" onclick="loadBgMinionsList()">Назад</button><p class="muted" style="color: var(--err);">Ошибка: ${escapeHtml(err.message)}</p>`;
   }
@@ -1874,125 +1881,6 @@ function formatInt(value) {
   const n = Number(value);
   if (Number.isNaN(n)) return String(value);
   return new Intl.NumberFormat("ru-RU").format(n);
-}
-
-function drawBgRoundChart(rounds) {
-  const canvas = document.getElementById("bg-minion-round-chart");
-  if (!canvas) return;
-  const rows = (rounds || []).filter((r) => r.combat_round != null);
-  drawMultiLineChart(canvas, rows, {
-    xField: "combat_round",
-    series: [
-      { field: "impact", label: "Impact", color: "#45d6a0" },
-      { field: "combat_winrate", label: "Combat WR", color: "#6ea8fe" },
-      { field: "avg_placement_with", label: "Avg with", color: "#f5b740" },
-    ],
-  });
-}
-
-function drawBgHistoryChart(rows) {
-  const canvas = document.getElementById("bg-minion-history-chart");
-  if (!canvas) return;
-  const prepared = (rows || []).map((row, index) => ({
-    ...row,
-    index: index + 1,
-  }));
-  drawMultiLineChart(canvas, prepared, {
-    xField: "index",
-    series: [
-      { field: "impact", label: "Impact", color: "#45d6a0" },
-      { field: "popularity", label: "Popularity", color: "#8b7bfb" },
-      { field: "combat_winrate", label: "Combat WR", color: "#6ea8fe" },
-    ],
-  });
-}
-
-function drawMultiLineChart(canvas, rows, config) {
-  const ctx = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#0f131b";
-  ctx.fillRect(0, 0, width, height);
-  if (!rows.length) {
-    ctx.fillStyle = "#8392a6";
-    ctx.font = "18px Inter, sans-serif";
-    ctx.fillText("Нет данных для графика", 32, 52);
-    return;
-  }
-  const pad = { l: 54, r: 24, t: 34, b: 46 };
-  const chartW = width - pad.l - pad.r;
-  const chartH = height - pad.t - pad.b;
-  const values = [];
-  for (const row of rows) {
-    for (const s of config.series) {
-      const n = Number(row[s.field]);
-      if (!Number.isNaN(n)) values.push(n);
-    }
-  }
-  let yMin = Math.min(...values);
-  let yMax = Math.max(...values);
-  if (yMin === yMax) {
-    yMin -= 1;
-    yMax += 1;
-  }
-  const xValues = rows.map((r) => Number(r[config.xField]));
-  const xMin = Math.min(...xValues);
-  const xMax = Math.max(...xValues);
-  const xScale = (x) => pad.l + ((Number(x) - xMin) / Math.max(1, xMax - xMin)) * chartW;
-  const yScale = (y) => pad.t + (1 - (Number(y) - yMin) / (yMax - yMin)) * chartH;
-
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth = 1;
-  ctx.fillStyle = "#8392a6";
-  ctx.font = "12px Inter, sans-serif";
-  for (let i = 0; i <= 4; i += 1) {
-    const y = pad.t + (chartH / 4) * i;
-    ctx.beginPath();
-    ctx.moveTo(pad.l, y);
-    ctx.lineTo(width - pad.r, y);
-    ctx.stroke();
-    const label = yMax - ((yMax - yMin) / 4) * i;
-    ctx.fillText(label.toFixed(1), 8, y + 4);
-  }
-  ctx.strokeStyle = "rgba(255,255,255,0.25)";
-  ctx.beginPath();
-  ctx.moveTo(pad.l, pad.t);
-  ctx.lineTo(pad.l, height - pad.b);
-  ctx.lineTo(width - pad.r, height - pad.b);
-  ctx.stroke();
-
-  config.series.forEach((s, idx) => {
-    ctx.strokeStyle = s.color;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    let started = false;
-    for (const row of rows) {
-      const n = Number(row[s.field]);
-      if (Number.isNaN(n)) continue;
-      const x = xScale(row[config.xField]);
-      const y = yScale(n);
-      if (!started) {
-        ctx.moveTo(x, y);
-        started = true;
-      } else {
-        ctx.lineTo(x, y);
-      }
-    }
-    ctx.stroke();
-    ctx.fillStyle = s.color;
-    ctx.fillRect(pad.l + idx * 170, 10, 10, 10);
-    ctx.fillStyle = "#c2ccda";
-    ctx.fillText(s.label, pad.l + 16 + idx * 170, 20);
-  });
-
-  ctx.fillStyle = "#8392a6";
-  ctx.font = "12px Inter, sans-serif";
-  const ticks = rows.length <= 10 ? rows : rows.filter((_, i) => i % Math.ceil(rows.length / 8) === 0);
-  for (const row of ticks) {
-    const x = xScale(row[config.xField]);
-    ctx.fillText(String(row[config.xField]), x - 4, height - 18);
-  }
 }
 
 function pctCell(value) {

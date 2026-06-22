@@ -492,19 +492,26 @@ a:hover { color: #9cc3ff; }
 }
 .metric-good { color: var(--ok); }
 .metric-bad { color: var(--err); }
-.bg-chart-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+.bg-api-data-block {
+  border-color: rgba(69, 214, 160, 0.24);
 }
-.bg-chart-card canvas {
-  display: block;
-  width: 100%;
-  aspect-ratio: 5 / 2;
-  min-height: 240px;
-  background: #0f131b;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-sm);
+.bg-api-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin: 0.8rem 0 1rem;
+}
+.bg-api-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0.32rem 0.7rem;
+  border: 1px solid rgba(69, 214, 160, 0.28);
+  border-radius: var(--r-xs);
+  background: rgba(69, 214, 160, 0.08);
+  color: #7ee7bd;
+  font-size: 0.8rem;
+  font-weight: 600;
 }
 
 .content {
@@ -1026,12 +1033,8 @@ table.simple tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   .content, .tech-page-content { padding: 1.1rem 1rem; }
   .ops-layout { padding: 1rem; }
   .bg-db-grid,
-  .bg-chart-grid,
   .archetype-controls.bg-minion-controls {
     grid-template-columns: 1fr;
-  }
-  .bg-chart-card canvas {
-    min-height: 220px;
   }
 }
 
