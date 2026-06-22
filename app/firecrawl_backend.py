@@ -22,6 +22,7 @@ FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape"
 class FirecrawlScrape:
     html: str
     markdown: str
+    screenshot: str | None
     metadata: dict[str, Any]
     status_code: int
     final_url: str
@@ -31,19 +32,27 @@ class FirecrawlScrape:
         return len(self.html.encode("utf-8", errors="replace"))
 
 
-def _scrape_sync(source: Source) -> FirecrawlScrape:
+def _scrape_sync(
+    source: Source,
+    *,
+    formats: list[Any] | None = None,
+    only_main_content: bool = True,
+    headers: dict[str, str] | None = None,
+) -> FirecrawlScrape:
     api_key = firecrawl_api_key()
     if not api_key:
         raise RuntimeError("FIRECRAWL_API_KEY/HS_FIRECRAWL_API_KEY is not configured")
 
     payload = {
         "url": source.fetch_url,
-        "formats": ["html", "markdown"],
-        "onlyMainContent": True,
+        "formats": formats or ["html", "markdown"],
+        "onlyMainContent": only_main_content,
         "maxAge": firecrawl_max_age_ms(),
         "waitFor": firecrawl_wait_ms(),
         "timeout": firecrawl_timeout_ms(),
     }
+    if headers:
+        payload["headers"] = headers
     request = urllib.request.Request(
         FIRECRAWL_SCRAPE_URL,
         data=json.dumps(payload).encode("utf-8"),
@@ -60,7 +69,7 @@ def _scrape_sync(source: Source) -> FirecrawlScrape:
 
     data = body.get("data") or {}
     html = data.get("html") or ""
-    if not html:
+    if not html and any(fmt == "html" for fmt in (formats or ["html", "markdown"])):
         raise RuntimeError("Firecrawl response did not include html")
     metadata = dict(data.get("metadata") or {})
     if body.get("creditsUsed") is not None and metadata.get("creditsUsed") is None:
@@ -68,6 +77,7 @@ def _scrape_sync(source: Source) -> FirecrawlScrape:
     return FirecrawlScrape(
         html=html,
         markdown=data.get("markdown") or "",
+        screenshot=data.get("screenshot"),
         metadata=metadata,
         status_code=int(metadata.get("statusCode") or 200),
         final_url=str(metadata.get("ogUrl") or metadata.get("sourceURL") or source.fetch_url),
@@ -76,3 +86,19 @@ def _scrape_sync(source: Source) -> FirecrawlScrape:
 
 async def scrape_source(source: Source) -> FirecrawlScrape:
     return await asyncio.to_thread(_scrape_sync, source)
+
+
+async def scrape_source_with_options(
+    source: Source,
+    *,
+    formats: list[Any] | None = None,
+    only_main_content: bool = True,
+    headers: dict[str, str] | None = None,
+) -> FirecrawlScrape:
+    return await asyncio.to_thread(
+        _scrape_sync,
+        source,
+        formats=formats,
+        only_main_content=only_main_content,
+        headers=headers,
+    )

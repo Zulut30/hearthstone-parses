@@ -256,6 +256,77 @@ def init_db() -> None:
                 );
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS bg_minion_refresh_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    mmr_percentile TEXT NOT NULL,
+                    time_range TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    state TEXT NOT NULL,
+                    minions_total INTEGER DEFAULT 0,
+                    minions_ok INTEGER DEFAULT 0,
+                    error TEXT
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS bg_minions (
+                    dbf_id INTEGER PRIMARY KEY,
+                    card_id TEXT,
+                    name TEXT NOT NULL,
+                    name_ru TEXT,
+                    tavern_tier INTEGER,
+                    card_type TEXT,
+                    rarity TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    raw_card_json TEXT
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS bg_minion_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    dbf_id INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    mmr_percentile TEXT NOT NULL,
+                    time_range TEXT NOT NULL,
+                    fetched_at TEXT NOT NULL,
+                    tavern_tier INTEGER,
+                    impact REAL,
+                    combat_winrate REAL,
+                    popularity REAL,
+                    games_with_minion INTEGER,
+                    games_without_minion INTEGER,
+                    avg_placement_with REAL,
+                    avg_placement_without REAL,
+                    raw_json TEXT,
+                    UNIQUE(run_id, dbf_id),
+                    FOREIGN KEY(run_id) REFERENCES bg_minion_refresh_runs(id),
+                    FOREIGN KEY(dbf_id) REFERENCES bg_minions(dbf_id)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS bg_minion_round_stats (
+                    snapshot_id INTEGER NOT NULL,
+                    combat_round INTEGER NOT NULL,
+                    games_with_minion INTEGER,
+                    games_without_minion INTEGER,
+                    avg_placement_with REAL,
+                    avg_placement_without REAL,
+                    impact REAL,
+                    combat_winrate REAL,
+                    wins INTEGER,
+                    losses INTEGER,
+                    PRIMARY KEY(snapshot_id, combat_round),
+                    FOREIGN KEY(snapshot_id) REFERENCES bg_minion_snapshots(id)
+                );
+            """)
+
             # Create indexing for super fast search and queries
             _ensure_decks_column(conn, "draft_id", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_source_class ON decks(source_id, class);")
@@ -274,6 +345,10 @@ def init_db() -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_matchups_wr ON archetype_matchups(snapshot_id, win_rate);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_decks_games ON archetype_decks(snapshot_id, total_games);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_mulligan_display ON archetype_mulligan(snapshot_id, display_row, hsreplay_rank);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bg_minion_runs_latest ON bg_minion_refresh_runs(source, state, completed_at);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bg_minion_snapshots_latest ON bg_minion_snapshots(dbf_id, fetched_at);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bg_minion_snapshots_tier ON bg_minion_snapshots(tavern_tier, popularity);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_bg_minion_round_stats_snapshot ON bg_minion_round_stats(snapshot_id, combat_round);")
             
             logger.info("SQLite database tables initialized successfully.")
     except Exception as e:

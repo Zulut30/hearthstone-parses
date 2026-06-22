@@ -6,7 +6,9 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from .cards_index import card_label, cards_by_dbfid
+from .firecrawl_backend import scrape_source
 from .hsreplay_client import fetch_hsreplay_json, fetch_text_via_flaresolverr
+from .sources import Source
 
 BG_MMR = "TOP_50_PERCENT"
 BG_TIME_RANGE = "LAST_7_DAYS"
@@ -47,6 +49,12 @@ def _pct_number(value: Any) -> float:
         return 0.0
 
 
+def _pct_float(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    return round(float(value), 2)
+
+
 def _query_url(key: str) -> str:
     return (
         f"{BG_ANALYTICS_BASE}/{key}/"
@@ -80,6 +88,7 @@ def _minion_stats(row: dict[str, Any]) -> dict[str, Any] | None:
     without_places = 0.0
     wins = 0.0
     losses = 0.0
+    combat_rounds: list[dict[str, Any]] = []
 
     for item in aggregates:
         if not isinstance(item, dict):
@@ -89,12 +98,37 @@ def _minion_stats(row: dict[str, Any]) -> dict[str, Any] | None:
             continue
         c_with = float(item.get("count_of_games_with_minion") or 0)
         c_without = float(item.get("count_of_games_without_minion") or 0)
+        round_with_places = float(item.get("sum_of_placements_for_players_with_minion") or 0)
+        round_without_places = float(item.get("sum_of_placements_for_players_without_minion") or 0)
+        round_wins = float(item.get("total_wins") or 0)
+        round_losses = float(item.get("total_losses") or 0)
+        round_avg_with = round_with_places / c_with if c_with else None
+        round_avg_without = round_without_places / c_without if c_without else None
+        round_impact = (
+            round_avg_without - round_avg_with
+            if round_avg_with is not None and round_avg_without is not None
+            else None
+        )
         with_count += c_with
         without_count += c_without
-        with_places += float(item.get("sum_of_placements_for_players_with_minion") or 0)
-        without_places += float(item.get("sum_of_placements_for_players_without_minion") or 0)
-        wins += float(item.get("total_wins") or 0)
-        losses += float(item.get("total_losses") or 0)
+        with_places += round_with_places
+        without_places += round_without_places
+        wins += round_wins
+        losses += round_losses
+        combat_rounds.append(
+            {
+                "combat_round": int(combat_round) if isinstance(combat_round, int) else None,
+                "games_with_minion": int(c_with) if c_with else 0,
+                "games_without_minion": int(c_without) if c_without else 0,
+                "avg_placement_with": _round(round_avg_with),
+                "avg_placement_without": _round(round_avg_without),
+                "impact": _round(round_impact),
+                "combat_winrate": _pct(round_wins / (round_wins + round_losses) * 100 if round_wins + round_losses else None),
+                "combat_winrate_value": _pct_float(round_wins / (round_wins + round_losses) * 100 if round_wins + round_losses else None),
+                "wins": int(round_wins) if round_wins else 0,
+                "losses": int(round_losses) if round_losses else 0,
+            }
+        )
 
     avg_with = with_places / with_count if with_count else None
     avg_without = without_places / without_count if without_count else None
@@ -112,15 +146,44 @@ def _minion_stats(row: dict[str, Any]) -> dict[str, Any] | None:
         "minion_dbf_id": int(dbf_id),
         "tavern_tier": row.get("minion_tier") or card.get("techLevel"),
         "impact": _round(impact),
+        "avg_placement_with": _round(avg_with),
+        "avg_placement_without": _round(avg_without),
         "combat_winrate": _pct(combat_winrate),
+        "combat_winrate_value": _pct_float(combat_winrate),
         "win_share": _pct(combat_winrate),
         "popularity": _pct(popularity),
+        "popularity_value": _pct_float(popularity),
         "games_with_minion": int(with_count) if with_count else None,
+        "games_without_minion": int(without_count) if without_count else None,
+        "combat_rounds": sorted(
+            [item for item in combat_rounds if item.get("combat_round") is not None],
+            key=lambda item: int(item["combat_round"]),
+        ),
     }
 
 
 async def fetch_battlegrounds_minions(source_id: str) -> dict[str, Any]:
     url = _query_url("battlegrounds_minion_list")
+    firecrawl_page: dict[str, Any] = {}
+    try:
+        scraped = await scrape_source(
+            Source(
+                source_id,
+                "https://hsreplay.net/battlegrounds/minions/#view=advanced",
+                "hsreplay",
+                "battlegrounds",
+                description="HSReplay Battlegrounds minions advanced stats.",
+            )
+        )
+        firecrawl_page = {
+            "ok": True,
+            "final_url": scraped.final_url,
+            "status_code": scraped.status_code,
+            "content_length": scraped.content_length,
+            "credits_used": scraped.metadata.get("creditsUsed"),
+        }
+    except Exception as exc:
+        firecrawl_page = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:180]}"}
     payload = await fetch_hsreplay_json(
         url,
         source_id=source_id,
@@ -138,7 +201,8 @@ async def fetch_battlegrounds_minions(source_id: str) -> dict[str, Any]:
             "key": "hsreplay",
             "url": "https://hsreplay.net/battlegrounds/minions/#view=advanced",
             "api_url": url,
-            "backend": "hsreplay_bg_api",
+            "backend": "firecrawl+hsreplay_bg_api" if firecrawl_page.get("ok") else "hsreplay_bg_api",
+            "firecrawl_page": firecrawl_page,
             "rows": len(minions),
         },
     }

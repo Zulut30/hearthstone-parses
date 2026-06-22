@@ -1,0 +1,10 @@
+[Unit]
+Description=Capture HSReplay Battlegrounds compositions Firecrawl screenshot daily
+
+[Timer]
+OnCalendar=*-*-* 04:10:00 Europe/Warsaw
+AccuracySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -102,6 +102,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     archetypes.add_argument("--deck-time-range", default="LAST_30_DAYS")
     archetypes.add_argument("--mulligan-time-range", default="LAST_30_DAYS")
     archetypes.add_argument("--limit", type=int, default=None, help="Debug: refresh only first N archetypes from the index.")
+    sub.add_parser(
+        "refresh-bg-minions-db",
+        help="Refresh the local SQLite database with HSReplay Battlegrounds minion snapshots.",
+    )
+    sub.add_parser(
+        "capture-bg-compositions-screenshot",
+        help="Capture a Firecrawl screenshot of HSReplay Battlegrounds compositions.",
+    )
     login = sub.add_parser("hsreplay-login", help="Log into HSReplay Premium and save browser session.")
     imp = sub.add_parser(
         "hsreplay-import-storage",
@@ -309,6 +317,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         result["export_path"] = str(export_latest_archetypes_json())
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "refresh-bg-minions-db":
+        from .hsreplay_bg_minions_db import refresh_bg_minion_database_sync
+
+        result = refresh_bg_minion_database_sync()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "capture-bg-compositions-screenshot":
+        from .hsreplay_bg_screenshots import capture_compositions_screenshot
+
+        result = asyncio.run(capture_compositions_screenshot())
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "hsreplay-login":

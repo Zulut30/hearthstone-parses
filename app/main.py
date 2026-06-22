@@ -406,6 +406,22 @@ async def refresh_hsreplay_archetypes(
     return result
 
 
+@app.post("/admin/refresh/bg-minions-db", dependencies=[Depends(require_admin)])
+async def refresh_bg_minions_db() -> dict:
+    from .hsreplay_bg_minions_db import export_latest_bg_minions_json, refresh_bg_minion_database
+
+    result = await refresh_bg_minion_database()
+    result["export_path"] = str(export_latest_bg_minions_json())
+    return result
+
+
+@app.post("/admin/capture/bg-compositions-screenshot", dependencies=[Depends(require_admin)])
+async def capture_bg_compositions_screenshot() -> dict:
+    from .hsreplay_bg_screenshots import capture_compositions_screenshot
+
+    return await capture_compositions_screenshot()
+
+
 @app.put("/admin/datasets/{source_id}", dependencies=[Depends(require_admin)])
 def upload_dataset(
     source_id: str,
@@ -518,6 +534,67 @@ def db_archetypes(
             offset=offset,
         ),
     }
+
+
+@app.get("/api/db/bg/minions")
+def db_bg_minions(
+    q: str | None = Query(None, min_length=1, max_length=120),
+    tavern_tier: int | None = Query(None, ge=1, le=7),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=10000),
+) -> dict:
+    from .hsreplay_bg_minions_db import latest_run, list_minion_snapshots
+
+    return {
+        "latest_run": latest_run(),
+        **list_minion_snapshots(q=q, tavern_tier=tavern_tier, limit=limit, offset=offset),
+    }
+
+
+@app.get("/api/db/bg/minions/{dbf_id}")
+def db_bg_minion_detail(dbf_id: int) -> dict:
+    from .hsreplay_bg_minions_db import get_minion_detail
+
+    payload = get_minion_detail(dbf_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Battlegrounds minion snapshot not found")
+    return payload
+
+
+@app.get("/api/db/bg/minions/{dbf_id}/history")
+def db_bg_minion_history(
+    dbf_id: int,
+    limit: int = Query(120, ge=1, le=1000),
+) -> dict:
+    from .hsreplay_bg_minions_db import get_minion_history
+
+    payload = get_minion_history(dbf_id, limit=limit)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Battlegrounds minion not found")
+    return payload
+
+
+@app.get("/api/bg/compositions/screenshot/latest")
+def bg_compositions_latest_screenshot() -> dict:
+    from .hsreplay_bg_screenshots import latest_compositions_screenshot
+
+    payload = latest_compositions_screenshot()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No Battlegrounds compositions screenshot captured yet")
+    return payload
+
+
+@app.get("/api/bg/compositions/screenshot/latest/image")
+def bg_compositions_latest_screenshot_image() -> FileResponse:
+    from .hsreplay_bg_screenshots import latest_compositions_screenshot
+
+    payload = latest_compositions_screenshot()
+    if payload is None or not payload.get("image_path"):
+        raise HTTPException(status_code=404, detail="No Battlegrounds compositions screenshot image captured yet")
+    path = Path(str(payload["image_path"]))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Screenshot image file is missing")
+    return FileResponse(path)
 
 
 @app.get("/api/db/archetypes/{archetype_id}")

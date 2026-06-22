@@ -42,6 +42,11 @@ X-API-Key: <HS_API_KEY>
 | `GET` | `/api/bg/trinkets` | Объединенный BG endpoint малых/больших аксессуаров с tier и race variants. |
 | `GET` | `/api/db/decks` | SQL-backed поиск колод. |
 | `GET` | `/api/db/cards/trends` | SQL-backed история популярности карт. |
+| `GET` | `/api/db/bg/minions` | SQL-backed последние snapshots BG существ HSReplay. |
+| `GET` | `/api/db/bg/minions/{dbfId}` | Детали BG существа: summary + combat-round stats. |
+| `GET` | `/api/db/bg/minions/{dbfId}/history` | Time series для графиков BG существа. |
+| `GET` | `/api/bg/compositions/screenshot/latest` | Metadata последнего Firecrawl screenshot страницы BG compositions. |
+| `GET` | `/api/bg/compositions/screenshot/latest/image` | Файл последнего screenshot BG compositions. |
 | `GET` | `/api/db/archetypes` | SQL-backed список последних HSReplay archetype snapshots. |
 | `GET` | `/api/db/archetypes/{id}` | Детали архетипа: summary, mulligan, matchups, decks, history. |
 | `GET` | `/api/db/archetypes/{id}/mulligan` | Mulligan guide архетипа. |
@@ -260,6 +265,61 @@ curl -s "https://api.hs-manacost.ru/api/db/archetypes/856/decks?include_cards=tr
 
 `include_cards=true` раскрывает карты каждой сборки из `archetype_deck_cards`.
 
+## HSReplay Battlegrounds Minion Database
+
+`refresh-bg-minions-db` сохраняет все BG существа HSReplay в SQLite: карточку
+существа, последний snapshot метрик, combat-round breakdown и историю между
+запусками. Плановый systemd timer запускается по понедельникам и четвергам.
+
+### `GET /api/db/bg/minions`
+
+Возвращает последние snapshots по каждому BG существу.
+
+Query parameters:
+
+| Parameter | Default | Описание |
+| --- | --- | --- |
+| `q` | empty | Поиск по английскому/русскому имени или card id. |
+| `tavern_tier` | empty | Фильтр таверны 1..7. |
+| `limit` | `100` | 1..500. |
+| `offset` | `0` | Offset для pagination. |
+
+Пример:
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/bg/minions?limit=20" | jq .
+```
+
+### `GET /api/db/bg/minions/{dbfId}`
+
+Детали одного существа: latest snapshot, raw HSReplay row и `rounds` для
+графиков impact/combat winrate/popularity по combat round.
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/bg/minions/98592" | jq .
+```
+
+### `GET /api/db/bg/minions/{dbfId}/history`
+
+История между refresh runs. `chart_series` уже подготовлен в формате
+`{x: fetched_at, y: value}` для frontend-графиков.
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/bg/minions/98592/history" | jq .
+```
+
+## HSReplay Battlegrounds Compositions Screenshot
+
+`capture-bg-compositions-screenshot` делает Firecrawl screenshot страницы
+`https://hsreplay.net/battlegrounds/compositions/`, сохраняет файл локально в
+`data/firecrawl/screenshots/hsreplay_battlegrounds_compositions/` и обновляет
+`latest.json`. Плановый systemd timer запускается ежедневно.
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/bg/compositions/screenshot/latest" | jq .
+curl -L "https://api.hs-manacost.ru/api/bg/compositions/screenshot/latest/image" -o bg-compositions.png
+```
+
 ## Admin And Ops Endpoints
 
 Все endpoints из этого раздела требуют `X-API-Key`.
@@ -268,6 +328,8 @@ curl -s "https://api.hs-manacost.ru/api/db/archetypes/856/decks?include_cards=tr
 | --- | --- | --- |
 | `POST` | `/admin/refresh` | Запустить refresh одного или нескольких источников. |
 | `POST` | `/admin/refresh/hsreplay-archetypes` | Запустить обновление SQLite archetype snapshots. |
+| `POST` | `/admin/refresh/bg-minions-db` | Запустить обновление SQLite BG minion snapshots. |
+| `POST` | `/admin/capture/bg-compositions-screenshot` | Сделать Firecrawl screenshot BG compositions. |
 | `PUT` | `/admin/datasets/{source_id}` | Ручная загрузка JSON dataset в cache. |
 | `GET` | `/ops/health` | Подробное состояние источников: states, stale, cached, data dir. |
 | `GET` | `/health/premium` | Проверка локального premium auth состояния. |
