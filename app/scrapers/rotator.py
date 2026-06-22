@@ -12,7 +12,7 @@ from .http_resilience import DEFAULT_BACKOFF_SECONDS, backoff_delay_seconds
 from ..refresh_log import log_action
 from ..sources import Source
 from .base import FetchResult
-from .proxy import assert_proxy_configured, source_can_use_flaresolverr_without_proxy
+from .proxy import assert_proxy_configured, burn_proxy_session, source_can_use_flaresolverr_without_proxy
 from .quality import looks_like_real_page, quality_metrics, validate_parsed_data
 
 logger = logging.getLogger(__name__)
@@ -44,9 +44,13 @@ def classify_backend_error(exc_type: str, detail: str) -> str:
 
 
 def _circuit_scope(source: Source, classification: str) -> str:
-    if classification == "quality_empty":
+    if classification in {"timeout", "quality_empty", "empty_shell"}:
         return f"source:{source.id}"
     return f"site:{source.site}"
+
+
+def _circuit_scope_label(source: Source, classification: str) -> str:
+    return _circuit_scope(source, classification).replace(":", " ", 1)
 
 
 def _circuit_key(source: Source, backend: str, classification: str) -> tuple[str, str, str]:
@@ -72,21 +76,14 @@ def reset_backend_circuits() -> None:
 
 
 def _site_backend_order(source: Source) -> list[str]:
-    from ..config import fetch_backends
+    from ..config import fetch_backends, hsguru_fetch_backends
 
     configured = [b.lower() for b in fetch_backends()]
     if source.site == "hsguru":
-        # CloakBrowser + Scrapling use residential proxy; FlareSolverr skips proxy locally.
-        # Scrapling proven on HSGuru CF; CloakBrowser second; FlareSolverr fastest when up.
-        preferred = [
-            "flaresolverr",
-            "scrapling",
-            "patchright",
-            "cloakbrowser",
-            "curl_cffi",
-            "cloudscraper",
-            "camoufox",
-        ]
+        configured = [b.lower() for b in hsguru_fetch_backends()]
+        # Patchright has been noisy for HSGuru DNS in production. Keep it
+        # configurable, but late in the default order.
+        preferred = configured
     else:
         from ..config import hsreplay_storage_path
 
@@ -196,7 +193,8 @@ async def fetch_html(
             open_state = _open_circuit(source, name)
             if open_state is not None:
                 classification, count = open_state
-                detail = f"{name}: circuit open for {source.site} after {count} {classification} failures"
+                scope_label = _circuit_scope_label(source, classification)
+                detail = f"{name}: circuit open for {scope_label} after {count} {classification} failures"
                 errors.append(detail)
                 log_action(
                     "browser.backend.skip",
@@ -205,7 +203,11 @@ async def fetch_html(
                     attempt=attempt,
                     detail=detail,
                     level="warn",
-                    extra={"classification": classification, "failure_count": count},
+                    extra={
+                        "classification": classification,
+                        "failure_count": count,
+                        "circuit_scope": _circuit_scope(source, classification),
+                    },
                 )
                 continue
             if not is_available():
@@ -290,6 +292,7 @@ async def fetch_html(
                     extra={
                         "classification": classification,
                         "failure_count": _backend_failures[_circuit_key(source, name, classification)],
+                        "circuit_scope": _circuit_scope(source, classification),
                     },
                 )
                 continue
@@ -297,6 +300,21 @@ async def fetch_html(
                 msg = f"{name}[{attempt}]: {type(exc).__name__}: {exc}"
                 classification = classify_backend_error(type(exc).__name__, str(exc))
                 _backend_failures[_circuit_key(source, name, classification)] += 1
+                if source.site == "hsguru" and classification == "blocked_403":
+                    burn_proxy_session(
+                        source.id,
+                        page_url=source.fetch_url,
+                        reason=f"{name}_blocked_403",
+                    )
+                    log_action(
+                        "proxy.session.burn",
+                        source_id=source.id,
+                        backend=name,
+                        attempt=attempt,
+                        level="warn",
+                        detail=f"{name} blocked by Cloudflare/403; rotated HSGuru proxy session",
+                        extra={"classification": classification},
+                    )
                 errors.append(msg)
                 logger.warning("Backend failed for %s — %s", source.id, msg)
                 log_action(
@@ -311,6 +329,7 @@ async def fetch_html(
                     extra={
                         "classification": classification,
                         "failure_count": _backend_failures[_circuit_key(source, name, classification)],
+                        "circuit_scope": _circuit_scope(source, classification),
                     },
                 )
         if attempt < fetch_max_retries():

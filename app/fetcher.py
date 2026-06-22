@@ -19,6 +19,9 @@ from .config import (
     fetch_direct_enabled,
     fetch_proxy_url,
     fetch_require_proxy,
+    firecrawl_fallback_max_attempts_per_refresh,
+    firecrawl_fallback_source_ids,
+    firecrawl_primary_source_ids,
     flaresolverr_session_per_source,
     refresh_delay_browser_only,
     refresh_parallel_light,
@@ -63,6 +66,7 @@ from .storage import load_dataset, load_status, save_dataset, save_status
 from .telegram_alerts import mark_alert_sent, should_send_alert
 
 logger = logging.getLogger(__name__)
+_firecrawl_fallback_attempts = 0
 
 
 def now_iso() -> str:
@@ -280,6 +284,30 @@ async def send_telegram_alert(source_id: str, state: str, detail: str, url: str)
         )
 
 
+async def _maybe_cached_after_failure_alert(source: Source, status: dict[str, Any]) -> None:
+    if not status.get("serving_cached_dataset"):
+        return
+    if status.get("last_refresh_state") in (None, "ok"):
+        return
+    detail = (
+        "Serving cached dataset after live refresh failed; "
+        f"last_state={status.get('last_refresh_state')}; "
+        f"reason={status.get('last_refresh_error') or status.get('detail') or 'unknown'}"
+    )
+    log_action(
+        "dataset.cached_after_failure.alert",
+        source_id=source.id,
+        level="warn",
+        detail=detail[:1000],
+        extra={
+            "last_refresh_state": status.get("last_refresh_state"),
+            "last_refresh_at": status.get("last_refresh_at"),
+            "cached_dataset_age_hours": status.get("cached_dataset_age_hours"),
+        },
+    )
+    await send_telegram_alert(source.id, "cached_after_failure", detail, source.url)
+
+
 class RefreshLock:
     def __init__(self, path: Any | None = None) -> None:
         self.path = path if path is not None else data_dir() / ".refresh.lock"
@@ -471,6 +499,237 @@ def _dataset_from_structured(source: Source, structured: dict[str, Any], *, back
     }
 
 
+def _dedupe_streamer_decks_parsed(parsed: dict[str, Any]) -> dict[str, Any]:
+    from .deck_decode import first_deck_code_from_text
+
+    tables = parsed.get("tables") or []
+    if not tables:
+        return parsed
+    table = tables[0]
+    headers = table.get("headers") or []
+    objects = table.get("objects") or []
+    if not isinstance(objects, list):
+        return parsed
+
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for row in objects:
+        if not isinstance(row, dict):
+            continue
+        deck_text = str(row.get("Deck") or "")
+        deck_code = str(row.get("deck_code") or "").strip() or (first_deck_code_from_text(deck_text) or "")
+        if deck_code:
+            row["deck_code"] = deck_code
+            key = f"code:{deck_code}"
+        else:
+            key = "|".join(
+                [
+                    str(row.get("Format") or "").strip().lower(),
+                    str(row.get("Streamer") or "").strip().lower(),
+                    deck_text[:160].strip().lower(),
+                ]
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+
+    table["objects"] = deduped
+    if headers:
+        table["rows"] = [[row.get(header, "") for header in headers] for row in deduped]
+    structured = parsed.get("structured")
+    if isinstance(structured, dict) and structured.get("type") == "streamer_decks":
+        structured["rows"] = deduped
+    return parsed
+
+
+def _enrich_firecrawl_trinkets_from_cache(source: Source, parsed: dict[str, Any]) -> dict[str, Any]:
+    import re
+
+    if source.id not in {
+        "hsreplay_battlegrounds_trinkets_lesser",
+        "hsreplay_battlegrounds_trinkets_greater",
+    }:
+        return parsed
+    structured = parsed.get("structured")
+    if not isinstance(structured, dict) or structured.get("type") != "bg_trinkets":
+        return parsed
+    rows = structured.get("trinkets") or []
+    if not isinstance(rows, list) or not rows:
+        return parsed
+
+    previous = load_dataset(source.id) or {}
+    previous_structured = (previous.get("data") or {}).get("structured") or {}
+    canonical_rows = previous_structured.get("trinkets") or []
+    by_name = {
+        str(row.get("name") or "").strip().lower(): row
+        for row in canonical_rows
+        if isinstance(row, dict) and row.get("name")
+    }
+
+    previous_active = [
+        dict(row)
+        for row in canonical_rows
+        if isinstance(row, dict) and (row.get("pick_rate") or row.get("avg_placement"))
+    ]
+    enriched_by_key: dict[str, dict[str, Any]] = {
+        str(row.get("name") or "").strip().lower(): row
+        for row in previous_active
+        if row.get("name")
+    }
+    trinket_type = "Lesser" if source.id.endswith("_lesser") else "Greater"
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name_key = str(row.get("name") or "").strip().lower()
+        canonical = by_name.get(name_key) or {}
+        if not canonical:
+            continue
+        merged = {**canonical, **row}
+        if not merged.get("id") and merged.get("trinket_id"):
+            merged["id"] = merged["trinket_id"]
+        if not merged.get("type"):
+            merged["type"] = trinket_type
+        if canonical.get("trinket_id") and not merged.get("trinket_id"):
+            merged["trinket_id"] = canonical["trinket_id"]
+        if canonical.get("id") and not merged.get("id"):
+            merged["id"] = canonical["id"]
+        if canonical.get("dbfId") and not merged.get("dbfId"):
+            merged["dbfId"] = canonical["dbfId"]
+        if canonical.get("type") and not merged.get("type"):
+            merged["type"] = canonical["type"]
+        if canonical.get("localized_name") and not merged.get("localized_name"):
+            merged["localized_name"] = canonical["localized_name"]
+        if canonical.get("description") and not merged.get("description"):
+            merged["description"] = canonical["description"]
+        if merged.get("trinket_id") and (merged.get("pick_rate") or merged.get("avg_placement")):
+            enriched_by_key[name_key] = merged
+
+    enriched = list(enriched_by_key.values())
+    if enriched:
+        structured["trinkets"] = enriched
+        structured["active_trinkets"] = len(enriched)
+        structured["source"] = {
+            **(structured.get("source") or {}),
+            "backend": "firecrawl",
+            "canonical_enriched_from_cache": True,
+            "firecrawl_rows_merged_with_previous_active_cache": True,
+        }
+    return parsed
+
+
+async def _try_firecrawl_html(
+    source: Source,
+    *,
+    fetched_at: str,
+    reason: str,
+) -> dict[str, Any] | None:
+    global _firecrawl_fallback_attempts
+    is_primary = reason == "primary"
+    if source.id not in (firecrawl_primary_source_ids() | firecrawl_fallback_source_ids()):
+        return None
+    if not is_primary:
+        max_attempts = firecrawl_fallback_max_attempts_per_refresh()
+        if _firecrawl_fallback_attempts >= max_attempts:
+            log_action(
+                "firecrawl.fetch.skip",
+                source_id=source.id,
+                backend="firecrawl",
+                level="warn",
+                detail=f"Firecrawl fallback attempt cap reached ({max_attempts})",
+                extra={"reason": reason},
+            )
+            return None
+        _firecrawl_fallback_attempts += 1
+    try:
+        from .firecrawl_backend import scrape_source
+
+        log_action(
+            "firecrawl.fetch.begin",
+            source_id=source.id,
+            backend="firecrawl",
+            level="warn" if reason != "primary" else "info",
+            detail=reason,
+        )
+        scraped = await scrape_source(source)
+        parsed = parse_html(source, scraped.html)
+        if not parsed.get("title"):
+            parsed["title"] = source.description or source.id
+        if source.id == "hsguru_streamer_decks_legend_1000":
+            parsed = _dedupe_streamer_decks_parsed(parsed)
+        parsed = _enrich_firecrawl_trinkets_from_cache(source, parsed)
+        ok, validation_reason = validate_parsed_data(source, parsed)
+        qmetrics = quality_metrics(source, parsed)
+        if not ok:
+            log_action(
+                "firecrawl.validate.fail",
+                source_id=source.id,
+                backend="firecrawl",
+                state="quality_error",
+                level="warn",
+                detail=validation_reason,
+                extra={"quality_metrics": qmetrics},
+            )
+            return None
+
+        dataset = {
+            "state": "ok",
+            "fetched_at": fetched_at,
+            "http_status": scraped.status_code,
+            "final_url": scraped.final_url,
+            "content_length": scraped.content_length,
+            "backend": "firecrawl",
+            "used_residential_proxy": False,
+            "data": parsed,
+        }
+        reg, reg_msg = _save_dataset_with_checks(source, dataset, fetched_at=fetched_at)
+        state = "partial" if reg else "ok"
+        status = _status_payload(
+            source,
+            state,
+            fetched_at=fetched_at,
+            http_status=scraped.status_code,
+            final_url=scraped.final_url,
+            content_length=scraped.content_length,
+            backend="firecrawl",
+            detail=reg_msg if reg else None,
+            used_residential_proxy=False,
+            quality=qmetrics,
+        )
+        status["firecrawl_credits_used"] = scraped.metadata.get("creditsUsed")
+        status["firecrawl_cache_state"] = scraped.metadata.get("cacheState")
+        if reg:
+            status = _save_failure_status(source, status)
+        else:
+            save_status(source.id, status)
+        log_action(
+            "firecrawl.fetch.ok",
+            source_id=source.id,
+            backend="firecrawl",
+            state=state,
+            bytes_out=scraped.content_length,
+            extra={
+                "credits_used": scraped.metadata.get("creditsUsed"),
+                "cache_state": scraped.metadata.get("cacheState"),
+                "reason": reason,
+                "quality_metrics": qmetrics,
+            },
+        )
+        return status
+    except Exception as exc:
+        log_action(
+            "firecrawl.fetch.fail",
+            source_id=source.id,
+            backend="firecrawl",
+            state="fetch_error",
+            level="warn",
+            error_type=type(exc).__name__,
+            detail=str(exc)[:1000],
+            extra={"reason": reason},
+        )
+        return None
+
+
 async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
     if source.id == "hsreplay_arena_winning_decks":
         from .hsreplay_arena_api import fetch_winning_decks
@@ -631,6 +890,15 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         if status.get("state") != "ok":
             await send_telegram_alert(source.id, "proxy_required", status["detail"], source.url)
         return _finish(status)
+
+    if source.id in firecrawl_primary_source_ids():
+        firecrawl_status = await _try_firecrawl_html(
+            source,
+            fetched_at=fetched_at,
+            reason="primary",
+        )
+        if firecrawl_status is not None:
+            return _finish(firecrawl_status)
 
     if tier_for(source.id) in API_FIRST_TIERS:
         log_action("api.route.begin", source_id=source.id, tier=source_tier)
@@ -840,6 +1108,13 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             detail=str(exc)[:2000],
             level="error",
         )
+        firecrawl_status = await _try_firecrawl_html(
+            source,
+            fetched_at=fetched_at,
+            reason=f"browser_exception:{type(exc).__name__}",
+        )
+        if firecrawl_status is not None:
+            return _finish(firecrawl_status)
         status = _status_payload(
             source,
             "fetch_error",
@@ -873,6 +1148,13 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             backend=backend,
             level="error",
         )
+        firecrawl_status = await _try_firecrawl_html(
+            source,
+            fetched_at=fetched_at,
+            reason="cloudflare_challenge",
+        )
+        if firecrawl_status is not None:
+            return _finish(firecrawl_status)
         status = _status_payload(
             source,
             "blocked_by_protection",
@@ -897,6 +1179,13 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             backend=backend,
             level="error",
         )
+        firecrawl_status = await _try_firecrawl_html(
+            source,
+            fetched_at=fetched_at,
+            reason=f"http_status:{http_status}",
+        )
+        if firecrawl_status is not None:
+            return _finish(firecrawl_status)
         status = _status_payload(
             source,
             "http_error",
@@ -950,6 +1239,14 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                     logging.getLogger(__name__).info("Relogin successful, retrying fetch for %s...", source.id)
                     deactivate_source_trace((_tok_trace, _tok_source, _tok_step))
                     return await fetch_source(client, source, retry_on_auth_failure=False)
+
+        firecrawl_status = await _try_firecrawl_html(
+            source,
+            fetched_at=fetched_at,
+            reason=f"quality_error:{reason[:120]}",
+        )
+        if firecrawl_status is not None:
+            return _finish(firecrawl_status)
 
         status = _status_payload(
             source,
@@ -1238,6 +1535,8 @@ async def _refresh_sources_unlocked(
     *,
     tier_filter: str | None = None,
 ) -> list[dict[str, Any]]:
+    global _firecrawl_fallback_attempts
+    _firecrawl_fallback_attempts = 0
     validate_tier_registry()
     from .refresh_context import begin_refresh_run, end_refresh_run
     from .scrapers.rotator import reset_backend_circuits

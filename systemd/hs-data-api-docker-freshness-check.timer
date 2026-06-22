@@ -1,0 +1,11 @@
+[Unit]
+Description=Freshness audits for Hearthstone parser in Docker
+
+[Timer]
+OnCalendar=*-*-* 07:45:00 Europe/Warsaw
+OnCalendar=*-*-* 18:45:00 Europe/Warsaw
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

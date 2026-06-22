@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh HSGuru streamer decks via Firecrawl four times per day
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 Europe/Warsaw
+OnCalendar=*-*-* 09:15:00 Europe/Warsaw
+OnCalendar=*-*-* 15:15:00 Europe/Warsaw
+OnCalendar=*-*-* 21:15:00 Europe/Warsaw
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

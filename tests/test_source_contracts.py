@@ -11,6 +11,15 @@ from app.sources import SOURCE_BY_ID
 
 
 class SourceContractsTest(unittest.TestCase):
+    def test_hsguru_streamer_decks_keeps_public_source_identity(self) -> None:
+        source = SOURCE_BY_ID["hsguru_streamer_decks_legend_1000"]
+
+        self.assertEqual(source.site, "hsguru")
+        self.assertEqual(source.category, "streamer_decks")
+        self.assertIn("last_played=min_ago_4320", source.fetch_url)
+        self.assertIn("legend=1000", source.fetch_url)
+        self.assertIn("limit=100", source.fetch_url)
+
     def test_arena_advanced_contract_blocks_bad_fallback(self) -> None:
         contract = get_contract("hsreplay_arena_cards_advanced")
 
@@ -40,17 +49,32 @@ class SourceContractsTest(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertIn("final_deck", report["critical_fields"])
 
-    def test_trinket_contract_checks_pick_rate_fill(self) -> None:
+    def test_trinket_contract_checks_canonical_id_fill(self) -> None:
         report = contract_quality_report(
             "hsreplay_battlegrounds_trinkets_lesser",
             {
                 "type": "bg_trinkets",
-                "trinkets": [{"name": f"Trinket {idx}", "pick_rate": "10%"} for idx in range(8)],
+                "trinkets": [
+                    {"name": f"Trinket {idx}", "trinket_id": f"BG30_MagicItem_{idx}"}
+                    for idx in range(80)
+                ],
             },
         )
 
         self.assertTrue(report["ok"])
         self.assertEqual(report["quality_score"], 1.0)
+
+    def test_trinket_contract_rejects_ranked_rows_as_canonical_rows(self) -> None:
+        report = contract_quality_report(
+            "hsreplay_battlegrounds_trinkets_lesser",
+            {
+                "type": "bg_trinkets",
+                "trinkets": [{"name": f"Trinket {idx}", "pick_rate": "10%"} for idx in range(80)],
+            },
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertIn("trinket_id", report["critical_fields"])
 
     def test_hsreplay_contract_overrides_channel_order(self) -> None:
         labels = [
@@ -118,6 +142,56 @@ class SourceContractsTest(unittest.TestCase):
         report = contract_quality_report(
             "hsreplay_meta_archetypes_legend_eu_1d",
             {"type": "hsreplay_meta_archetypes", "classes": []},
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertIn("too few rows", "; ".join(report["warnings"]))
+
+    def test_hsguru_meta_contract_rejects_tiny_hydration(self) -> None:
+        report = contract_quality_report(
+            "hsguru_meta_wild_top_legend",
+            {
+                "type": "meta",
+                "strategies": [
+                    {"Archetype": "A", "Popularity": "1%"},
+                    {"Archetype": "B", "Popularity": "2%"},
+                ],
+            },
+        )
+
+        self.assertFalse(report["ok"])
+        self.assertIn("too few rows", "; ".join(report["warnings"]))
+
+    def test_hsguru_matchups_contract_checks_key_fields(self) -> None:
+        report = contract_quality_report(
+            "hsguru_matchups_legend",
+            {
+                "type": "matchups",
+                "matchups": [
+                    {"archetype": f"Deck {idx}", "vs": "Opponent", "winrate": "50%"}
+                    for idx in range(120)
+                ],
+            },
+        )
+
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["quality_score"], 1.0)
+
+    def test_vicious_radars_contract_rejects_tiny_optional_fetch_result(self) -> None:
+        contract = get_contract("vicious_syndicate_radars")
+
+        self.assertIsNotNone(contract)
+        self.assertGreaterEqual(contract.min_rows, 10)  # type: ignore[union-attr]
+
+        report = contract_quality_report(
+            "vicious_syndicate_radars",
+            {
+                "type": "vicious_syndicate_radars",
+                "radars": [
+                    {"nodes": [{"name": "A"}], "edges": [{"source": "A", "target": "B"}]}
+                    for _ in range(8)
+                ],
+            },
         )
 
         self.assertFalse(report["ok"])

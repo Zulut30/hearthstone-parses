@@ -5,7 +5,6 @@
 
 Связанные документы:
 - [DEPLOY.md](../DEPLOY.md) — установка и перенос на другой сервер
-- [PROXY_AND_RELIABILITY.md](PROXY_AND_RELIABILITY.md) — ротация IP и надёжность
 
 ---
 
@@ -208,10 +207,11 @@ chown root:root /var/lib/hs-data-api -R
 
 ### 3.7. Telegram-алерты
 
-Отправляются при: `proxy_required`, `fetch_error`, `blocked_by_protection`, `http_error`, `quality_error`.
+Отправляются при: `proxy_required`, `fetch_error`, `blocked_by_protection`, `http_error`, `quality_error`, `cached_after_failure`, `stale_data`.
 
 - Токен бота — секрет; отозвать через @BotFather при утечке.
 - В сообщениях **нет** паролей, только `source_id`, URL страницы, `state`, `detail`.
+- `cached_after_failure` означает, что API продолжает отдавать последний хороший dataset, но live refresh уже упал. Не ждите stale threshold: проверьте `/ops/events`, backend failures и запустите точечный protected retry.
 
 ### 3.8. Git и CI
 

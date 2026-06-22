@@ -6,6 +6,7 @@ from pathlib import Path
 
 DEFAULT_DATA_DIR = "/var/lib/hs-data-api"
 DEFAULT_BACKENDS = "flaresolverr,scrapling,patchright,curl_cffi,cloudscraper"
+DEFAULT_HSGURU_BACKENDS = "flaresolverr,scrapling,curl_cffi,cloudscraper,patchright"
 DEFAULT_BACKENDS_LAB = "cloakbrowser,flaresolverr,scrapling,patchright,curl_cffi,cloudscraper"
 DEFAULT_HSREPLAY_JSON_CHANNELS = "curl_cffi,flaresolverr"
 DEFAULT_HSREPLAY_MARKDOWN_CHANNELS = "flaresolverr,curl_cffi"
@@ -71,6 +72,11 @@ def fetch_direct_enabled() -> bool:
 
 def fetch_backends() -> list[str]:
     raw = os.environ.get("HS_FETCH_BACKENDS", DEFAULT_BACKENDS)
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def hsguru_fetch_backends() -> list[str]:
+    raw = os.environ.get("HS_HSGURU_FETCH_BACKENDS", DEFAULT_HSGURU_BACKENDS)
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
@@ -294,6 +300,65 @@ def quality_thresholds_path() -> Path:
 
 def dataset_regression_drop_ratio() -> float:
     return float(os.environ.get("HS_DATASET_REGRESSION_DROP_RATIO", "0.30"))
+
+
+def firecrawl_api_key() -> str | None:
+    value = (
+        os.environ.get("FIRECRAWL_API_KEY")
+        or os.environ.get("HS_FIRECRAWL_API_KEY")
+        or ""
+    ).strip()
+    return value or None
+
+
+def firecrawl_max_age_ms() -> int:
+    return max(0, int(os.environ.get("HS_FIRECRAWL_MAX_AGE_MS", "172800000")))
+
+
+def firecrawl_wait_ms() -> int:
+    return max(0, int(os.environ.get("HS_FIRECRAWL_WAIT_MS", "5000")))
+
+
+def firecrawl_timeout_ms() -> int:
+    return max(1000, int(os.environ.get("HS_FIRECRAWL_TIMEOUT_MS", "30000")))
+
+
+def firecrawl_primary_source_ids() -> set[str]:
+    raw = os.environ.get(
+        "HS_FIRECRAWL_PRIMARY_SOURCE_IDS",
+        "hsguru_streamer_decks_legend_1000",
+    )
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def firecrawl_fallback_source_ids() -> set[str]:
+    raw = os.environ.get(
+        "HS_FIRECRAWL_FALLBACK_SOURCE_IDS",
+        ",".join(
+            [
+                "hsguru_meta_standard_legend",
+                "hsguru_meta_standard_diamond_4to1",
+                "hsguru_meta_wild_legend",
+                "hsguru_meta_wild_diamond_4to1",
+                "hsguru_meta_standard_top_5k",
+                "hsguru_meta_standard_top_legend",
+                "hsguru_meta_wild_top_legend",
+                "hsguru_meta_wild_top_5k",
+                "hsguru_matchups_legend",
+                "hsguru_matchups_diamond_4to1",
+                "hsreplay_battlegrounds_trinkets_lesser",
+                "hsreplay_battlegrounds_trinkets_greater",
+                "hsreplay_decks_trending",
+                "heartharena_tierlist",
+                "vicious_syndicate_radars",
+            ]
+        ),
+    )
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def firecrawl_fallback_max_attempts_per_refresh() -> int:
+    return max(0, int(os.environ.get("HS_FIRECRAWL_FALLBACK_MAX_ATTEMPTS_PER_REFRESH", "8")))
 
 
 def fingerprint_node_enabled() -> bool:

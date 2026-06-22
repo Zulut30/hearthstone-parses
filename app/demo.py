@@ -48,6 +48,24 @@ def _streamer_decks_view(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _active_trinkets_view(view: dict[str, Any]) -> dict[str, Any]:
+    if view.get("type") != "bg_trinkets":
+        return view
+    trinkets = view.get("trinkets")
+    if not isinstance(trinkets, list):
+        return view
+    active = [
+        row
+        for row in trinkets
+        if isinstance(row, dict) and (row.get("pick_rate") or row.get("avg_placement"))
+    ]
+    filtered = dict(view)
+    filtered["trinkets"] = active
+    filtered["active_trinkets"] = len(active)
+    filtered["hidden_inactive_trinkets"] = len(trinkets) - len(active)
+    return filtered
+
+
 def build_demo_view(source_id: str) -> dict[str, Any]:
     source = SOURCE_BY_ID[source_id]
     status = load_status(source_id)
@@ -70,6 +88,7 @@ def build_demo_view(source_id: str) -> dict[str, Any]:
         view = dict(structured)
         view["title"] = data.get("title")
         view["kind"] = structured.get("type", source.category)
+        view = _active_trinkets_view(view)
     view["type"] = view.get("type") or view.get("kind")
 
     return {

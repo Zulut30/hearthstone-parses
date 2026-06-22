@@ -17,6 +17,10 @@ from .storage import load_dataset, load_status, root_dir, save_dataset, save_sta
 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+ACTIVE_TRINKET_SOURCE_IDS = {
+    "hsreplay_battlegrounds_trinkets_lesser",
+    "hsreplay_battlegrounds_trinkets_greater",
+}
 
 app = FastAPI(
     title="Hearthstone Data API",
@@ -159,11 +163,59 @@ def source_payload(source_id: str) -> dict:
     }
 
 
+def _active_trinkets_only(structured: dict[str, Any]) -> dict[str, Any]:
+    trinkets = structured.get("trinkets")
+    if not isinstance(trinkets, list):
+        return structured
+    active = [
+        row
+        for row in trinkets
+        if isinstance(row, dict) and (row.get("pick_rate") or row.get("avg_placement"))
+    ]
+    filtered = dict(structured)
+    filtered["trinkets"] = active
+    filtered["active_trinkets"] = len(active)
+    filtered["hidden_inactive_trinkets"] = len(trinkets) - len(active)
+    return filtered
+
+
+def public_dataset_payload(source_id: str, dataset: dict[str, Any]) -> dict[str, Any]:
+    if source_id not in ACTIVE_TRINKET_SOURCE_IDS:
+        return dataset
+    payload = dict(dataset)
+    data = dict(payload.get("data") or {})
+    for key in ("structured", "hsreplay_extracted"):
+        if isinstance(data.get(key), dict):
+            data[key] = _active_trinkets_only(data[key])
+    payload["data"] = data
+    return payload
+
+
 @app.get("/system/technologies")
 def system_technologies() -> dict:
     from .tech_stack import build_technologies_payload
 
     return build_technologies_payload()
+
+
+@app.get("/firecrawl/hsreplay/map")
+def firecrawl_hsreplay_map() -> dict:
+    from .firecrawl_map import load_hsreplay_map
+
+    payload = load_hsreplay_map()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="HSReplay Firecrawl map has not been generated yet")
+    return payload
+
+
+@app.get("/firecrawl/hsreplay/index")
+def firecrawl_hsreplay_index() -> dict:
+    from .firecrawl_map import load_hsreplay_index
+
+    payload = load_hsreplay_index()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="HSReplay Firecrawl index has not been generated yet")
+    return payload
 
 
 @app.get("/health")
@@ -180,12 +232,15 @@ def build_health_diagnostics() -> dict:
     statuses = [load_status(source.id) for source in SOURCES]
     states: dict[str, int] = {}
     cached_sources: list[str] = []
+    cached_after_failure_sources: list[str] = []
     hard_failed_sources: list[str] = []
     for source, status in zip(SOURCES, statuses, strict=True):
         state = status["state"] if status else "never_fetched"
         states[state] = states.get(state, 0) + 1
         if status and status.get("serving_cached_dataset"):
             cached_sources.append(source.id)
+            if status.get("last_refresh_state") not in (None, "ok"):
+                cached_after_failure_sources.append(source.id)
         if state != "ok":
             hard_failed_sources.append(source.id)
 
@@ -205,9 +260,11 @@ def build_health_diagnostics() -> dict:
         "states": states,
         "hard_failed_sources": hard_failed_sources,
         "cached_sources": cached_sources,
+        "cached_after_failure_sources": cached_after_failure_sources,
         "stale_sources": stale_ids,
         "stale_count": len(stale_ids),
         "cached_count": len(cached_sources),
+        "cached_after_failure_count": len(cached_after_failure_sources),
     }
 
 
@@ -260,7 +317,7 @@ def get_dataset(source_id: str) -> dict:
             status_code=404,
             detail={"message": "No successful dataset cached yet", "status": status},
         )
-    return dataset
+    return public_dataset_payload(source_id, dataset)
 
 
 @app.post("/admin/refresh", dependencies=[Depends(require_admin)])
@@ -272,6 +329,25 @@ async def refresh(
         if missing:
             raise HTTPException(status_code=404, detail={"unknown_sources": missing})
     return {"results": await refresh_sources(source_id)}
+
+
+@app.post("/admin/refresh/hsreplay-archetypes", dependencies=[Depends(require_admin)])
+async def refresh_hsreplay_archetypes(
+    limit: int | None = Query(None, ge=1, le=500),
+    rank_range: str = Query("LEGEND", min_length=1, max_length=80),
+    game_type: str = Query("RANKED_STANDARD", min_length=1, max_length=80),
+    region: str = Query("REGION_EU", min_length=1, max_length=80),
+) -> dict:
+    from .hsreplay_archetypes_db import export_latest_archetypes_json, refresh_hsreplay_archetype_database
+
+    result = await refresh_hsreplay_archetype_database(
+        rank_range=rank_range,
+        game_type=game_type,
+        region=region,
+        limit=limit,
+    )
+    result["export_path"] = str(export_latest_archetypes_json())
+    return result
 
 
 @app.put("/admin/datasets/{source_id}", dependencies=[Depends(require_admin)])
@@ -360,6 +436,172 @@ def db_decks(
         }
     except Exception:
         raise HTTPException(status_code=500, detail="Database query failed")
+    finally:
+        conn.close()
+
+
+@app.get("/api/db/archetypes")
+def db_archetypes(
+    class_name: str | None = Query(None, min_length=1, max_length=80),
+    q: str | None = Query(None, min_length=1, max_length=120),
+    rank_range: str = Query("LEGEND", min_length=1, max_length=80),
+    game_type: str = Query("RANKED_STANDARD", min_length=1, max_length=80),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=10000),
+) -> dict:
+    from .hsreplay_archetypes_db import latest_run, list_archetype_snapshots
+
+    return {
+        "latest_run": latest_run(),
+        **list_archetype_snapshots(
+            rank_range=rank_range,
+            game_type=game_type,
+            class_name=class_name,
+            q=q,
+            limit=limit,
+            offset=offset,
+        ),
+    }
+
+
+@app.get("/api/db/archetypes/{archetype_id}")
+def db_archetype_detail(
+    archetype_id: int,
+    rank_range: str = Query("LEGEND", min_length=1, max_length=80),
+    game_type: str = Query("RANKED_STANDARD", min_length=1, max_length=80),
+) -> dict:
+    from .hsreplay_archetypes_db import get_archetype_detail
+
+    payload = get_archetype_detail(archetype_id, rank_range=rank_range, game_type=game_type)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Archetype snapshot not found")
+    return payload
+
+
+@app.get("/api/db/archetypes/{archetype_id}/mulligan")
+def db_archetype_mulligan(
+    archetype_id: int,
+    rank_range: str = Query("LEGEND", min_length=1, max_length=80),
+    game_type: str = Query("RANKED_STANDARD", min_length=1, max_length=80),
+    display_only: bool = Query(True),
+    limit: int = Query(40, ge=1, le=250),
+) -> dict:
+    from .db import get_db_connection
+    from .hsreplay_archetypes_db import get_latest_archetype_snapshot
+
+    snapshot = get_latest_archetype_snapshot(archetype_id, rank_range=rank_range, game_type=game_type)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Archetype snapshot not found")
+    conn = get_db_connection()
+    try:
+        query = "SELECT * FROM archetype_mulligan WHERE snapshot_id = ?"
+        params: list[Any] = [snapshot["id"]]
+        if display_only:
+            query += " AND display_row = 1"
+        query += " ORDER BY hsreplay_rank ASC LIMIT ?"
+        params.append(limit)
+        rows = [dict(row) for row in conn.execute(query, params).fetchall()]
+        return {"snapshot": snapshot, "mulligan": rows}
+    finally:
+        conn.close()
+
+
+@app.get("/api/db/archetypes/{archetype_id}/matchups")
+def db_archetype_matchups(
+    archetype_id: int,
+    rank_range: str = Query("LEGEND", min_length=1, max_length=80),
+    game_type: str = Query("RANKED_STANDARD", min_length=1, max_length=80),
+    min_games: int = Query(0, ge=0, le=1000000),
+    limit: int = Query(100, ge=1, le=500),
+) -> dict:
+    from .db import get_db_connection
+    from .hsreplay_archetypes_db import get_latest_archetype_snapshot
+
+    snapshot = get_latest_archetype_snapshot(archetype_id, rank_range=rank_range, game_type=game_type)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Archetype snapshot not found")
+    conn = get_db_connection()
+    try:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM archetype_matchups
+                WHERE snapshot_id = ? AND COALESCE(total_games, 0) >= ?
+                ORDER BY total_games DESC
+                LIMIT ?
+                """,
+                (snapshot["id"], min_games, limit),
+            ).fetchall()
+        ]
+        return {"snapshot": snapshot, "matchups": rows}
+    finally:
+        conn.close()
+
+
+@app.get("/api/db/archetypes/{archetype_id}/decks")
+def db_archetype_decks(
+    archetype_id: int,
+    rank_range: str = Query("LEGEND", min_length=1, max_length=80),
+    game_type: str = Query("RANKED_STANDARD", min_length=1, max_length=80),
+    include_cards: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+) -> dict:
+    from .db import get_db_connection
+    from .hsreplay_archetypes_db import get_archetype_deck_cards, get_latest_archetype_snapshot
+
+    snapshot = get_latest_archetype_snapshot(archetype_id, rank_range=rank_range, game_type=game_type)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Archetype snapshot not found")
+    conn = get_db_connection()
+    try:
+        decks = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT * FROM archetype_decks
+                WHERE snapshot_id = ?
+                ORDER BY total_games DESC
+                LIMIT ?
+                """,
+                (snapshot["id"], limit),
+            ).fetchall()
+        ]
+        if include_cards:
+            for deck in decks:
+                deck["cards"] = get_archetype_deck_cards(int(deck["id"]))
+        return {"snapshot": snapshot, "decks": decks}
+    finally:
+        conn.close()
+
+
+@app.get("/api/db/archetypes/{archetype_id}/history")
+def db_archetype_history(
+    archetype_id: int,
+    rank_range: str = Query("LEGEND", min_length=1, max_length=80),
+    game_type: str = Query("RANKED_STANDARD", min_length=1, max_length=80),
+) -> dict:
+    from .db import get_db_connection
+    from .hsreplay_archetypes_db import get_latest_archetype_snapshot
+
+    snapshot = get_latest_archetype_snapshot(archetype_id, rank_range=rank_range, game_type=game_type)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Archetype snapshot not found")
+    conn = get_db_connection()
+    try:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT series_name, point_date, value
+                FROM archetype_time_series
+                WHERE snapshot_id = ?
+                ORDER BY series_name, point_date
+                """,
+                (snapshot["id"],),
+            ).fetchall()
+        ]
+        return {"snapshot": snapshot, "history": rows}
     finally:
         conn.close()
 

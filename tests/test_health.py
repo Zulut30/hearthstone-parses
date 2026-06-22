@@ -26,6 +26,7 @@ class HealthEndpointTest(unittest.TestCase):
             "source_id": "src1",
             "state": "ok",
             "serving_cached_dataset": True,
+            "last_refresh_state": "fetch_error",
             "fetched_at": "2026-06-04T00:00:00+00:00",
         }
         stale = [{"source_id": "src1", "reason": "ok_but_stale"}]
@@ -46,6 +47,8 @@ class HealthEndpointTest(unittest.TestCase):
         self.assertFalse(payload["freshness_ok"])
         self.assertTrue(payload["degraded"])
         self.assertEqual(payload["cached_sources"], ["src1"])
+        self.assertEqual(payload["cached_after_failure_sources"], ["src1"])
+        self.assertEqual(payload["cached_after_failure_count"], 1)
         self.assertEqual(payload["stale_sources"], ["src1"])
 
 

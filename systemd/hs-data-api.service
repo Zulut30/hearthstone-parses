@@ -12,30 +12,5 @@ ExecStart=/opt/hs-data-api/venv/bin/python -m app.server
 Restart=always
 RestartSec=3
 
-# API sandbox. Refresh/browser jobs have their own units because they may need Docker/Xvfb.
-User=hs-data-api
-Group=hs-data-api
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=strict
-ProtectHome=true
-ProtectClock=true
-ProtectKernelLogs=true
-ProtectKernelModules=true
-ProtectKernelTunables=true
-ProtectControlGroups=true
-ProtectHostname=true
-RestrictSUIDSGID=true
-RestrictRealtime=true
-RestrictNamespaces=true
-LockPersonality=true
-RemoveIPC=true
-ReadWritePaths=/var/lib/hs-data-api
-CapabilityBoundingSet=
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-SystemCallArchitectures=native
-
 [Install]
 WantedBy=multi-user.target

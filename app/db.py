@@ -105,6 +105,157 @@ def init_db() -> None:
                 );
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archetype_refresh_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    game_type TEXT NOT NULL,
+                    rank_range TEXT NOT NULL,
+                    region TEXT NOT NULL,
+                    summary_time_range TEXT NOT NULL,
+                    deck_time_range TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    state TEXT NOT NULL,
+                    archetypes_total INTEGER DEFAULT 0,
+                    archetypes_ok INTEGER DEFAULT 0,
+                    error TEXT
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS hsreplay_archetypes (
+                    archetype_id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    slug TEXT,
+                    player_class TEXT,
+                    class_name TEXT,
+                    url TEXT,
+                    format TEXT DEFAULT 'standard',
+                    first_seen_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archetype_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    archetype_id INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    game_type TEXT NOT NULL,
+                    rank_range TEXT NOT NULL,
+                    region TEXT NOT NULL,
+                    summary_time_range TEXT NOT NULL,
+                    deck_time_range TEXT NOT NULL,
+                    mulligan_time_range TEXT NOT NULL,
+                    fetched_at TEXT NOT NULL,
+                    as_of_popularity TEXT,
+                    as_of_matchups TEXT,
+                    as_of_decks TEXT,
+                    as_of_mulligan TEXT,
+                    total_games INTEGER,
+                    win_rate REAL,
+                    pct_of_class REAL,
+                    pct_of_total REAL,
+                    raw_json TEXT,
+                    UNIQUE(run_id, archetype_id),
+                    FOREIGN KEY(run_id) REFERENCES archetype_refresh_runs(id),
+                    FOREIGN KEY(archetype_id) REFERENCES hsreplay_archetypes(archetype_id)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archetype_matchups (
+                    snapshot_id INTEGER NOT NULL,
+                    opponent_archetype_id INTEGER NOT NULL,
+                    opponent_name TEXT,
+                    opponent_class TEXT,
+                    total_games INTEGER,
+                    win_rate REAL,
+                    PRIMARY KEY(snapshot_id, opponent_archetype_id),
+                    FOREIGN KEY(snapshot_id) REFERENCES archetype_snapshots(id)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archetype_mulligan (
+                    snapshot_id INTEGER NOT NULL,
+                    dbf_id INTEGER NOT NULL,
+                    card_id TEXT,
+                    card_name TEXT NOT NULL,
+                    card_name_en TEXT,
+                    cost INTEGER,
+                    card_type TEXT,
+                    rarity TEXT,
+                    card_class TEXT,
+                    hsreplay_rank INTEGER,
+                    display_row INTEGER NOT NULL DEFAULT 0,
+                    top_30_row INTEGER NOT NULL DEFAULT 0,
+                    times_presented_in_initial_cards INTEGER,
+                    times_kept INTEGER,
+                    keep_percentage REAL,
+                    times_in_opening_hand INTEGER,
+                    opening_hand_winrate REAL,
+                    times_card_drawn INTEGER,
+                    winrate_when_drawn REAL,
+                    times_card_played INTEGER,
+                    avg_turn_played_on REAL,
+                    avg_turns_in_hand REAL,
+                    winrate_when_played REAL,
+                    PRIMARY KEY(snapshot_id, dbf_id),
+                    FOREIGN KEY(snapshot_id) REFERENCES archetype_snapshots(id)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archetype_decks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    deck_id TEXT NOT NULL,
+                    url TEXT,
+                    digest TEXT,
+                    total_games INTEGER,
+                    win_rate REAL,
+                    avg_game_length_seconds REAL,
+                    avg_num_player_turns REAL,
+                    card_count INTEGER,
+                    raw_deck_list TEXT,
+                    raw_deck_sideboard TEXT,
+                    UNIQUE(snapshot_id, deck_id),
+                    FOREIGN KEY(snapshot_id) REFERENCES archetype_snapshots(id)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archetype_deck_cards (
+                    archetype_deck_id INTEGER NOT NULL,
+                    dbf_id INTEGER NOT NULL,
+                    card_id TEXT,
+                    card_name TEXT NOT NULL,
+                    card_name_en TEXT,
+                    cost INTEGER,
+                    card_type TEXT,
+                    rarity TEXT,
+                    card_class TEXT,
+                    count INTEGER NOT NULL,
+                    sideboard INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(archetype_deck_id, dbf_id, sideboard),
+                    FOREIGN KEY(archetype_deck_id) REFERENCES archetype_decks(id)
+                );
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS archetype_time_series (
+                    snapshot_id INTEGER NOT NULL,
+                    series_name TEXT NOT NULL,
+                    point_date TEXT NOT NULL,
+                    value REAL,
+                    PRIMARY KEY(snapshot_id, series_name, point_date),
+                    FOREIGN KEY(snapshot_id) REFERENCES archetype_snapshots(id)
+                );
+            """)
+
             # Create indexing for super fast search and queries
             _ensure_decks_column(conn, "draft_id", "TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_source_class ON decks(source_id, class);")
@@ -116,6 +267,13 @@ def init_db() -> None:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_format_updated ON decks(format, updated_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_card_pop_history ON card_popularity_history(source_id, card_name, recorded_at);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_runs_latest ON archetype_refresh_runs(source, state, completed_at);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archetypes_class ON hsreplay_archetypes(player_class, updated_at);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_snapshots_latest ON archetype_snapshots(archetype_id, rank_range, game_type, fetched_at);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_snapshots_run ON archetype_snapshots(run_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_matchups_wr ON archetype_matchups(snapshot_id, win_rate);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_decks_games ON archetype_decks(snapshot_id, total_games);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_mulligan_display ON archetype_mulligan(snapshot_id, display_row, hsreplay_rank);")
             
             logger.info("SQLite database tables initialized successfully.")
     except Exception as e:

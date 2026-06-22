@@ -27,7 +27,16 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> None:
             continue
         # Always trust /etc/hs-data-api.env for app settings (avoid stale shell exports).
         if key.startswith(
-            ("HS_API_", "HS_FETCH_", "HS_FLARESOLVERR_", "HS_IPROYAL_", "HS_PROXY_", "HSREPLAY_", "TELEGRAM_")
+            (
+                "HS_API_",
+                "HS_FETCH_",
+                "HS_HSGURU_",
+                "HS_FLARESOLVERR_",
+                "HS_IPROYAL_",
+                "HS_PROXY_",
+                "HSREPLAY_",
+                "TELEGRAM_",
+            )
         ):
             os.environ[key] = value
         elif key not in os.environ:
@@ -64,8 +73,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pf.add_argument("--strict", action="store_true", help="Exit 1 if any required check fails.")
     canary = sub.add_parser("canary", help="Run parser canary checks for proxy, auth and key API endpoints.")
     canary.add_argument("--strict", action="store_true", help="Exit 1 if any canary check fails.")
+    freshness = sub.add_parser(
+        "freshness-check",
+        help="Audit stale/cached-after-failure datasets and optionally send stale alerts.",
+    )
+    freshness.add_argument("--since-hours", type=float, default=24.0)
+    freshness.add_argument("--alert", action="store_true", help="Send configured stale Telegram alerts.")
+    quality = sub.add_parser(
+        "quality-check",
+        help="Audit cached datasets with parser validation, source contracts and quality scores.",
+    )
+    quality.add_argument("--min-quality-score", type=float, default=0.85)
+    quality.add_argument("--warn-quality-score", type=float, default=0.95)
     hsguru_recon = sub.add_parser("hsguru-recon", help="Inspect a HSGuru page for embedded JSON/API candidates.")
     hsguru_recon.add_argument("--url", default="https://www.hsguru.com/meta?format=2&min_games=100&rank=legend")
+    sub.add_parser(
+        "firecrawl-map-hsreplay",
+        help="Run Firecrawl /v2/map for hsreplay.net and rebuild the derived HSReplay index.",
+    )
+    archetypes = sub.add_parser(
+        "refresh-hsreplay-archetypes",
+        help="Refresh the local SQLite database with HSReplay Standard archetype snapshots.",
+    )
+    archetypes.add_argument("--rank-range", default="LEGEND")
+    archetypes.add_argument("--game-type", default="RANKED_STANDARD")
+    archetypes.add_argument("--region", default="REGION_EU")
+    archetypes.add_argument("--summary-time-range", default="LAST_7_DAYS")
+    archetypes.add_argument("--deck-time-range", default="LAST_30_DAYS")
+    archetypes.add_argument("--mulligan-time-range", default="LAST_30_DAYS")
+    archetypes.add_argument("--limit", type=int, default=None, help="Debug: refresh only first N archetypes from the index.")
     login = sub.add_parser("hsreplay-login", help="Log into HSReplay Premium and save browser session.")
     imp = sub.add_parser(
         "hsreplay-import-storage",
@@ -118,6 +154,116 @@ def main(argv: list[str] | None = None) -> int:
         if args.strict and not result.get("ok"):
             return 1
         return 0
+    if args.command == "freshness-check":
+        from .fetcher import _maybe_cached_after_failure_alert
+        from .refresh_log import build_summary
+        from .stale_monitor import alert_stale_sources
+        from .storage import load_status
+
+        async def _send_freshness_alerts(cached_source_ids: list[str]) -> dict[str, int]:
+            stale_alerts = await alert_stale_sources()
+            cached_attempts = 0
+            for source_id in cached_source_ids:
+                source = SOURCE_BY_ID.get(source_id)
+                if source is None:
+                    continue
+                status = load_status(source_id) or {}
+                await _maybe_cached_after_failure_alert(source, status)
+                cached_attempts += 1
+            return {
+                "stale_alerts_sent": stale_alerts,
+                "cached_after_failure_alerts_attempted": cached_attempts,
+            }
+
+        summary = build_summary(since_hours=args.since_hours)
+        cached_after_failure_sources = summary.get("cached_after_failure_sources", [])
+        payload = {
+            "ok": bool(summary.get("freshness", {}).get("ok")),
+            "freshness": summary.get("freshness"),
+            "stale_datasets": summary.get("stale_datasets", []),
+            "cached_after_failure_sources": cached_after_failure_sources,
+            "stale_hours_threshold": summary.get("stale_hours_threshold"),
+        }
+        if args.alert:
+            payload["alerts"] = asyncio.run(_send_freshness_alerts(cached_after_failure_sources))
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if payload["ok"] else 1
+    if args.command == "quality-check":
+        from collections import Counter
+
+        from .scrapers.quality import quality_metrics, validate_parsed_data
+        from .source_contracts import contract_quality_report, get_contract
+        from .storage import load_dataset, load_status
+
+        sources = []
+        bad = []
+        warn = []
+        for source in SOURCE_BY_ID.values():
+            status = load_status(source.id) or {}
+            dataset = load_dataset(source.id) or {}
+            data = dataset.get("data") or {}
+            structured = data.get("structured") or data.get("hsreplay_extracted") or {}
+            error_type = None
+            try:
+                validate_ok, reason = validate_parsed_data(source, data) if data else (False, "missing dataset")
+                metrics = quality_metrics(source, data) if data else {}
+                contract = get_contract(source.id)
+                contract_report = (
+                    contract_quality_report(source.id, structured)
+                    if contract is not None and structured
+                    else None
+                )
+            except Exception as exc:
+                validate_ok = False
+                reason = f"quality-check raised {type(exc).__name__}: {exc}"
+                metrics = {}
+                contract_report = None
+                error_type = type(exc).__name__
+            quality_score = metrics.get("quality_score")
+            row = {
+                "source_id": source.id,
+                "site": source.site,
+                "category": source.category,
+                "state": status.get("state", "never_fetched"),
+                "backend": status.get("backend"),
+                "serving_cached_dataset": bool(status.get("serving_cached_dataset")),
+                "structured_type": structured.get("type"),
+                "rows_total": metrics.get("rows_total"),
+                "quality_score": quality_score,
+                "validate_ok": validate_ok,
+                "validate_reason": reason,
+                "error_type": error_type,
+                "contract_ok": None if contract_report is None else contract_report.get("ok"),
+                "contract_warnings": None if contract_report is None else contract_report.get("warnings"),
+            }
+            sources.append(row)
+            low_score = isinstance(quality_score, (int, float)) and quality_score < args.min_quality_score
+            warn_score = (
+                isinstance(quality_score, (int, float))
+                and args.min_quality_score <= quality_score < args.warn_quality_score
+            )
+            if (
+                not validate_ok
+                or row["contract_ok"] is False
+                or row["serving_cached_dataset"]
+                or low_score
+            ):
+                bad.append(row)
+            elif warn_score:
+                warn.append(row)
+        payload = {
+            "ok": not bad,
+            "sources": len(sources),
+            "by_site": dict(Counter(row["site"] for row in sources)),
+            "min_quality_score": args.min_quality_score,
+            "warn_quality_score": args.warn_quality_score,
+            "bad_count": len(bad),
+            "bad_sources": bad,
+            "warn_count": len(warn),
+            "warn_sources": warn,
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if payload["ok"] else 1
     if args.command == "hsguru-recon":
         import httpx
 
@@ -137,6 +283,32 @@ def main(argv: list[str] | None = None) -> int:
                 return payload
 
         result = asyncio.run(_recon())
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "firecrawl-map-hsreplay":
+        from .firecrawl_map import refresh_hsreplay_map_and_index
+
+        result = refresh_hsreplay_map_and_index()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "refresh-hsreplay-archetypes":
+        from .hsreplay_archetypes_db import (
+            export_latest_archetypes_json,
+            refresh_hsreplay_archetype_database,
+        )
+
+        result = asyncio.run(
+            refresh_hsreplay_archetype_database(
+                rank_range=args.rank_range,
+                game_type=args.game_type,
+                region=args.region,
+                summary_time_range=args.summary_time_range,
+                deck_time_range=args.deck_time_range,
+                mulligan_time_range=args.mulligan_time_range,
+                limit=args.limit,
+            )
+        )
+        result["export_path"] = str(export_latest_archetypes_json())
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "hsreplay-login":

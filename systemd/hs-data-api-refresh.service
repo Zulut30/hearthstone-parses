@@ -12,10 +12,3 @@ ExecStartPre=/opt/hs-data-api/scripts/ensure-flaresolverr.sh
 ExecStartPre=/opt/hs-data-api/scripts/ensure-xvfb.sh
 ExecStartPre=/opt/hs-data-api/venv/bin/python -m app.cli preflight --strict
 ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --all
-# Refresh runs as root (Docker/Xvfb helpers), so restore data ownership for the API user.
-ExecStartPost=-/usr/bin/chown -R hs-data-api:hs-data-api /var/lib/hs-data-api
-
-# Conservative hardening for jobs that may need Docker/Xvfb/browser helpers.
-# UMask must keep written files world-readable: the API service runs as hs-data-api.
-UMask=0022
-NoNewPrivileges=true

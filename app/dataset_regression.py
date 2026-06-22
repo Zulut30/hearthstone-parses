@@ -33,7 +33,11 @@ def estimate_metric_count(source: Source, data: dict[str, Any]) -> int:
         tiers = structured.get("tiers") or {}
         return sum(len(cards) for cards in tiers.values())
     if stype == "bg_trinkets":
-        return len(structured.get("trinkets") or [])
+        return sum(
+            1
+            for item in (structured.get("trinkets") or [])
+            if item.get("pick_rate") or item.get("avg_placement")
+        )
     if stype == "bg_heroes":
         return len(structured.get("heroes") or [])
     if stype == "bg_minions":
@@ -124,6 +128,12 @@ def estimate_filled_metric_count(source: Source, data: dict[str, Any]) -> int:
             1
             for comp in (structured.get("comps") or [])
             if comp.get("main_cards") or comp.get("additional_cards")
+        )
+    if stype == "bg_trinkets":
+        return sum(
+            1
+            for item in (structured.get("trinkets") or [])
+            if item.get("trinket_id") and (item.get("pick_rate") or item.get("avg_placement"))
         )
     if stype == "bg_minions":
         return sum(

@@ -77,6 +77,7 @@ ACTION_GROUPS: dict[str, str] = {
     "dataset.db_store.fail": "storage",
     "dataset.cached.preserve": "cache",
     "dataset.cached.invalid": "cache",
+    "dataset.cached_after_failure.alert": "cache",
     "dataset.stale.warn": "stale",
     "dataset.stale.alert": "stale",
     "protection.cloudflare": "protection",

@@ -1,0 +1,253 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+import json
+import os
+from pathlib import Path
+from typing import Any
+from urllib import request
+
+from .config import data_dir, firecrawl_api_key, firecrawl_timeout_ms
+from .storage import load_dataset
+
+
+FIRECRAWL_MAP_URL = "https://api.firecrawl.dev/v2/map"
+HSREPLAY_MAP_LIMIT = 5000
+
+
+def firecrawl_dir() -> Path:
+    path = data_dir() / "firecrawl"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def hsreplay_map_path() -> Path:
+    return firecrawl_dir() / "hsreplay-map-latest.json"
+
+
+def hsreplay_index_path() -> Path:
+    return firecrawl_dir() / "hsreplay-index-latest.json"
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    try:
+        path.chmod(0o644)
+    except OSError:
+        pass
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_hsreplay_map() -> dict[str, Any] | None:
+    return _read_json(hsreplay_map_path())
+
+
+def load_hsreplay_index() -> dict[str, Any] | None:
+    return _read_json(hsreplay_index_path())
+
+
+def _extract_urls(value: Any) -> list[str]:
+    urls: list[str] = []
+    if isinstance(value, str):
+        if value.startswith(("http://", "https://", "/")):
+            urls.append(value)
+    elif isinstance(value, list):
+        for item in value:
+            urls.extend(_extract_urls(item))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if key.lower() in {"url", "urls", "link", "links"}:
+                urls.extend(_extract_urls(item))
+            elif isinstance(item, (dict, list)):
+                urls.extend(_extract_urls(item))
+    return urls
+
+
+def _normalise_hsreplay_url(url: str) -> str:
+    if url.startswith("/"):
+        return f"https://hsreplay.net{url}"
+    return url
+
+
+def _unique_urls(payload: dict[str, Any]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for url in _extract_urls(payload):
+        normalised = _normalise_hsreplay_url(url).split("#", 1)[0].rstrip("/")
+        if not normalised.startswith("https://hsreplay.net"):
+            continue
+        if normalised in seen:
+            continue
+        seen.add(normalised)
+        out.append(normalised)
+    return sorted(out)
+
+
+def fetch_hsreplay_firecrawl_map() -> dict[str, Any]:
+    api_key = firecrawl_api_key()
+    if not api_key:
+        raise RuntimeError("FIRECRAWL_API_KEY is not configured")
+
+    payload = {
+        "url": os.environ.get("HS_FIRECRAWL_MAP_HSREPLAY_URL", "https://hsreplay.net"),
+        "limit": int(os.environ.get("HS_FIRECRAWL_MAP_HSREPLAY_LIMIT", str(HSREPLAY_MAP_LIMIT))),
+        "includeSubdomains": False,
+        "sitemap": "include",
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        FIRECRAWL_MAP_URL,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    timeout = (firecrawl_timeout_ms() / 1000) + 60
+    with request.urlopen(req, timeout=timeout) as response:
+        raw = response.read().decode("utf-8")
+        parsed = json.loads(raw)
+
+    now = datetime.now(UTC).isoformat()
+    urls = _unique_urls(parsed)
+    result = {
+        "ok": True,
+        "fetched_at": now,
+        "request": {**payload, "authorization": "redacted"},
+        "url_count": len(urls),
+        "urls": urls,
+        "firecrawl_response": parsed,
+    }
+    _write_json(hsreplay_map_path(), result)
+    return result
+
+
+def _structured(source_id: str) -> dict[str, Any]:
+    dataset = load_dataset(source_id) or {}
+    return ((dataset.get("data") or {}).get("structured") or {})
+
+
+def _unique_by(items: list[dict[str, Any]], key_fields: tuple[str, ...]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    out: list[dict[str, Any]] = []
+    for item in items:
+        key = tuple(item.get(field) for field in key_fields)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def build_hsreplay_index() -> dict[str, Any]:
+    cards = _structured("hsreplay_cards_legend_1d").get("cards") or []
+    standard_minions = [
+        {
+            "id": card.get("id"),
+            "dbfId": card.get("dbfId"),
+            "name": card.get("name"),
+            "class": card.get("cardClass"),
+            "cost": card.get("cost"),
+            "rarity": card.get("rarity"),
+            "deck_popularity": card.get("deck_popularity"),
+            "deck_winrate": card.get("deck_winrate"),
+        }
+        for card in cards
+        if card.get("type") == "MINION" and card.get("name")
+    ]
+
+    bg_minions_raw = _structured("hsreplay_battlegrounds_minions").get("minions") or []
+    battlegrounds_minions = [
+        {
+            "id": row.get("id"),
+            "dbfId": row.get("dbfId") or row.get("minion_dbf_id"),
+            "name": row.get("name") or row.get("minion"),
+            "tavern_tier": row.get("tavern_tier") or row.get("techLevel"),
+            "impact": row.get("impact"),
+            "win_share": row.get("win_share"),
+            "popularity": row.get("popularity"),
+        }
+        for row in bg_minions_raw
+        if row.get("name") or row.get("minion")
+    ]
+
+    heroes_raw = _structured("hsreplay_battlegrounds_heroes").get("heroes") or []
+    battlegrounds_heroes = [
+        {
+            "hero": row.get("hero"),
+            "dbfId": row.get("dbfId"),
+            "tier": row.get("tier"),
+            "pick_rate": row.get("pick_rate"),
+            "avg_placement": row.get("avg_placement"),
+            "best_comp": row.get("best_comp"),
+        }
+        for row in heroes_raw
+        if row.get("hero")
+    ]
+
+    meta = _structured("hsreplay_meta_archetypes_legend_eu_1d")
+    standard_archetypes: list[dict[str, Any]] = []
+    for class_row in meta.get("classes") or []:
+        for archetype in class_row.get("archetypes") or []:
+            name = archetype.get("archetype")
+            archetype_id = archetype.get("archetype_id")
+            if not name or not archetype.get("url") or (isinstance(archetype_id, int) and archetype_id < 0):
+                continue
+            standard_archetypes.append(
+                {
+                    "archetype_id": archetype_id,
+                    "archetype": name,
+                    "class": class_row.get("class"),
+                    "class_name": class_row.get("class_name"),
+                    "url": _normalise_hsreplay_url(archetype.get("url")),
+                    "winrate": archetype.get("winrate"),
+                    "popularity": archetype.get("popularity"),
+                    "games": archetype.get("games"),
+                }
+            )
+
+    map_payload = load_hsreplay_map() or {}
+    result = {
+        "ok": True,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "map_fetched_at": map_payload.get("fetched_at"),
+        "map_url_count": map_payload.get("url_count"),
+        "sources": {
+            "standard_minions": "hsreplay_cards_legend_1d",
+            "battlegrounds_minions": "hsreplay_battlegrounds_minions",
+            "battlegrounds_heroes": "hsreplay_battlegrounds_heroes",
+            "standard_archetypes": "hsreplay_meta_archetypes_legend_eu_1d",
+        },
+        "counts": {
+            "standard_minions": len(standard_minions),
+            "battlegrounds_minions": len(battlegrounds_minions),
+            "battlegrounds_heroes": len(battlegrounds_heroes),
+            "standard_unique_archetypes": len(standard_archetypes),
+        },
+        "standard_minions": _unique_by(standard_minions, ("dbfId", "name")),
+        "battlegrounds_minions": _unique_by(battlegrounds_minions, ("dbfId", "name")),
+        "battlegrounds_heroes": _unique_by(battlegrounds_heroes, ("dbfId", "hero")),
+        "standard_unique_archetypes": _unique_by(standard_archetypes, ("archetype_id", "archetype")),
+    }
+    _write_json(hsreplay_index_path(), result)
+    return result
+
+
+def refresh_hsreplay_map_and_index() -> dict[str, Any]:
+    map_payload = fetch_hsreplay_firecrawl_map()
+    index = build_hsreplay_index()
+    return {
+        "ok": True,
+        "map_path": str(hsreplay_map_path()),
+        "index_path": str(hsreplay_index_path()),
+        "map_url_count": map_payload.get("url_count"),
+        "counts": index.get("counts"),
+    }

@@ -17,6 +17,7 @@ https://github.com/Zulut30/hearthstone-parses
 ## Что собирает
 
 - **HSReplay**: ranked card stats, Wild/Standard Legend 1 day, Arena cards, Battlegrounds heroes/minions/compositions/trinkets, meta archetypes grouped by class.
+- **HSReplay Archetype DB**: локальная SQLite база Standard Legend архетипов: summary, mulligan guide, matchups, popular decks, cards and history snapshots.
 - **Vicious Syndicate**: Data Reaper Live class/deck distribution and power tier list, radar graphs.
 - **HSGuru**: meta, matchups, streamer decks.
 - **Firestone**: Battlegrounds cards/spells/compositions and Arena card stats.
@@ -130,6 +131,7 @@ MetaStats - альтернативный public источник ranked коло
 ## Документация
 
 - [REST API](docs/API.md) — endpoints, auth, source IDs, response schemas and examples.
+- [HSReplay Archetype Database](docs/HSREPLAY_ARCHETYPE_DATABASE.md) — SQLite schema, refresh CLI, systemd schedule and endpoints.
 - [Deploy](DEPLOY.md) — установка, перенос, systemd и runtime checks.
 - [Security and Parsing](docs/SECURITY_AND_PARSING.md) — секреты, proxy, premium auth, reliability.
 - [Parser Improvement Plan](docs/PARSER_IMPROVEMENT_PLAN.md) — roadmap улучшения стабильности.
@@ -147,6 +149,7 @@ cp .env.example /etc/hs-data-api.env
 
 python -m app.cli proxy-check
 python -m app.cli refresh --all
+python -m app.cli refresh-hsreplay-archetypes
 uvicorn app.server:app --host 0.0.0.0 --port 8000
 ```
 
@@ -161,6 +164,7 @@ Public:
 - `GET /datasets` and `GET /datasets/{source_id}` — cached parser output.
 - `GET /demo/overview`, `GET /demo/view/{source_id}` — prepared UI payloads.
 - `GET /system/technologies` — public parser/source technology overview.
+- `GET /api/db/archetypes` and `/api/db/archetypes/{id}` — SQL-backed HSReplay archetype snapshots.
 - `GET /ui`, `/ui/logs`, `/ui/technologies` — web UI pages.
 
 Admin/ops, requires `X-API-Key`:

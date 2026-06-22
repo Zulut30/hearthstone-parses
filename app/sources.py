@@ -25,10 +25,10 @@ class Source:
 SOURCES: tuple[Source, ...] = (
     Source(
         "hsguru_streamer_decks_legend_1000",
-        "https://www.hsguru.com/streamer-decks?legend=1000",
+        "https://www.hsguru.com/streamer-decks?last_played=min_ago_4320&legend=1000&limit=100",
         "hsguru",
         "streamer_decks",
-        description="Streamer decks filtered to top legend.",
+        description="Streamer decks filtered to top legend, last 72 hours, limit 100.",
     ),
     Source(
         "hsguru_meta_standard_legend",

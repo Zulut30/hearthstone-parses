@@ -41,6 +41,12 @@ X-API-Key: <HS_API_KEY>
 | `GET` | `/ui/technologies` | UI страницы технологий. |
 | `GET` | `/api/db/decks` | SQL-backed поиск колод. |
 | `GET` | `/api/db/cards/trends` | SQL-backed история популярности карт. |
+| `GET` | `/api/db/archetypes` | SQL-backed список последних HSReplay archetype snapshots. |
+| `GET` | `/api/db/archetypes/{id}` | Детали архетипа: summary, mulligan, matchups, decks, history. |
+| `GET` | `/api/db/archetypes/{id}/mulligan` | Mulligan guide архетипа. |
+| `GET` | `/api/db/archetypes/{id}/matchups` | Матчапы архетипа. |
+| `GET` | `/api/db/archetypes/{id}/decks` | Сборки архетипа, опционально с картами. |
+| `GET` | `/api/db/archetypes/{id}/history` | Popularity/winrate time series. |
 
 ### `GET /health`
 
@@ -133,7 +139,73 @@ curl -s "https://api.hs-manacost.ru/sources?site=hsreplay" | jq .
 }
 ```
 
-Если live refresh упал, но старый cache рабочий, endpoint может продолжать отдавать старый dataset. В status тогда появляются `serving_cached_dataset`, `last_refresh_state`, `last_refresh_error`.
+Если live refresh упал, но старый cache рабочий, endpoint может продолжать отдавать старый dataset. В status тогда появляются `serving_cached_dataset`, `effective_state=ok_cached`, `last_refresh_state`, `last_refresh_error`, `cached_dataset_age_hours`. Это не ломает публичный `/health`, но видно в `/ops/health`, `/ops/summary` и `python -m app.cli freshness-check`.
+
+## HSReplay Archetype Database
+
+Полная архитектура и эксплуатация описаны в
+[`docs/HSREPLAY_ARCHETYPE_DATABASE.md`](HSREPLAY_ARCHETYPE_DATABASE.md).
+
+### `GET /api/db/archetypes`
+
+Возвращает последние успешные snapshots по каждому Standard архетипу.
+
+Query parameters:
+
+| Parameter | Default | Описание |
+| --- | --- | --- |
+| `class_name` | empty | HSReplay class key, например `ROGUE`, `PALADIN`, `DEATHKNIGHT`. |
+| `q` | empty | Поиск по имени, slug или exact `archetype_id`. |
+| `rank_range` | `LEGEND` | Rank filter. |
+| `game_type` | `RANKED_STANDARD` | Game type. |
+| `limit` | `100` | 1..500. |
+| `offset` | `0` | Offset для pagination. |
+
+Пример:
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/archetypes?class_name=ROGUE" | jq .
+```
+
+### `GET /api/db/archetypes/{id}`
+
+Пример для Herald Rogue:
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/archetypes/856" | jq .
+```
+
+Ответ содержит:
+
+- `snapshot`: summary, фильтры, `as_of_*`, total games, winrate, popularity.
+- `mulligan`: display mulligan guide (`rank <= 40`, технические token dbf ids исключены).
+- `matchups`: все matchup строки.
+- `decks`: популярные сборки без раскрытых карт.
+- `history`: popularity/winrate over time.
+
+### `GET /api/db/archetypes/{id}/mulligan`
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/archetypes/856/mulligan?limit=40" | jq .
+```
+
+`display_only=true` включён по умолчанию и соответствует тому, что показывает
+вкладка HSReplay Mulligan Guide. Для сырого списка всех карт архетипа используйте
+`display_only=false`.
+
+### `GET /api/db/archetypes/{id}/matchups`
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/archetypes/856/matchups?min_games=100&limit=20" | jq .
+```
+
+### `GET /api/db/archetypes/{id}/decks`
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/db/archetypes/856/decks?include_cards=true&limit=5" | jq .
+```
+
+`include_cards=true` раскрывает карты каждой сборки из `archetype_deck_cards`.
 
 ## Admin And Ops Endpoints
 
@@ -142,6 +214,7 @@ curl -s "https://api.hs-manacost.ru/sources?site=hsreplay" | jq .
 | Method | Path | Назначение |
 | --- | --- | --- |
 | `POST` | `/admin/refresh` | Запустить refresh одного или нескольких источников. |
+| `POST` | `/admin/refresh/hsreplay-archetypes` | Запустить обновление SQLite archetype snapshots. |
 | `PUT` | `/admin/datasets/{source_id}` | Ручная загрузка JSON dataset в cache. |
 | `GET` | `/ops/health` | Подробное состояние источников: states, stale, cached, data dir. |
 | `GET` | `/health/premium` | Проверка локального premium auth состояния. |
@@ -186,9 +259,11 @@ curl -s -X POST \
   },
   "hard_failed_sources": [],
   "cached_sources": [],
+  "cached_after_failure_sources": [],
   "stale_sources": [],
   "stale_count": 0,
-  "cached_count": 0
+  "cached_count": 0,
+  "cached_after_failure_count": 0
 }
 ```
 

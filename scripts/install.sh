@@ -26,6 +26,13 @@ fi
 apt-get update -qq
 apt-get install -y -qq git python3 python3-venv python3-pip curl
 
+if ! getent group hs-data-api >/dev/null; then
+  groupadd --system hs-data-api
+fi
+if ! id -u hs-data-api >/dev/null 2>&1; then
+  useradd --system --no-create-home --home-dir "$DATA_DIR" --shell /usr/sbin/nologin --gid hs-data-api hs-data-api
+fi
+
 if [[ ! -d "$INSTALL_DIR/.git" ]]; then
   git clone "$REPO_URL" "$INSTALL_DIR"
 else
@@ -41,7 +48,7 @@ python3 -m venv venv
 ./venv/bin/patchright install chromium
 
 mkdir -p "$DATA_DIR/datasets" "$DATA_DIR/statuses" "$DATA_DIR/logs"
-chown -R "${SUDO_USER:-root}:${SUDO_USER:-root}" "$DATA_DIR" 2>/dev/null || true
+chown -R hs-data-api:hs-data-api "$DATA_DIR" 2>/dev/null || true
 
 if [[ ! -f "$ENV_FILE" ]]; then
   cp .env.example "$ENV_FILE"
@@ -66,17 +73,25 @@ if [[ "$USE_SYSTEMD" -eq 1 ]]; then
     hs-data-api.service \
     hs-data-api-refresh.service \
     hs-data-api-refresh.timer \
+    hs-data-api-refresh-api.service \
+    hs-data-api-refresh-api.timer \
     hs-data-api-refresh-protected.service \
     hs-data-api-refresh-protected.timer \
+    hs-data-api-firecrawl-streamer.service \
+    hs-data-api-firecrawl-streamer.timer \
+    hs-data-api-protected-recovery.service \
+    hs-data-api-freshness-check.service \
+    hs-data-api-freshness-check.timer \
     hs-flaresolverr.service \
     hs-scrape-proxy.service; do
     install_unit "$unit"
   done
   systemctl daemon-reload
-  systemctl enable hs-data-api.service hs-data-api-refresh.timer hs-data-api-refresh-protected.timer
+  systemctl enable hs-data-api.service hs-data-api-refresh.timer hs-data-api-refresh-api.timer hs-data-api-freshness-check.timer hs-data-api-firecrawl-streamer.timer
+  systemctl disable --now hs-data-api-refresh-protected.timer 2>/dev/null || true
   systemctl enable hs-flaresolverr.service 2>/dev/null || true
   systemctl start hs-flaresolverr.service 2>/dev/null || true
-  echo "Enabled systemd: hs-data-api, refresh timers, hs-flaresolverr"
+  echo "Enabled systemd units. Start hs-data-api/timers after editing $ENV_FILE."
 fi
 
 echo ""
@@ -87,7 +102,7 @@ echo "  Config:  $ENV_FILE"
 echo ""
 echo "Next steps:"
 echo "  1. Edit $ENV_FILE (HS_FETCH_PROXY_URL, HS_API_KEY)"
-echo "  2. $INSTALL_DIR/venv/bin/python -m app.cli proxy-check"
-echo "  3. $INSTALL_DIR/venv/bin/python -m app.cli preflight"
-echo "  4. $INSTALL_DIR/venv/bin/python -m app.cli refresh --all"
-echo "  5. systemctl start hs-data-api"
+echo "  2. systemctl restart hs-data-api hs-flaresolverr"
+echo "  3. systemctl start hs-data-api-refresh.timer hs-data-api-refresh-api.timer hs-data-api-freshness-check.timer"
+echo "  4. $INSTALL_DIR/scripts/server-readiness.sh --strict"
+echo "  5. $INSTALL_DIR/scripts/server-readiness.sh --strict --refresh-all"

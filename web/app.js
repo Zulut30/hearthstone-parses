@@ -123,6 +123,18 @@ async function loadOverview() {
   dbBtn.onclick = () => selectDbSearch(dbBtn);
   list.appendChild(dbBtn);
 
+  const archetypeBtn = document.createElement("button");
+  archetypeBtn.className = "source-btn";
+  archetypeBtn.style.border = "1px solid #6ea8fe";
+  archetypeBtn.style.boxShadow = "0 0 10px rgba(110, 168, 254, 0.12)";
+  archetypeBtn.innerHTML = `
+    <span class="id" style="color: #9cc3ff; font-weight: bold;">Архетипы HSReplay</span>
+    <span class="meta">Legend Standard · mulligan · matchups · decks</span>
+    <span class="badge ok">sqlite</span>
+  `;
+  archetypeBtn.onclick = () => selectArchetypeDb(archetypeBtn);
+  list.appendChild(archetypeBtn);
+
   for (const group of groupSources(data.sources)) {
     const heading = document.createElement("h3");
     heading.className = "source-group-title";
@@ -187,19 +199,72 @@ function renderCards(cards) {
     .join("")}</ul>`;
 }
 
-function renderTableFromObjects(rows, columns) {
+function renderTableFromObjects(rows, columns, options = {}) {
   if (!rows.length) return "<p class='muted'>Нет строк.</p>";
   const cols = columns || Object.keys(rows[0]);
+  const visibleRows = options.limit === null ? rows : rows.slice(0, options.limit || 50);
   let html = "<table class='simple'><thead><tr>";
   for (const c of cols) html += `<th>${escapeHtml(c)}</th>`;
   html += "</tr></thead><tbody>";
-  for (const row of rows.slice(0, 50)) {
+  for (const row of visibleRows) {
     html += "<tr>";
     for (const c of cols) html += `<td>${escapeHtml(String(row[c] ?? ""))}</td>`;
     html += "</tr>";
   }
   html += "</tbody></table>";
   return html;
+}
+
+function isWeakText(value) {
+  const text = String(value || "").trim();
+  return !text || text.length < 20 || text.endsWith(":") || text === "Вы" || text === "После";
+}
+
+function cleanGuideText(value) {
+  return String(value || "")
+    .replace(/\[\[([^|\]]+)(?:\|\|[^\]]+)?\]\]/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function renderTrinketCards(rows) {
+  if (!rows.length) return "<p class='muted'>Нет строк.</p>";
+  return `<div class="trinket-grid">${rows
+    .map((x) => {
+      const description = isWeakText(x.description) ? "" : cleanGuideText(x.description);
+      const guide = cleanGuideText(x.guide);
+      const shownDescription = description || guide || "Описание недоступно в источнике";
+      const dist = Array.isArray(x.placement_distribution)
+        ? x.placement_distribution
+            .slice(0, 4)
+            .map((p) => `${p.place}: ${p.rate}`)
+            .join(" · ")
+        : "";
+      const fullDist = Array.isArray(x.placement_distribution)
+        ? x.placement_distribution.map((p) => `${p.place}: ${p.rate}`).join(" · ")
+        : "";
+      return `<article class="trinket-card">
+        <div class="trinket-card__head">
+          <div>
+            <h5>${escapeHtml(x.name || "Unknown trinket")}</h5>
+            <p>${escapeHtml(x.localized_name || "")}</p>
+          </div>
+          <span class="badge ok">${escapeHtml(x.type || "")}</span>
+        </div>
+        <div class="trinket-card__stats">
+          <span>Cost <b>${escapeHtml(String(x.cost ?? ""))}</b></span>
+          <span>Pick <b>${escapeHtml(x.pick_rate || "—")}</b></span>
+          <span>Avg <b>${escapeHtml(x.avg_placement || "—")}</b></span>
+          <span>1st <b>${escapeHtml(Array.isArray(x.placement_distribution) ? (x.placement_distribution.find((p) => p.place === 1)?.rate || "—") : "—")}</b></span>
+        </div>
+        <p class="trinket-card__desc">${escapeHtml(shownDescription)}</p>
+        ${guide && guide !== shownDescription ? `<p class="trinket-card__guide"><b>Guide:</b> ${escapeHtml(guide)}</p>` : ""}
+        ${dist ? `<p class="trinket-card__dist"><b>Места:</b> ${escapeHtml(dist)}</p>` : ""}
+        ${fullDist && fullDist !== dist ? `<details><summary>Полное распределение</summary><p class="trinket-card__dist">${escapeHtml(fullDist)}</p></details>` : ""}
+        <code>${escapeHtml(x.trinket_id || x.id || "")}</code>
+      </article>`;
+    })
+    .join("")}</div>`;
 }
 
 function renderCardStatsTable(cards) {
@@ -528,15 +593,32 @@ function renderDetail(p) {
     }
     body += "</div>";
   } else if (t === "bg_trinkets" && v.trinkets && v.trinkets.length) {
-    body = `<div class="block"><h3>Тринкеты (${v.trinkets.length})</h3>`;
+    const withStats = v.trinkets.filter((x) => x.pick_rate || x.avg_placement);
+    const withoutStats = v.trinkets.filter((x) => !x.pick_rate && !x.avg_placement);
+    const toRow = (x) => ({
+      Тринкет: x.name || "",
+      "RU название": x.localized_name || "",
+      Тип: x.type || "",
+      Cost: x.cost ?? "",
+      "Pick Rate": x.pick_rate || "",
+      "Avg placement": x.avg_placement || "",
+      "1 место": Array.isArray(x.placement_distribution) ? (x.placement_distribution.find((p) => p.place === 1)?.rate || "") : "",
+      ID: x.trinket_id || x.id || "",
+    });
+    body = `<div class="block"><h3>Активные тринкеты (${withStats.length})</h3>`;
+    body += `<p class="muted">Показываем только аксессуары из текущего пула HSReplay: у них есть pick rate / avg placement. Неактивные канонические записи скрыты: ${withoutStats.length}.</p>`;
+    body += `<h4>Лучшие по среднему месту</h4>`;
+    body += renderTrinketCards(
+      withStats
+        .slice()
+        .sort((a, b) => Number(a.avg_placement || 99) - Number(b.avg_placement || 99))
+        .slice(0, 24)
+    );
+    body += `<h4>Таблица со статистикой (${withStats.length})</h4>`;
     body += renderTableFromObjects(
-      v.trinkets.map((x) => ({
-        Тринкет: x.name,
-        "Pick Rate": x.pick_rate || "",
-        "Avg placement": x.avg_placement || "",
-        Описание: (x.description || "").slice(0, 80),
-      })),
-      ["Тринкет", "Pick Rate", "Avg placement", "Описание"]
+      withStats.map(toRow),
+      ["Тринкет", "RU название", "Тип", "Cost", "Pick Rate", "Avg placement", "1 место", "ID"],
+      { limit: null }
     );
     body += "</div>";
   } else if (t === "bg_card_stats" && v.tiers) {
@@ -1519,6 +1601,218 @@ async function performDbSearch() {
   }
 }
 
+async function selectArchetypeDb(btn) {
+  document.querySelectorAll(".source-btn").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  $("#placeholder").classList.add("hidden");
+  const detail = $("#detail");
+  detail.classList.remove("hidden");
+  detail.innerHTML = `
+    <h2>Архетипы HSReplay</h2>
+    <p class="meta-line">Локальная SQLite-база: Standard Legend, summary, mulligan guide, matchups, popular decks.</p>
+    <div class="block archetype-controls">
+      <label>
+        <span>Класс</span>
+        <select id="archetype-class-filter">
+          <option value="">Все классы</option>
+          <option value="DEATHKNIGHT">Рыцарь смерти</option>
+          <option value="DEMONHUNTER">Охотник на демонов</option>
+          <option value="DRUID">Друид</option>
+          <option value="HUNTER">Охотник</option>
+          <option value="MAGE">Маг</option>
+          <option value="PALADIN">Паладин</option>
+          <option value="PRIEST">Жрец</option>
+          <option value="ROGUE">Разбойник</option>
+          <option value="SHAMAN">Шаман</option>
+          <option value="WARLOCK">Чернокнижник</option>
+          <option value="WARRIOR">Воин</option>
+        </select>
+      </label>
+      <label>
+        <span>Поиск</span>
+        <input id="archetype-query" type="text" placeholder="Herald, Rogue или id" />
+      </label>
+      <button id="archetype-search-btn" class="mini-action">Обновить</button>
+    </div>
+    <div id="archetype-db-results" class="block"><p>Загрузка...</p></div>
+  `;
+  $("#archetype-search-btn").onclick = loadArchetypeDbList;
+  $("#archetype-query").onkeydown = (e) => {
+    if (e.key === "Enter") loadArchetypeDbList();
+  };
+  $("#archetype-class-filter").onchange = loadArchetypeDbList;
+  await loadArchetypeDbList();
+}
+
+function pctCell(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const n = Number(value);
+  if (Number.isNaN(n)) return escapeHtml(String(value));
+  return `${n.toFixed(2)}%`;
+}
+
+async function loadArchetypeDbList() {
+  const box = $("#archetype-db-results");
+  if (!box) return;
+  box.innerHTML = "<p>Загрузка...</p>";
+  const cls = $("#archetype-class-filter")?.value || "";
+  const q = $("#archetype-query")?.value.trim() || "";
+  let url = "/api/db/archetypes?limit=200";
+  if (cls) url += `&class_name=${encodeURIComponent(cls)}`;
+  if (q) url += `&q=${encodeURIComponent(q)}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "API error");
+    const latest = data.latest_run;
+    let html = `
+      <div class="archetype-db-head">
+        <div>
+          <h3>Архетипы (${data.total || 0})</h3>
+          <p class="muted">Последний run: ${escapeHtml(latest?.state || "нет данных")} · ${escapeHtml(formatDateRu(latest?.completed_at || latest?.started_at))}</p>
+        </div>
+        <a href="/docs#/default/db_archetypes_api_db_archetypes_get" target="_blank" rel="noopener">API</a>
+      </div>
+    `;
+    if (!data.archetypes?.length) {
+      box.innerHTML = html + `<p class="muted">В базе пока нет архетипов. Запустите refresh-hsreplay-archetypes.</p>`;
+      return;
+    }
+    html += `<table class="simple archetype-table"><thead><tr>
+      <th>Архетип</th><th>Класс</th><th>Winrate</th><th>Meta</th><th>В классе</th><th>Игры</th><th>Данные</th>
+    </tr></thead><tbody>`;
+    for (const a of data.archetypes) {
+      html += `<tr>
+        <td><button class="link-button" data-archetype-id="${escapeHtml(String(a.archetype_id))}">${escapeHtml(a.name)}</button><div class="muted">#${escapeHtml(String(a.archetype_id))}</div></td>
+        <td>${escapeHtml(a.class_name || a.player_class || "")}</td>
+        <td><strong>${pctCell(a.win_rate)}</strong></td>
+        <td>${pctCell(a.pct_of_total)}</td>
+        <td>${pctCell(a.pct_of_class)}</td>
+        <td>${escapeHtml(String(a.total_games ?? ""))}</td>
+        <td><span class="muted">${escapeHtml(formatDateRu(a.fetched_at))}</span></td>
+      </tr>`;
+    }
+    html += "</tbody></table>";
+    box.innerHTML = html;
+    box.querySelectorAll("[data-archetype-id]").forEach((el) => {
+      el.addEventListener("click", () => loadArchetypeDetail(el.dataset.archetypeId));
+    });
+  } catch (err) {
+    box.innerHTML = `<p class="muted" style="color: var(--err);">Ошибка загрузки: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadArchetypeDetail(archetypeId) {
+  const box = $("#archetype-db-results");
+  if (!box) return;
+  box.innerHTML = "<p>Загрузка архетипа...</p>";
+  try {
+    const res = await fetch(`/api/db/archetypes/${encodeURIComponent(archetypeId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "API error");
+    const s = data.snapshot;
+    const best = [...(data.matchups || [])].filter((m) => (m.total_games || 0) >= 100).sort((a, b) => (b.win_rate || 0) - (a.win_rate || 0)).slice(0, 6);
+    const worst = [...(data.matchups || [])].filter((m) => (m.total_games || 0) >= 100).sort((a, b) => (a.win_rate || 0) - (b.win_rate || 0)).slice(0, 6);
+    let html = `
+      <button class="mini-action" id="archetype-back-btn">Назад к списку</button>
+      <div class="archetype-title">
+        <div>
+          <h3>${escapeHtml(s.name)}</h3>
+          <p class="muted">${escapeHtml(s.class_name || s.player_class || "")} · #${escapeHtml(String(s.archetype_id))} · ${escapeHtml(s.rank_range)} · ${escapeHtml(s.game_type)}</p>
+        </div>
+        ${s.url ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">HSReplay</a>` : ""}
+      </div>
+      <div class="archetype-kpis">
+        <span>Winrate <b>${pctCell(s.win_rate)}</b></span>
+        <span>Игры <b>${escapeHtml(String(s.total_games ?? ""))}</b></span>
+        <span>Meta <b>${pctCell(s.pct_of_total)}</b></span>
+        <span>В классе <b>${pctCell(s.pct_of_class)}</b></span>
+      </div>
+      <div class="archetype-columns">
+        <section>
+          <h4>Mulligan guide (${data.mulligan.length})</h4>
+          ${renderTableFromObjects(
+            data.mulligan.map((c) => ({
+              "#": c.hsreplay_rank,
+              Карта: c.card_name,
+              Keep: pctCell(c.keep_percentage),
+              "Opening WR": pctCell(c.opening_hand_winrate),
+              "Drawn WR": pctCell(c.winrate_when_drawn),
+              "Played WR": pctCell(c.winrate_when_played),
+              "Показана": c.times_presented_in_initial_cards ?? "",
+            })),
+            ["#", "Карта", "Keep", "Opening WR", "Drawn WR", "Played WR", "Показана"],
+            { limit: null }
+          )}
+        </section>
+        <section>
+          <h4>Лучшие матчапы от 100 игр</h4>
+          ${renderTableFromObjects(
+            best.map((m) => ({ Оппонент: m.opponent_name, Игры: m.total_games, Winrate: pctCell(m.win_rate) })),
+            ["Оппонент", "Игры", "Winrate"],
+            { limit: null }
+          )}
+          <h4>Худшие матчапы от 100 игр</h4>
+          ${renderTableFromObjects(
+            worst.map((m) => ({ Оппонент: m.opponent_name, Игры: m.total_games, Winrate: pctCell(m.win_rate) })),
+            ["Оппонент", "Игры", "Winrate"],
+            { limit: null }
+          )}
+        </section>
+      </div>
+      <section>
+        <h4>Сборки (${data.decks.length})</h4>
+        <div class="deck-grid">
+    `;
+    for (const deck of data.decks.slice(0, 24)) {
+      html += `<article class="deck-tile">
+        <div>
+          <strong>${escapeHtml(deck.deck_id)}</strong>
+          <p class="muted">${escapeHtml(String(deck.total_games ?? ""))} игр · ${pctCell(deck.win_rate)} · ${escapeHtml(String(deck.card_count || 30))} карт</p>
+        </div>
+        <div class="deck-actions">
+          ${deck.url ? `<a href="${escapeHtml(deck.url)}" target="_blank" rel="noopener">HSReplay</a>` : ""}
+          <button class="mini-action" data-deck-cards="${escapeHtml(String(deck.id))}">Карты</button>
+        </div>
+        <div class="deck-cards" id="deck-cards-${escapeHtml(String(deck.id))}"></div>
+      </article>`;
+    }
+    html += `</div></section>`;
+    box.innerHTML = html;
+    $("#archetype-back-btn").onclick = loadArchetypeDbList;
+    box.querySelectorAll("[data-deck-cards]").forEach((el) => {
+      el.addEventListener("click", () => loadArchetypeDeckCards(s.archetype_id, el.dataset.deckCards));
+    });
+  } catch (err) {
+    box.innerHTML = `<button class="mini-action" onclick="loadArchetypeDbList()">Назад</button><p class="muted" style="color: var(--err);">Ошибка: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadArchetypeDeckCards(archetypeId, deckDbId) {
+  const target = document.getElementById(`deck-cards-${deckDbId}`);
+  if (!target) return;
+  if (target.dataset.loaded === "true") {
+    target.innerHTML = "";
+    target.dataset.loaded = "false";
+    return;
+  }
+  target.innerHTML = "<p class='muted'>Загрузка карт...</p>";
+  const res = await fetch(`/api/db/archetypes/${encodeURIComponent(archetypeId)}/decks?include_cards=true&limit=100`);
+  const data = await res.json();
+  const deck = (data.decks || []).find((d) => String(d.id) === String(deckDbId));
+  if (!deck) {
+    target.innerHTML = "<p class='muted'>Карты не найдены.</p>";
+    return;
+  }
+  const main = (deck.cards || []).filter((c) => !c.sideboard);
+  const side = (deck.cards || []).filter((c) => c.sideboard);
+  target.dataset.loaded = "true";
+  target.innerHTML = `
+    <ul class="cards-list compact-cards">${main.map((c) => `<li><strong>${escapeHtml(String(c.count || 1))}x</strong> ${escapeHtml(c.card_name)}</li>`).join("")}</ul>
+    ${side.length ? `<p class="muted">Sideboard</p><ul class="cards-list compact-cards">${side.map((c) => `<li><strong>${escapeHtml(String(c.count || 1))}x</strong> ${escapeHtml(c.card_name)}</li>`).join("")}</ul>` : ""}
+  `;
+}
+
 function initMetaScatterChart(strategies) {
   const canvas = document.getElementById("meta-scatter-canvas");
   if (!canvas) return;
@@ -1790,4 +2084,3 @@ function initMetaScatterChart(strategies) {
   // Initial draw
   draw();
 }
-

@@ -159,9 +159,15 @@ async def fetch_with_retry(
     max_retries: int = 5,
     *,
     source_id: str = "vicious_syndicate_radars",
+    optional: bool = False,
+    optional_context: str = "optional",
 ) -> httpx.Response | None:
     """
-    FIX: jitter + exponential backoff (5/15/45s) + session burn + [ERROR] logs.
+    FIX: jitter + exponential backoff (5/15/45s) + session burn.
+
+    Some Vicious radar/deck URLs are discovered from public pages but disappear
+    later. Treat those as optional misses so systemd logs do not look like a
+    source failure when the final radar dataset still passes contracts.
     """
     headers = build_fetch_headers(
         url,
@@ -171,8 +177,9 @@ async def fetch_with_retry(
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         },
     )
+    effective_max_retries = min(max_retries, 2) if optional else max_retries
     async with semaphore:
-        for attempt in range(1, max_retries + 1):
+        for attempt in range(1, effective_max_retries + 1):
             await asyncio.sleep(random.uniform(0.2, 0.5))
             try:
                 # Recreate the client per attempt so a burned sticky proxy session
@@ -185,44 +192,80 @@ async def fetch_with_retry(
                     return resp
                 if blocked:
                     burn_proxy_session(source_id, page_url=url, reason="vicious_syndicate_blocked")
-                log_http_error(
-                    url=url,
-                    status_code=resp.status_code,
-                    proxy_ip=None,
-                    body=resp.text,
-                    source_id=source_id,
-                )
-                if attempt < max_retries:
+                if optional:
+                    logger.warning(
+                        "Optional Vicious fetch failed context=%s status=%s url=%s",
+                        optional_context,
+                        resp.status_code,
+                        url,
+                    )
+                else:
+                    log_http_error(
+                        url=url,
+                        status_code=resp.status_code,
+                        proxy_ip=None,
+                        body=resp.text,
+                        source_id=source_id,
+                    )
+                if attempt < effective_max_retries:
                     await asyncio.sleep(
                         backoff_delay_seconds(attempt, schedule=DEFAULT_BACKOFF_SECONDS)
                     )
                     continue
             except Exception as exc:
-                log_http_error(
-                    url=url,
-                    status_code=None,
-                    proxy_ip=None,
-                    body=None,
-                    error=str(exc),
-                    source_id=source_id,
-                )
-                if attempt < max_retries:
+                if optional:
+                    logger.warning(
+                        "Optional Vicious fetch failed context=%s error=%s url=%s",
+                        optional_context,
+                        type(exc).__name__,
+                        url,
+                    )
+                else:
+                    log_http_error(
+                        url=url,
+                        status_code=None,
+                        proxy_ip=None,
+                        body=None,
+                        error=str(exc),
+                        source_id=source_id,
+                    )
+                if attempt < effective_max_retries:
                     await asyncio.sleep(
                         backoff_delay_seconds(attempt, schedule=DEFAULT_BACKOFF_SECONDS)
                     )
                     continue
 
-        logger.error("Failed to fetch %s after %d attempts.", url, max_retries)
+        if optional:
+            logger.warning(
+                "Optional Vicious fetch failed after %d attempts context=%s url=%s",
+                effective_max_retries,
+                optional_context,
+                url,
+            )
+        else:
+            logger.error("Failed to fetch %s after %d attempts.", url, effective_max_retries)
         return None
 
 
 async def fetch_radar_html(client: httpx.AsyncClient, url: str, semaphore: asyncio.Semaphore) -> str | None:
-    resp = await fetch_with_retry(client, url, semaphore)
+    resp = await fetch_with_retry(
+        client,
+        url,
+        semaphore,
+        optional=True,
+        optional_context="radar_html",
+    )
     return resp.text if resp else None
 
 
 async def fetch_deck_code(client: httpx.AsyncClient, deck_url: str, semaphore: asyncio.Semaphore) -> str | None:
-    resp = await fetch_with_retry(client, deck_url, semaphore)
+    resp = await fetch_with_retry(
+        client,
+        deck_url,
+        semaphore,
+        optional=True,
+        optional_context="deck_code",
+    )
     if not resp:
         return None
 
@@ -264,9 +307,15 @@ async def discover_class_radars(
     discovered = []
 
     try:
-        resp = await fetch_with_retry(client, index_url, semaphore)
+        resp = await fetch_with_retry(
+            client,
+            index_url,
+            semaphore,
+            optional=True,
+            optional_context=f"class_index:{class_name}",
+        )
         if not resp:
-            logger.error(f"Failed to fetch deck library index for {class_name}")
+            logger.warning("Optional Vicious class index missing for %s", class_name)
             return []
 
         soup = BeautifulSoup(resp.text, "lxml")
@@ -308,7 +357,7 @@ async def discover_class_radars(
                 })
 
     except Exception as e:
-        logger.error(f"Error discovering radars for {class_name}: {e}")
+        logger.warning("Optional Vicious discovery failed for %s: %s", class_name, e)
 
     return discovered
 
@@ -319,7 +368,13 @@ async def resolve_archetype_details(
     semaphore: asyncio.Semaphore,
 ) -> dict[str, Any] | None:
     try:
-        resp = await fetch_with_retry(client, item["source_page"], semaphore)
+        resp = await fetch_with_retry(
+            client,
+            item["source_page"],
+            semaphore,
+            optional=True,
+            optional_context="archetype_details",
+        )
         if resp:
             soup = BeautifulSoup(resp.text, "lxml")
             
@@ -337,7 +392,11 @@ async def resolve_archetype_details(
             item["inner_deck_pages"] = list(set(deck_pages))
             return item
     except Exception as e:
-        logger.error(f"Error resolving details for {item.get('archetype') or item['class']}: {e}")
+        logger.warning(
+            "Optional Vicious detail resolution failed for %s: %s",
+            item.get("archetype") or item["class"],
+            e,
+        )
     return None
 
 

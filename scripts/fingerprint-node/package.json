@@ -1,0 +1,9 @@
+{
+  "name": "hs-browser-fingerprint",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fingerprint-generator": "^2.1.66",
+    "header-generator": "^2.1.66"
+  }
+}

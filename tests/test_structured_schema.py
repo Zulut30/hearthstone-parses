@@ -75,6 +75,45 @@ class StructuredSchemaTest(unittest.TestCase):
         self.assertTrue(minions["validated"])
         self.assertTrue(compositions["validated"])
 
+    def test_validates_arena_class_matrix_directed_pairs(self) -> None:
+        result = validate_structured_schema(
+            {
+                "type": "arena_class_matrix",
+                "classes": [
+                    {"class": "Death Knight", "deck_class": 1, "win_rate": 50.0},
+                    {"class": "Druid", "deck_class": 2, "win_rate": 51.0},
+                    {"class": "Demon Hunter", "deck_class": 14, "win_rate": 52.0},
+                ],
+                "matchups": [
+                    {"class_a": "Death Knight", "class_b": "Druid", "deck_class": 1, "secondary_deck_class": 2, "win_rate": 53.0},
+                    {"class_a": "Druid", "class_b": "Death Knight", "deck_class": 2, "secondary_deck_class": 1, "win_rate": 47.0},
+                    {"class_a": "Death Knight", "class_b": "Demon Hunter", "deck_class": 1, "secondary_deck_class": 14, "win_rate": 45.0},
+                    {"class_a": "Demon Hunter", "class_b": "Death Knight", "deck_class": 14, "secondary_deck_class": 1, "win_rate": 55.0},
+                    {"class_a": "Druid", "class_b": "Demon Hunter", "deck_class": 2, "secondary_deck_class": 14, "win_rate": 54.0},
+                    {"class_a": "Demon Hunter", "class_b": "Druid", "deck_class": 14, "secondary_deck_class": 2, "win_rate": 46.0},
+                ],
+            }
+        )
+
+        self.assertTrue(result["validated"])
+
+    def test_rejects_arena_class_matrix_aggregate_rows(self) -> None:
+        with self.assertRaisesRegex(StructuredSchemaError, "directed class pairs"):
+            validate_structured_schema(
+                {
+                    "type": "arena_class_matrix",
+                    "classes": [
+                        {"class": "Death Knight", "deck_class": 1, "win_rate": 50.0},
+                        {"class": "Druid", "deck_class": 2, "win_rate": 51.0},
+                    ],
+                    "matchups": [
+                        {"class_a": "Death Knight", "class_b": "Druid", "deck_class": 1, "secondary_deck_class": 2, "win_rate": 53.0},
+                        {"class_a": "Druid", "class_b": "Death Knight", "deck_class": 2, "secondary_deck_class": 1, "win_rate": 47.0},
+                        {"class_a": "Death Knight", "class_b": None, "deck_class": 1, "secondary_deck_class": None, "win_rate": 50.0},
+                    ],
+                }
+            )
+
     def test_unknown_schema_is_non_blocking(self) -> None:
         result = validate_structured_schema({"type": "legacy_dataset", "rows": []})
 
