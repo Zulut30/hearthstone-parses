@@ -507,7 +507,10 @@ def _field_present(row: dict[str, Any], field: str) -> bool:
     if value is None:
         return False
     if isinstance(value, str):
-        return bool(value.strip())
+        stripped = value.strip()
+        if field in {"hero", "name"} and stripped in {"", "-", "—"}:
+            return False
+        return bool(stripped)
     if isinstance(value, (list, tuple, dict, set)):
         return bool(value)
     return True

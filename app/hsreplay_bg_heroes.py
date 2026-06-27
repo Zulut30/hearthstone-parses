@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+from functools import lru_cache
 from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
 
+from .cards_index import _load_raw_cards, cards_by_dbfid
 from .config import flaresolverr_url, request_timeout_seconds
 from .hsreplay_auth import hsreplay_cookies_for_fetch
 from .hsreplay_client import fetch_text_via_flaresolverr
@@ -32,6 +34,15 @@ _HERO_STATS_API = (
     "https://hsreplay.net/api/v1/battlegrounds/heroes/"
     "?BattlegroundsMMRPercentile=TOP_50_PERCENT&BattlegroundsTimeRange=LAST_7_DAYS"
 )
+_TIER_V2_TO_LABEL = {
+    "1": "S",
+    "2": "A",
+    "3": "B",
+    "4": "C",
+    "5": "D",
+    "6": "E",
+    "7": "F",
+}
 
 
 def _texts(element: Any) -> list[str]:
@@ -78,6 +89,65 @@ def _pct(value: float | int | None) -> str | None:
     return f"{float(value):.2f}%"
 
 
+def _distribution_pct(value: float | int | None) -> str | None:
+    if value is None:
+        return None
+    parsed = float(value)
+    if abs(parsed) <= 1.0:
+        parsed *= 100.0
+    return f"{parsed:.2f}%"
+
+
+def _avg_placement(value: Any) -> str | None:
+    if value is None:
+        return None
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _tier_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip().upper()
+    if raw.lower() in _TIER_LABELS:
+        return raw
+    return _TIER_V2_TO_LABEL.get(raw)
+
+
+@lru_cache(maxsize=1)
+def _ru_cards_by_dbf() -> dict[int, dict[str, Any]]:
+    return {
+        int(card["dbfId"]): card
+        for card in _load_raw_cards("ruRU")
+        if card.get("dbfId") is not None
+    }
+
+
+def _hero_name_from_dbf(dbf_id: int) -> str:
+    meta = _ru_cards_by_dbf().get(dbf_id) or cards_by_dbfid().get(dbf_id) or {}
+    return str(meta.get("name") or f"Hero {dbf_id}")
+
+
+def build_heroes_from_stats(stats_by_dbf: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    heroes: list[dict[str, Any]] = []
+    by_dbf = cards_by_dbfid()
+    for dbf_id, stats in stats_by_dbf.items():
+        meta = by_dbf.get(int(dbf_id)) or {}
+        hero: dict[str, Any] = {
+            "hero": _hero_name_from_dbf(int(dbf_id)),
+            "dbfId": int(dbf_id),
+            "id": meta.get("id"),
+        }
+        heroes.append(merge_hero_stats([hero], {int(dbf_id): stats})[0])
+    return sorted(
+        heroes,
+        key=lambda hero: float(str(hero.get("pick_rate") or "0").rstrip("%") or 0),
+        reverse=True,
+    )
+
+
 def _json_rows_from_text(text: str) -> list[dict[str, Any]]:
     soup = BeautifulSoup(text, "html.parser")
     candidates = [pre.get_text() for pre in soup.find_all("pre")] or [text]
@@ -111,16 +181,14 @@ def parse_hsreplay_bg_hero_stats_text(text: str) -> dict[int, dict[str, Any]]:
         if not isinstance(distribution, list):
             distribution = []
         placement_distribution = [
-            pct for value in distribution if (pct := _pct(value)) is not None
+            pct for value in distribution if (pct := _distribution_pct(value)) is not None
         ]
         out[int(dbf_id)] = {
             "hero_dbf_id": int(dbf_id),
             "placement_distribution": placement_distribution,
-            "tier_v2": str(row.get("tier_v2")).upper() if row.get("tier_v2") else None,
+            "tier_v2": _tier_label(row.get("tier_v2")),
             "api_pick_rate": _pct(row.get("pick_rate")),
-            "api_avg_placement": round(float(row["avg_final_placement"]), 2)
-            if row.get("avg_final_placement") is not None
-            else None,
+            "api_avg_placement": _avg_placement(row.get("avg_final_placement")),
             "best_composition_id": row.get("best_composition"),
         }
     return out
@@ -141,6 +209,10 @@ def merge_hero_stats(
             hero["placement_distribution"] = stats["placement_distribution"]
         if stats.get("tier_v2"):
             hero["tier"] = stats["tier_v2"]
+        if stats.get("api_pick_rate"):
+            hero["pick_rate"] = stats["api_pick_rate"]
+        if stats.get("api_avg_placement"):
+            hero["avg_placement"] = stats["api_avg_placement"]
         hero["best_composition_id"] = stats.get("best_composition_id")
     return heroes
 
@@ -227,7 +299,10 @@ async def fetch_hsreplay_battlegrounds_heroes(source: Source) -> dict[str, Any]:
             _HERO_STATS_API,
             source_id=source.id,
         )
-        heroes = merge_hero_stats(heroes, parse_hsreplay_bg_hero_stats_text(stats_text))
+        stats_by_dbf = parse_hsreplay_bg_hero_stats_text(stats_text)
+        heroes = merge_hero_stats(heroes, stats_by_dbf)
+        if len(heroes) < 30 and len(stats_by_dbf) >= 30:
+            heroes = build_heroes_from_stats(stats_by_dbf)
     except Exception as exc:
         logger.warning("Could not enrich HSReplay BG heroes placement distribution: %s", exc)
     return {

@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from app.fetcher import _maybe_cached_after_failure_alert, _preserve_cached_ok_status
+from app.publish_gate import PublishGateResult
 from app.sources import SOURCE_BY_ID
 from app.storage import save_dataset
 
@@ -19,7 +20,8 @@ class CachedAfterFailureAlertTest(unittest.TestCase):
 
         with TemporaryDirectory() as td:
             with patch("app.storage.data_dir", return_value=Path(td)), patch(
-                "app.fetcher.validate_parsed_data", return_value=(True, "ok")
+                "app.fetcher.validate_candidate_for_publish",
+                return_value=PublishGateResult(True, "ok", {}),
             ):
                 save_dataset(
                     source.id,

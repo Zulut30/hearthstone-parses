@@ -113,6 +113,31 @@ class SourceContractsTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("winrate_when_drawn fill rate", reason)
 
+    def test_bg_heroes_rejects_placeholder_names_and_bad_avg(self) -> None:
+        source = SOURCE_BY_ID["hsreplay_battlegrounds_heroes"]
+        parsed = {
+            "title": "HSReplay premium Battlegrounds heroes tier list.",
+            "structured": {
+                "type": "bg_heroes",
+                "heroes": [
+                    {
+                        "hero": "—",
+                        "dbfId": idx,
+                        "pick_rate": "50.0%",
+                        "avg_placement": "7",
+                        "tier": "A",
+                        "placement_distribution": ["12.50%"] * 8,
+                    }
+                    for idx in range(30)
+                ],
+            },
+        }
+
+        ok, reason = validate_parsed_data(source, parsed)
+
+        self.assertFalse(ok)
+        self.assertIn("hero fill rate", reason)
+
     def test_quality_metrics_include_contract_report(self) -> None:
         source = SOURCE_BY_ID["hsreplay_cards_legend_1d"]
         parsed = {

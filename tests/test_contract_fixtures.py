@@ -4,7 +4,11 @@ import json
 import unittest
 from pathlib import Path
 
-from app.hsreplay_bg_heroes import parse_hsreplay_bg_hero_stats_text
+from app.hsreplay_bg_heroes import (
+    build_heroes_from_stats,
+    merge_hero_stats,
+    parse_hsreplay_bg_hero_stats_text,
+)
 from app.hsreplay_cards_api import parse_cards_from_api_payloads
 from app.hsreplay_meta_api import normalize_meta_archetypes
 from app.vicious_live import build_ladder_view
@@ -66,9 +70,41 @@ class ContractFixturesTest(unittest.TestCase):
 
         stats = parse_hsreplay_bg_hero_stats_text(json.dumps(payload))
 
-        self.assertEqual(stats[64400]["tier_v2"], "2")
-        self.assertEqual(stats[64400]["api_avg_placement"], 4.42)
+        self.assertEqual(stats[64400]["tier_v2"], "A")
+        self.assertEqual(stats[64400]["api_avg_placement"], "4.42")
         self.assertEqual(len(stats[64400]["placement_distribution"]), 8)
+        self.assertEqual(stats[64400]["placement_distribution"][0], "15.00%")
+
+    def test_hsreplay_bg_hero_stats_merge_overwrites_page_metrics(self) -> None:
+        heroes = [{"hero": "Раканишу", "dbfId": 64400, "pick_rate": "1%", "avg_placement": "7"}]
+        stats = parse_hsreplay_bg_hero_stats_text(
+            json.dumps(load_fixture("hsreplay_bg_hero_stats.json"))
+        )
+
+        merged = merge_hero_stats(heroes, stats)
+
+        self.assertEqual(merged[0]["pick_rate"], "8.70%")
+        self.assertEqual(merged[0]["avg_placement"], "4.42")
+        self.assertEqual(merged[0]["tier"], "A")
+        self.assertEqual(len(merged[0]["placement_distribution"]), 8)
+
+    def test_hsreplay_bg_hero_stats_builds_rows_when_html_is_empty(self) -> None:
+        stats = {
+            57946: {
+                "placement_distribution": ["22.96%", "15.97%"],
+                "tier_v2": "S",
+                "api_pick_rate": "47.00%",
+                "api_avg_placement": "3.78",
+                "best_composition_id": 8,
+            }
+        }
+
+        heroes = build_heroes_from_stats(stats)
+
+        self.assertEqual(heroes[0]["dbfId"], 57946)
+        self.assertNotEqual(heroes[0]["hero"], "—")
+        self.assertEqual(heroes[0]["pick_rate"], "47.00%")
+        self.assertEqual(heroes[0]["avg_placement"], "3.78")
 
 
 if __name__ == "__main__":
