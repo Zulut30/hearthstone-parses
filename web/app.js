@@ -2051,12 +2051,17 @@ function bgTierBadge(tier) {
   return `<span class="bg-tier-badge bg-tier-${escapeHtml(String(label)).toLowerCase()}">${escapeHtml(String(label))}</span>`;
 }
 
-function bgHeroPlacement(placementDistribution) {
+function bgHeroPlacement(placementDistribution, limit = 8) {
   if (!Array.isArray(placementDistribution) || !placementDistribution.length) return "-";
   return placementDistribution
-    .slice(0, 4)
+    .slice(0, limit)
     .map((value, index) => `${index + 1}: ${value || "-"}`)
     .join(" · ");
+}
+
+function bgHeroPlacementCells(placementDistribution) {
+  const values = Array.isArray(placementDistribution) ? placementDistribution : [];
+  return Array.from({ length: 8 }, (_, index) => `<td class="bg-place-cell">${escapeHtml(values[index] || "-")}</td>`).join("");
 }
 
 function bgCompositionName(value) {
@@ -2100,7 +2105,7 @@ async function loadBgHeroesList() {
       </article>`)
       .join("")}</div>`;
     html += `<div class="table-scroll"><table class="simple bg-heroes-table"><thead><tr>
-      <th>Герой</th><th>Tier</th><th>Avg</th><th>Adj avg</th><th>Pick</th>${mode === "solo" ? "<th>Лучший состав</th><th>Детали</th>" : "<th>Топ 4 места</th>"}
+      <th>Герой</th><th>Tier</th><th>Avg</th><th>Adj avg</th><th>Pick</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th>${mode === "solo" ? "<th>Лучший состав</th><th>Детали</th>" : ""}
     </tr></thead><tbody>`;
     for (const h of heroes) {
       html += `<tr>
@@ -2112,9 +2117,10 @@ async function loadBgHeroesList() {
         <td><strong>${bgMetric(h.avg_placement)}</strong></td>
         <td>${bgMetric(h.adjusted_avg_placement)}</td>
         <td>${bgMetric(h.pick_rate)}</td>
+        ${bgHeroPlacementCells(h.placement_distribution)}
         ${mode === "solo"
           ? `<td>${escapeHtml(bgCompositionName(h.best_composition)) || "<span class='muted'>нет данных</span>"}</td><td><button class="mini-action" data-bg-hero-id="${escapeHtml(String(h.dbfId))}">Открыть</button></td>`
-          : `<td>${escapeHtml(bgHeroPlacement(h.placement_distribution))}</td>`}
+          : ""}
       </tr>`;
     }
     html += "</tbody></table></div>";

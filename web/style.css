@@ -577,6 +577,13 @@ a:hover { color: #9cc3ff; }
 .bg-heroes-table td:first-child {
   min-width: 210px;
 }
+.bg-heroes-table th:nth-child(n+6):nth-child(-n+13),
+.bg-heroes-table .bg-place-cell {
+  min-width: 64px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .bg-tier-badge {
   display: inline-flex;
   align-items: center;
