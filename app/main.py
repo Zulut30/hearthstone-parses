@@ -415,6 +415,18 @@ async def refresh_bg_minions_db() -> dict:
     return result
 
 
+@app.post("/admin/refresh/bg-hero-details", dependencies=[Depends(require_admin)])
+async def refresh_bg_hero_details(
+    limit: int | None = Query(None, ge=1, le=500),
+    concurrency: int = Query(3, ge=1, le=6),
+    mmr: str = Query("TOP_50_PERCENT", min_length=1, max_length=80),
+    time_range: str = Query("CURRENT_BATTLEGROUNDS_PATCH", min_length=1, max_length=80),
+) -> dict:
+    from .hsreplay_bg_hero_details import refresh_bg_hero_details as refresh_details
+
+    return await refresh_details(limit=limit, concurrency=concurrency, mmr=mmr, time_range=time_range)
+
+
 @app.post("/admin/capture/bg-compositions-screenshot", dependencies=[Depends(require_admin)])
 async def capture_bg_compositions_screenshot() -> dict:
     from .hsreplay_bg_screenshots import capture_compositions_screenshot
@@ -575,6 +587,81 @@ def db_bg_minion_history(
     if payload is None:
         raise HTTPException(status_code=404, detail="Battlegrounds minion not found")
     return payload
+
+
+@app.get("/api/bg/heroes")
+def api_bg_heroes(
+    mode: str = Query("solo", pattern="^(solo|duos)$"),
+    q: str | None = Query(None, min_length=1, max_length=120),
+) -> dict:
+    from .hsreplay_bg_hero_details import list_bg_heroes
+
+    return list_bg_heroes(mode=mode, q=q)
+
+
+@app.get("/api/bg/heroes/duos")
+def api_bg_heroes_duos(q: str | None = Query(None, min_length=1, max_length=120)) -> dict:
+    from .hsreplay_bg_hero_details import list_bg_heroes
+
+    return list_bg_heroes(mode="duos", q=q)
+
+
+@app.get("/api/bg/heroes/{dbf_id}")
+def api_bg_hero_detail(dbf_id: int) -> dict:
+    from .hsreplay_bg_hero_details import get_bg_hero
+
+    payload = get_bg_hero(dbf_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Battlegrounds hero not found")
+    return payload
+
+
+@app.get("/api/bg/heroes/{dbf_id}/tavern-up")
+def api_bg_hero_tavern_up(dbf_id: int) -> dict:
+    from .hsreplay_bg_hero_details import get_bg_hero
+
+    payload = get_bg_hero(dbf_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Battlegrounds hero not found")
+    return {
+        "hero": payload.get("hero"),
+        "filters": payload.get("filters"),
+        "as_of": (payload.get("as_of") or {}).get("tavern_up") if isinstance(payload.get("as_of"), dict) else None,
+        "tavern_up": payload.get("tavern_up") or [],
+        "tavern_up_by_turn": payload.get("tavern_up_by_turn") or [],
+    }
+
+
+@app.get("/api/bg/heroes/{dbf_id}/hero-power")
+def api_bg_hero_power(dbf_id: int) -> dict:
+    from .hsreplay_bg_hero_details import get_bg_hero
+
+    payload = get_bg_hero(dbf_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Battlegrounds hero not found")
+    return {
+        "hero": payload.get("hero"),
+        "filters": payload.get("filters"),
+        "as_of": (payload.get("as_of") or {}).get("hero_power") if isinstance(payload.get("as_of"), dict) else None,
+        "hero_power": payload.get("hero_power") or [],
+        "hero_power_by_turn": payload.get("hero_power_by_turn") or [],
+    }
+
+
+@app.get("/api/bg/heroes/{dbf_id}/best-composition")
+def api_bg_hero_best_composition(dbf_id: int) -> dict:
+    from .hsreplay_bg_hero_details import get_bg_hero
+
+    payload = get_bg_hero(dbf_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Battlegrounds hero not found")
+    return {
+        "hero": payload.get("hero"),
+        "filters": payload.get("filters"),
+        "as_of": payload.get("as_of"),
+        "best_composition": payload.get("best_composition"),
+        "compositions": payload.get("compositions") or [],
+    }
 
 
 @app.get("/api/patches")

@@ -151,6 +151,18 @@ async function loadOverview() {
   bgMinionsBtn.onclick = () => selectBgMinionsDb(bgMinionsBtn);
   list.appendChild(bgMinionsBtn);
 
+  const bgHeroesBtn = document.createElement("button");
+  bgHeroesBtn.className = "source-btn";
+  bgHeroesBtn.style.border = "1px solid #2ec4b6";
+  bgHeroesBtn.style.boxShadow = "0 0 10px rgba(46, 196, 182, 0.12)";
+  bgHeroesBtn.innerHTML = `
+    <span class="id" style="color: #88f0e4; font-weight: bold;">BG герои · HSReplay</span>
+    <span class="meta">тир-лист · таверна · hero power · дуо</span>
+    <span class="badge ok">json api</span>
+  `;
+  bgHeroesBtn.onclick = () => selectBgHeroesDb(bgHeroesBtn);
+  list.appendChild(bgHeroesBtn);
+
   const patchesBtn = document.createElement("button");
   patchesBtn.className = "source-btn";
   patchesBtn.style.border = "1px solid #f5b740";
@@ -1984,6 +1996,317 @@ async function loadBgMinionDetail(dbfId) {
     $("#bg-minion-back-btn").onclick = loadBgMinionsList;
   } catch (err) {
     box.innerHTML = `<button class="mini-action" onclick="loadBgMinionsList()">Назад</button><p class="muted" style="color: var(--err);">Ошибка: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function selectBgHeroesDb(btn) {
+  document.querySelectorAll(".source-btn").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  $("#placeholder").classList.add("hidden");
+  const detail = $("#detail");
+  detail.classList.remove("hidden");
+  detail.dataset.bgHeroMode = "solo";
+  detail.innerHTML = `
+    <h2>BG герои HSReplay</h2>
+    <p class="meta-line">TOP 50% MMR · текущий патч Battlegrounds. Solo хранит подробные графики по герою, Duos показывает отдельный тир-лист.</p>
+    <div class="block bg-hero-toolbar">
+      <div class="bg-hero-tabs" role="tablist" aria-label="Battlegrounds hero mode">
+        <button class="mini-action active" data-bg-hero-mode="solo">Solo</button>
+        <button class="mini-action" data-bg-hero-mode="duos">Duos</button>
+      </div>
+      <label>
+        <span>Поиск героя</span>
+        <input id="bg-hero-query" type="text" placeholder="Teron, Тэрон или dbfId" />
+      </label>
+      <button id="bg-hero-search-btn" class="mini-action">Обновить</button>
+    </div>
+    <div id="bg-heroes-results" class="block"><p>Загрузка...</p></div>
+  `;
+  detail.querySelectorAll("[data-bg-hero-mode]").forEach((el) => {
+    el.addEventListener("click", () => {
+      detail.dataset.bgHeroMode = el.dataset.bgHeroMode || "solo";
+      detail.querySelectorAll("[data-bg-hero-mode]").forEach((b) => b.classList.remove("active"));
+      el.classList.add("active");
+      loadBgHeroesList();
+    });
+  });
+  $("#bg-hero-search-btn").onclick = loadBgHeroesList;
+  $("#bg-hero-query").onkeydown = (e) => {
+    if (e.key === "Enter") loadBgHeroesList();
+  };
+  await loadBgHeroesList();
+}
+
+function bgHeroMode() {
+  return $("#detail")?.dataset.bgHeroMode || "solo";
+}
+
+function bgMetric(value, suffix = "") {
+  if (value === null || value === undefined || value === "") return "-";
+  return `${escapeHtml(String(value))}${suffix}`;
+}
+
+function bgTierBadge(tier) {
+  const label = tier || "-";
+  return `<span class="bg-tier-badge bg-tier-${escapeHtml(String(label)).toLowerCase()}">${escapeHtml(String(label))}</span>`;
+}
+
+function bgHeroPlacement(placementDistribution) {
+  if (!Array.isArray(placementDistribution) || !placementDistribution.length) return "-";
+  return placementDistribution
+    .slice(0, 4)
+    .map((value, index) => `${index + 1}: ${value || "-"}`)
+    .join(" · ");
+}
+
+function bgCompositionName(value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  return value.name || (value.composition_id ? `Composition ${value.composition_id}` : "");
+}
+
+async function loadBgHeroesList() {
+  const box = $("#bg-heroes-results");
+  if (!box) return;
+  const mode = bgHeroMode();
+  box.innerHTML = `<p>Загрузка ${mode === "duos" ? "дуо тир-листа" : "героев"}...</p>`;
+  const q = $("#bg-hero-query")?.value.trim() || "";
+  let url = `/api/bg/heroes?mode=${encodeURIComponent(mode)}`;
+  if (q) url += `&q=${encodeURIComponent(q)}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "API error");
+    const heroes = data.heroes || [];
+    const topHeroes = heroes.slice(0, 6);
+    let html = `
+      <div class="archetype-db-head">
+        <div>
+          <h3>${mode === "duos" ? "Duos tier list" : "Solo heroes"} (${data.count || 0})</h3>
+          <p class="muted">Данные: ${escapeHtml(formatDateRu(data.fetched_at))} · ${escapeHtml(data.source?.backend || "cache")} · ${escapeHtml(data.filters?.time_range || "")}</p>
+        </div>
+        <a href="${escapeHtml(url)}" target="_blank" rel="noopener">JSON</a>
+      </div>
+    `;
+    if (!heroes.length) {
+      box.innerHTML = html + `<p class="muted">Герои не найдены. Если это первый запуск, запустите refresh-bg-hero-details.</p>`;
+      return;
+    }
+    html += `<div class="bg-hero-topline">${topHeroes
+      .map((h) => `<article>
+        ${bgTierBadge(h.tier)}
+        <strong>${escapeHtml(h.hero || "Unknown")}</strong>
+        <span>${bgMetric(h.avg_placement)} avg · ${bgMetric(h.pick_rate)}</span>
+      </article>`)
+      .join("")}</div>`;
+    html += `<div class="table-scroll"><table class="simple bg-heroes-table"><thead><tr>
+      <th>Герой</th><th>Tier</th><th>Avg</th><th>Adj avg</th><th>Pick</th>${mode === "solo" ? "<th>Лучший состав</th><th>Детали</th>" : "<th>Топ 4 места</th>"}
+    </tr></thead><tbody>`;
+    for (const h of heroes) {
+      html += `<tr>
+        <td>
+          <button class="link-button" ${mode === "solo" ? `data-bg-hero-id="${escapeHtml(String(h.dbfId))}"` : ""}>${escapeHtml(h.hero || "Unknown")}</button>
+          <div class="muted">dbfId ${escapeHtml(String(h.dbfId || ""))}${h.detail_available === false && mode === "solo" ? " · fallback" : ""}</div>
+        </td>
+        <td>${bgTierBadge(h.tier)}</td>
+        <td><strong>${bgMetric(h.avg_placement)}</strong></td>
+        <td>${bgMetric(h.adjusted_avg_placement)}</td>
+        <td>${bgMetric(h.pick_rate)}</td>
+        ${mode === "solo"
+          ? `<td>${escapeHtml(bgCompositionName(h.best_composition)) || "<span class='muted'>нет данных</span>"}</td><td><button class="mini-action" data-bg-hero-id="${escapeHtml(String(h.dbfId))}">Открыть</button></td>`
+          : `<td>${escapeHtml(bgHeroPlacement(h.placement_distribution))}</td>`}
+      </tr>`;
+    }
+    html += "</tbody></table></div>";
+    if (mode === "duos") {
+      html += `<p class="muted bg-hero-note">В duos режиме сохраняется только тир-лист HSReplay. Подбор лучшего состава и графики героя не запрашиваются.</p>`;
+    }
+    box.innerHTML = html;
+    box.querySelectorAll("[data-bg-hero-id]").forEach((el) => {
+      el.addEventListener("click", () => loadBgHeroDetail(el.dataset.bgHeroId));
+    });
+  } catch (err) {
+    box.innerHTML = `<p class="muted" style="color: var(--err);">Ошибка загрузки: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderBgMinionChips(cards, limit = 12) {
+  const rows = Array.isArray(cards) ? cards.slice(0, limit) : [];
+  if (!rows.length) return `<p class="muted">Нет данных.</p>`;
+  return `<div class="bg-minion-chip-grid">${rows
+    .map((card) => `<span>
+      <b>${escapeHtml(card.minion || card.name || `dbfId ${card.minion_dbf_id || card.dbfId || ""}`)}</b>
+      <small>${escapeHtml([
+        card.tavern_tier ? `T${card.tavern_tier}` : "",
+        card.at_least_one ? `${card.at_least_one} games` : "",
+        card.premium ? "golden" : "",
+      ].filter(Boolean).join(" · "))}</small>
+    </span>`)
+    .join("")}</div>`;
+}
+
+function renderBgLineup(cards) {
+  const rows = Array.isArray(cards) ? cards : [];
+  if (!rows.length) return `<p class="muted">Lineup не найден.</p>`;
+  return `<ol class="bg-lineup">${rows
+    .map((card) => `<li>
+      <strong>${escapeHtml(card.minion || card.name || `dbfId ${card.minion_dbf_id || ""}`)}</strong>
+      <span>${escapeHtml([
+        card.premium ? "golden" : "",
+        card.attack !== undefined && card.health !== undefined ? `${card.attack}/${card.health}` : "",
+        card.taunt ? "taunt" : "",
+        card.divine_shield ? "divine shield" : "",
+        card.poison ? "poison" : "",
+      ].filter(Boolean).join(" · "))}</span>
+    </li>`)
+    .join("")}</ol>`;
+}
+
+async function loadBgHeroDetail(dbfId) {
+  const box = $("#bg-heroes-results");
+  if (!box) return;
+  box.innerHTML = "<p>Загрузка героя...</p>";
+  try {
+    const res = await fetch(`/api/bg/heroes/${encodeURIComponent(dbfId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Hero API error");
+    const hero = data.hero || {};
+    const best = data.best_composition || {};
+    const sourceUrl = data.source_url || `https://hsreplay.net/battlegrounds/heroes/${encodeURIComponent(dbfId)}/-`;
+    let html = `
+      <button class="mini-action" id="bg-hero-back-btn">Назад к тир-листу</button>
+      <div class="archetype-title bg-hero-title">
+        <div>
+          <h3>${escapeHtml(hero.hero || "Unknown hero")} ${bgTierBadge(hero.tier)}</h3>
+          <p class="muted">dbfId ${escapeHtml(String(hero.dbfId || dbfId))} · ${escapeHtml(data.filters?.mmr_percentile || "")} · ${escapeHtml(data.filters?.time_range || "")}</p>
+        </div>
+        <div class="bg-api-links">
+          <a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener">HSReplay</a>
+          <a href="/api/bg/heroes/${escapeHtml(String(dbfId))}" target="_blank" rel="noopener">JSON</a>
+        </div>
+      </div>
+      <div class="archetype-kpis bg-hero-kpis">
+        <span>Avg placement <b>${bgMetric(hero.avg_placement)}</b></span>
+        <span>Adjusted avg <b>${bgMetric(hero.adjusted_avg_placement)}</b></span>
+        <span>Pick rate <b>${bgMetric(hero.pick_rate)}</b></span>
+        <span>Best comp <b>${escapeHtml(bgCompositionName(best) || bgCompositionName(hero.best_composition) || "-")}</b></span>
+      </div>
+      <section class="block bg-api-data-block">
+        <h3>Когда улучшать таверну</h3>
+        <p class="muted">Рекомендация берется как самый частый уровень таверны в конце recruit turn у игроков TOP 50% MMR. as_of: ${escapeHtml(formatDateRu(data.as_of?.tavern_up))}</p>
+        <div class="table-scroll">
+          ${renderTableFromObjects(
+            (data.tavern_up_by_turn || []).map((r) => ({
+              Ход: r.turn,
+              "Таверна": r.recommended_tavern_tier,
+              "Доля": `${numberCell(r.pct_at_tier)}%`,
+              "Игр": formatInt(r.num_games),
+            })),
+            ["Ход", "Таверна", "Доля", "Игр"],
+            { limit: null }
+          )}
+        </div>
+      </section>
+      <section class="block">
+        <h3>Когда прожимать силу героя</h3>
+        <p class="muted">Сводка по ходам считает weighted average invoked_rate с учетом количества точек данных. as_of: ${escapeHtml(formatDateRu(data.as_of?.hero_power))}</p>
+        <div class="table-scroll">
+          ${renderTableFromObjects(
+            (data.hero_power_by_turn || []).map((r) => ({
+              Ход: r.turn,
+              "Hero power": `${numberCell(r.invoked_rate)}%`,
+              "Точек данных": formatInt(r.total_data_points),
+            })),
+            ["Ход", "Hero power", "Точек данных"],
+            { limit: null }
+          )}
+        </div>
+      </section>
+    `;
+    if (best && Object.keys(best).length) {
+      html += `
+        <section class="block bg-best-comp">
+          <h3>Лучший состав</h3>
+          <div class="bg-comp-summary">
+            <span>Состав <b>${escapeHtml(bgCompositionName(best) || "-")}</b></span>
+            <span>Avg <b>${bgMetric(best.avg_placement)}</b></span>
+            <span>Popularity <b>${bgMetric(best.popularity)}</b></span>
+            <span>Games <b>${escapeHtml(formatInt(best.num_games))}</b></span>
+          </div>
+          <div class="bg-detail-grid">
+            <div>
+              <h4>Lineup</h4>
+              ${renderBgLineup(best.lineup)}
+            </div>
+            <div>
+              <h4>Final form minions</h4>
+              ${renderBgMinionChips(best.final_form_minions, 12)}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+    html += `
+      <section class="block">
+        <h3>Подробная статистика</h3>
+        <div class="bg-detail-grid">
+          <div>
+            <h4>Hero power по таверне</h4>
+            <div class="table-scroll">
+              ${renderTableFromObjects(
+                (data.hero_power || []).map((r) => ({
+                  Ход: r.turn,
+                  "Таверна": r.tavern_tier,
+                  Gold: r.gold,
+                  "Median tier": r.end_of_round_median_tavern_tier,
+                  "Hero power": `${numberCell(r.invoked_rate)}%`,
+                  "Прожато": numberCell(r.times_invoked),
+                  "Точек": formatInt(r.total_data_points),
+                })),
+                ["Ход", "Таверна", "Gold", "Median tier", "Hero power", "Прожато", "Точек"],
+                { limit: null }
+              )}
+            </div>
+          </div>
+          <div>
+            <h4>Таверна по ходам</h4>
+            <div class="table-scroll">
+              ${renderTableFromObjects(
+                (data.tavern_up || []).map((r) => ({
+                  Ход: r.turn,
+                  "Таверна": r.tavern_tier,
+                  "Доля": `${numberCell(r.pct_at_tier)}%`,
+                  "Occurrences": formatInt(r.occurrences),
+                  "Игр": formatInt(r.num_games),
+                })),
+                ["Ход", "Таверна", "Доля", "Occurrences", "Игр"],
+                { limit: null }
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="block">
+        <h3>Топ составы героя</h3>
+        <div class="table-scroll">
+          ${renderTableFromObjects(
+            (data.compositions || []).slice(0, 20).map((c) => ({
+              Состав: c.name || `Composition ${c.composition_id}`,
+              Avg: numberCell(c.avg_placement),
+              Popularity: c.popularity || "",
+              "Top 4 pop": c.popularity_top_4 || "",
+              Games: formatInt(c.num_games),
+            })),
+            ["Состав", "Avg", "Popularity", "Top 4 pop", "Games"],
+            { limit: null }
+          )}
+        </div>
+      </section>
+    `;
+    box.innerHTML = html;
+    $("#bg-hero-back-btn").onclick = loadBgHeroesList;
+  } catch (err) {
+    box.innerHTML = `<button class="mini-action" onclick="loadBgHeroesList()">Назад</button><p class="muted" style="color: var(--err);">Ошибка: ${escapeHtml(err.message)}</p>`;
   }
 }
 

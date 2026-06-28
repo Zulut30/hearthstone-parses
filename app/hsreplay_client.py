@@ -51,9 +51,10 @@ def extract_json_payload(body: str) -> dict[str, Any] | list[Any] | None:
     marker = "Markdown Content:\n"
     if marker in text:
         text = text.split(marker, 1)[1].strip()
-    start = text.find("{")
-    if start < 0:
-        start = text.find("[")
+    object_start = text.find("{")
+    array_start = text.find("[")
+    starts = [pos for pos in (object_start, array_start) if pos >= 0]
+    start = min(starts) if starts else -1
     if start < 0:
         return None
     try:

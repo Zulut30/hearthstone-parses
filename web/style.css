@@ -514,6 +514,167 @@ a:hover { color: #9cc3ff; }
   font-weight: 600;
 }
 
+.bg-hero-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+.bg-hero-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.bg-hero-toolbar input {
+  width: 100%;
+  min-height: 38px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--text);
+  padding: 0.45rem 0.65rem;
+  font: inherit;
+}
+.bg-hero-tabs {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.bg-hero-tabs .active {
+  border-color: rgba(46, 196, 182, 0.65);
+  background: rgba(46, 196, 182, 0.12);
+  color: #a8fff5;
+}
+.bg-hero-topline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 0.9rem;
+}
+.bg-hero-topline article {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-xs);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 0.65rem 0.75rem;
+}
+.bg-hero-topline strong,
+.bg-hero-topline span {
+  display: block;
+}
+.bg-hero-topline strong {
+  margin-top: 0.35rem;
+  overflow-wrap: anywhere;
+}
+.bg-hero-topline span:last-child {
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.bg-heroes-table td:first-child {
+  min-width: 210px;
+}
+.bg-tier-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 24px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-soft);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.76rem;
+}
+.bg-tier-s { color: #111; background: #f5d76e; border-color: #f5d76e; }
+.bg-tier-a { color: #051b11; background: #66e3a9; border-color: #66e3a9; }
+.bg-tier-b { color: #061724; background: #75c9ff; border-color: #75c9ff; }
+.bg-tier-c { color: #1e1503; background: #f5b740; border-color: #f5b740; }
+.bg-tier-d,
+.bg-tier-e,
+.bg-tier-f { color: #fff; background: #b75555; border-color: #b75555; }
+.bg-hero-note {
+  margin: 0.75rem 0 0;
+}
+.bg-hero-title .bg-api-links {
+  margin: 0;
+  justify-content: flex-end;
+}
+.bg-hero-kpis {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+.bg-comp-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.bg-comp-summary span {
+  display: block;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-xs);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.bg-comp-summary b {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.bg-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.bg-detail-grid h4 {
+  margin: 0 0 0.55rem;
+  color: var(--text-dim);
+}
+.bg-minion-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.45rem;
+}
+.bg-minion-chip-grid span,
+.bg-lineup li {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-xs);
+  background: rgba(255, 255, 255, 0.025);
+  padding: 0.5rem 0.6rem;
+  min-width: 0;
+}
+.bg-minion-chip-grid b,
+.bg-minion-chip-grid small,
+.bg-lineup strong,
+.bg-lineup span {
+  display: block;
+}
+.bg-minion-chip-grid small,
+.bg-lineup span {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+.bg-lineup {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.45rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.bg-best-comp {
+  border-color: rgba(46, 196, 182, 0.28);
+}
+
 .patch-controls {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
@@ -1072,9 +1233,15 @@ table.simple tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
   .content, .tech-page-content { padding: 1.1rem 1rem; }
   .ops-layout { padding: 1rem; }
   .bg-db-grid,
-  .archetype-controls.bg-minion-controls {
+  .archetype-controls.bg-minion-controls,
+  .bg-hero-toolbar,
+  .bg-detail-grid,
+  .bg-comp-summary {
     grid-template-columns: 1fr;
   }
+  .bg-hero-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bg-hero-title { flex-direction: column; }
+  .bg-hero-title .bg-api-links { justify-content: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

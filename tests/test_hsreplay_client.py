@@ -18,6 +18,12 @@ class HsreplayClientTest(unittest.TestCase):
         self.assertIsInstance(payload, dict)
         self.assertIn("cards", payload)
 
+    def test_extract_json_top_level_array(self) -> None:
+        payload = extract_json_payload('[{"id": 1}, {"id": 2}]')
+        self.assertIsInstance(payload, list)
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[1]["id"], 2)
+
     def test_jina_url_prefix(self) -> None:
         self.assertTrue(jina_url("https://hsreplay.net/api/v1/x").startswith("https://r.jina.ai/"))
 

@@ -45,6 +45,12 @@ X-API-Key: <HS_API_KEY>
 | `GET` | `/api/db/bg/minions` | SQL-backed последние snapshots BG существ HSReplay. |
 | `GET` | `/api/db/bg/minions/{dbfId}` | Детали BG существа: summary + combat-round stats. |
 | `GET` | `/api/db/bg/minions/{dbfId}/history` | Time series для графиков BG существа. |
+| `GET` | `/api/bg/heroes` | HSReplay BG hero tier list: `mode=solo` или `mode=duos`. |
+| `GET` | `/api/bg/heroes/duos` | Быстрый alias для duos tier list без best composition. |
+| `GET` | `/api/bg/heroes/{dbfId}` | Детали solo-героя: таверна, hero power, combat WR, составы. |
+| `GET` | `/api/bg/heroes/{dbfId}/tavern-up` | Только статистика "когда улучшать таверну". |
+| `GET` | `/api/bg/heroes/{dbfId}/hero-power` | Только статистика "когда прожимать силу героя". |
+| `GET` | `/api/bg/heroes/{dbfId}/best-composition` | Лучший состав героя и топ составов. |
 | `GET` | `/api/patches` | SQLite-backed база патчей Hearthstone с привязкой к hs-manacost.ru и wiki. |
 | `GET` | `/api/patches/{version}` | Детали одного патча по wiki-версии или версии hs-manacost.ru. |
 | `GET` | `/api/bg/compositions/screenshot/latest` | Metadata последнего Firecrawl screenshot страницы BG compositions. |
@@ -310,6 +316,49 @@ curl -s "https://api.hs-manacost.ru/api/db/bg/minions/98592" | jq .
 curl -s "https://api.hs-manacost.ru/api/db/bg/minions/98592/history" | jq .
 ```
 
+## HSReplay Battlegrounds Hero Details
+
+`refresh-bg-hero-details` сохраняет HSReplay BG solo tier list, подробные solo
+графики по каждому герою и отдельный duos tier list. Для solo подтягиваются
+данные "когда улучшать таверну", "когда прожимать силу героя", combat winrate,
+composition stats, canonical lineups и final-form minions. Duos намеренно
+хранится только как тир-лист: лучший состав для duos не запрашивается.
+
+Если новый dataset еще не собран или временно недоступен, endpoints используют
+старый `hsreplay_battlegrounds_heroes` cache как fallback для базового списка
+solo-героев. Автоматическое обновление выполняет systemd timer:
+`hs-data-api-docker-refresh-bg-hero-details.timer`.
+
+### `GET /api/bg/heroes`
+
+Query parameters:
+
+| Parameter | Default | Описание |
+| --- | --- | --- |
+| `mode` | `solo` | `solo` или `duos`. |
+| `q` | empty | Поиск по имени героя. |
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/bg/heroes?mode=solo" | jq .
+curl -s "https://api.hs-manacost.ru/api/bg/heroes?mode=duos" | jq .
+```
+
+### `GET /api/bg/heroes/{dbfId}`
+
+Возвращает весь detail payload solo-героя:
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/bg/heroes/57946" | jq .
+```
+
+Узкие endpoints для фронтенда и внешних графиков:
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/bg/heroes/57946/tavern-up" | jq .
+curl -s "https://api.hs-manacost.ru/api/bg/heroes/57946/hero-power" | jq .
+curl -s "https://api.hs-manacost.ru/api/bg/heroes/57946/best-composition" | jq .
+```
+
 ## Hearthstone Patch Database
 
 `scripts/seed_hs_manacost_patches.py --all` берет все версии из
@@ -370,6 +419,7 @@ curl -L "https://api.hs-manacost.ru/api/bg/compositions/screenshot/latest/image"
 | `POST` | `/admin/refresh` | Запустить refresh одного или нескольких источников. |
 | `POST` | `/admin/refresh/hsreplay-archetypes` | Запустить обновление SQLite archetype snapshots. |
 | `POST` | `/admin/refresh/bg-minions-db` | Запустить обновление SQLite BG minion snapshots. |
+| `POST` | `/admin/refresh/bg-hero-details` | Запустить обновление BG hero details и duos tier list. |
 | `POST` | `/admin/capture/bg-compositions-screenshot` | Сделать Firecrawl screenshot BG compositions. |
 | `PUT` | `/admin/datasets/{source_id}` | Ручная загрузка JSON dataset в cache. |
 | `GET` | `/ops/health` | Подробное состояние источников: states, stale, cached, data dir. |

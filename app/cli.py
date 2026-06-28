@@ -106,6 +106,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "refresh-bg-minions-db",
         help="Refresh the local SQLite database with HSReplay Battlegrounds minion snapshots.",
     )
+    bg_hero_details = sub.add_parser(
+        "refresh-bg-hero-details",
+        help="Refresh HSReplay Battlegrounds hero detail statistics and duos hero tier list.",
+    )
+    bg_hero_details.add_argument("--limit", type=int, default=None, help="Debug: refresh only first N solo heroes.")
+    bg_hero_details.add_argument("--concurrency", type=int, default=3)
+    bg_hero_details.add_argument("--mmr", default="TOP_50_PERCENT")
+    bg_hero_details.add_argument("--time-range", default="CURRENT_BATTLEGROUNDS_PATCH")
     sub.add_parser(
         "capture-bg-compositions-screenshot",
         help="Capture a Firecrawl screenshot of HSReplay Battlegrounds compositions.",
@@ -323,6 +331,19 @@ def main(argv: list[str] | None = None) -> int:
         from .hsreplay_bg_minions_db import refresh_bg_minion_database_sync
 
         result = refresh_bg_minion_database_sync()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "refresh-bg-hero-details":
+        from .hsreplay_bg_hero_details import refresh_bg_hero_details
+
+        result = asyncio.run(
+            refresh_bg_hero_details(
+                limit=args.limit,
+                concurrency=args.concurrency,
+                mmr=args.mmr,
+                time_range=args.time_range,
+            )
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "capture-bg-compositions-screenshot":
