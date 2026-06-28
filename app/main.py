@@ -577,6 +577,38 @@ def db_bg_minion_history(
     return payload
 
 
+@app.get("/api/patches")
+def api_patches(
+    q: str | None = Query(None, min_length=1, max_length=120),
+    match_state: str | None = Query(None, pattern="^(matched|missing_manacost)$"),
+    include_content: bool = Query(False),
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=10000),
+) -> dict:
+    from .patches_db import list_patches
+
+    return list_patches(
+        q=q,
+        match_state=match_state,
+        include_content=include_content,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/api/patches/{version}")
+def api_patch_detail(
+    version: str,
+    include_content: bool = Query(True),
+) -> dict:
+    from .patches_db import get_patch
+
+    payload = get_patch(version, include_content=include_content)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Patch not found")
+    return payload
+
+
 @app.get("/api/bg/compositions/screenshot/latest")
 def bg_compositions_latest_screenshot() -> dict:
     from .hsreplay_bg_screenshots import latest_compositions_screenshot

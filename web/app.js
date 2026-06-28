@@ -151,6 +151,18 @@ async function loadOverview() {
   bgMinionsBtn.onclick = () => selectBgMinionsDb(bgMinionsBtn);
   list.appendChild(bgMinionsBtn);
 
+  const patchesBtn = document.createElement("button");
+  patchesBtn.className = "source-btn";
+  patchesBtn.style.border = "1px solid #f5b740";
+  patchesBtn.style.boxShadow = "0 0 10px rgba(245, 183, 64, 0.12)";
+  patchesBtn.innerHTML = `
+    <span class="id" style="color: #ffd27a; font-weight: bold;">Патчи Hearthstone</span>
+    <span class="meta">hs-manacost.ru · статьи обновлений</span>
+    <span class="badge ok">sqlite</span>
+  `;
+  patchesBtn.onclick = () => selectPatchesDb(patchesBtn);
+  list.appendChild(patchesBtn);
+
   for (const group of groupSources(data.sources)) {
     const heading = document.createElement("h3");
     heading.className = "source-group-title";
@@ -1458,6 +1470,91 @@ function initRadarGraph(data) {
   rebuildArchetypeTabs(currentClass);
   loadClassRadar(currentClass, null);
   tick();
+}
+
+
+async function selectPatchesDb(btn) {
+  document.querySelectorAll(".source-btn").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  $("#placeholder").classList.add("hidden");
+  const detail = $("#detail");
+  detail.classList.remove("hidden");
+  detail.innerHTML = `
+    <h2>Патчи Hearthstone</h2>
+    <p class="meta-line">Локальная SQLite-база статей hs-manacost.ru, сопоставленная с версиями из Hearthstone Wiki.</p>
+    <div class="block patch-controls">
+      <label>
+        <span>Поиск</span>
+        <input id="patch-query" type="text" placeholder="35.6, Поля сражений, баланс..." />
+      </label>
+      <button id="patch-search-btn" class="mini-action">Обновить</button>
+    </div>
+    <div id="patches-results" class="block"><p>Загрузка...</p></div>
+  `;
+  $("#patch-search-btn").onclick = loadPatchesList;
+  $("#patch-query").onkeydown = (e) => {
+    if (e.key === "Enter") loadPatchesList();
+  };
+  await loadPatchesList();
+}
+
+async function loadPatchesList() {
+  const box = $("#patches-results");
+  if (!box) return;
+  box.innerHTML = "<p>Загрузка патчей...</p>";
+  const q = $("#patch-query")?.value.trim() || "";
+  let url = "/api/patches?limit=500&include_content=false";
+  if (q) url += `&q=${encodeURIComponent(q)}`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "API error");
+    let html = `
+      <div class="archetype-db-head">
+        <div>
+          <h3>Патчи (${escapeHtml(String(data.total || 0))})</h3>
+          <p class="muted">Таблица: значения Hearthstone Wiki и найденная статья hs-manacost.ru.</p>
+        </div>
+        <a href="/api/patches?limit=500" target="_blank" rel="noopener">JSON</a>
+      </div>
+    `;
+    if (!data.patches?.length) {
+      box.innerHTML = html + `<p class="muted">Патчи не найдены.</p>`;
+      return;
+    }
+    html += `<div class="table-scroll"><table class="simple patches-table"><thead><tr>
+      <th>Wiki</th>
+      <th>Manacost</th>
+      <th>Дата</th>
+      <th>Статья</th>
+    </tr></thead><tbody>`;
+    for (const patch of data.patches) {
+      const manacostVersion = patch.hs_manacost_version || "";
+      const wikiVersion = patch.version || "";
+      const articleUrl = patch.source_url || "";
+      const wikiUrl = patch.wiki_url || "";
+      const detailVersion = manacostVersion || wikiVersion;
+      const detailUrl = `/api/patches/${encodeURIComponent(detailVersion)}?include_content=false`;
+      const rowTitle = patch.title || patch.wiki_title || `Patch ${wikiVersion}`;
+      html += `<tr>
+        <td>
+          <strong>${escapeHtml(wikiVersion)}</strong>
+          ${wikiUrl ? `<div><a href="${escapeHtml(wikiUrl)}" target="_blank" rel="noopener">wiki.gg</a></div>` : ""}
+        </td>
+        <td>${manacostVersion ? `<strong>${escapeHtml(manacostVersion)}</strong><div><span class="badge ok">matched</span></div>` : `<span class="muted">не найдено</span><div><span class="badge err">wiki-only</span></div>`}</td>
+        <td>${escapeHtml(formatDateRu(patch.published_at))}</td>
+        <td>
+          <a class="patch-title-link" href="${detailUrl}" target="_blank" rel="noopener">${escapeHtml(rowTitle)}</a>
+          ${patch.summary ? `<div class="muted patch-summary">${escapeHtml(patch.summary)}</div>` : ""}
+          ${articleUrl ? `<div style="margin-top: 0.35rem;"><a class="mini-action patch-article-link" href="${escapeHtml(articleUrl)}" target="_blank" rel="noopener">Статья hs-manacost.ru</a></div>` : `<div class="muted" style="margin-top: 0.35rem;">Статья hs-manacost.ru пока не сопоставлена</div>`}
+        </td>
+      </tr>`;
+    }
+    html += "</tbody></table></div>";
+    box.innerHTML = html;
+  } catch (err) {
+    box.innerHTML = `<p class="muted" style="color: var(--err);">Ошибка загрузки: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
 

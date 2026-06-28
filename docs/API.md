@@ -45,6 +45,8 @@ X-API-Key: <HS_API_KEY>
 | `GET` | `/api/db/bg/minions` | SQL-backed последние snapshots BG существ HSReplay. |
 | `GET` | `/api/db/bg/minions/{dbfId}` | Детали BG существа: summary + combat-round stats. |
 | `GET` | `/api/db/bg/minions/{dbfId}/history` | Time series для графиков BG существа. |
+| `GET` | `/api/patches` | SQLite-backed база патчей Hearthstone с привязкой к hs-manacost.ru и wiki. |
+| `GET` | `/api/patches/{version}` | Детали одного патча по wiki-версии или версии hs-manacost.ru. |
 | `GET` | `/api/bg/compositions/screenshot/latest` | Metadata последнего Firecrawl screenshot страницы BG compositions. |
 | `GET` | `/api/bg/compositions/screenshot/latest/image` | Файл последнего screenshot BG compositions. |
 | `GET` | `/api/db/archetypes` | SQL-backed список последних HSReplay archetype snapshots. |
@@ -306,6 +308,45 @@ curl -s "https://api.hs-manacost.ru/api/db/bg/minions/98592" | jq .
 
 ```bash
 curl -s "https://api.hs-manacost.ru/api/db/bg/minions/98592/history" | jq .
+```
+
+## Hearthstone Patch Database
+
+`scripts/seed_hs_manacost_patches.py --all` берет все версии из
+`https://hearthstone.wiki.gg/wiki/Patches`, ищет соответствующие публикации в
+sitemap/WP API hs-manacost.ru и сохраняет их в SQLite. Wiki-версии хранятся в
+полном виде с build-номером, например `35.6.2.245096`, а для Manacost отдельно
+сохраняется короткая версия `35.6.2`. Если статья hs-manacost.ru не найдена,
+строка все равно сохраняется как `match_state = "missing_manacost"` со ссылкой
+на wiki.
+
+Автоматическое обновление выполняет systemd timer:
+`hs-data-api-docker-refresh-patches.timer`.
+
+### `GET /api/patches`
+
+Query parameters:
+
+| Parameter | Default | Описание |
+| --- | --- | --- |
+| `q` | empty | Поиск по wiki-версии, версии Manacost, заголовку и summary. |
+| `match_state` | empty | Фильтр `matched` или `missing_manacost`. |
+| `include_content` | `false` | Включить `content_text` в записи списка. |
+| `limit` | `20` | 1..500. |
+| `offset` | `0` | Offset для pagination. |
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/patches?limit=2" | jq .
+```
+
+### `GET /api/patches/{version}`
+
+`version` принимает полную wiki-версию (`35.6.2.245096`) и короткую версию
+Manacost (`35.6.2`). По умолчанию detail включает `content_text`; можно
+отключить:
+
+```bash
+curl -s "https://api.hs-manacost.ru/api/patches/35.6.2?include_content=false" | jq .
 ```
 
 ## HSReplay Battlegrounds Compositions Screenshot
