@@ -1,0 +1,21 @@
+{
+  "render_as": "table",
+  "series": {
+    "data": {
+      "rows": [
+        {
+          "dbf_id": 69545,
+          "included_popularity": 24.9,
+          "included_count": 2.0,
+          "included_winrate": 52.01,
+          "times_played": 6209,
+          "winrate_when_played": 52.64,
+          "winrate_when_drawn": 53.5,
+          "keep_percentage": 56.8,
+          "avg_turns_in_hand": 0.75,
+          "avg_turn_played_on": 4.53
+        }
+      ]
+    }
+  }
+}

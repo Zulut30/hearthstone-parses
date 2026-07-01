@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Hearthstone data freshness audit
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=2h
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

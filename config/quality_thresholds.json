@@ -1,0 +1,19 @@
+{
+  "_global": {
+    "season_scale": null
+  },
+  "sources": {
+    "hsreplay_arena_cards_advanced": {
+      "arena_card_tiers_min": 80
+    },
+    "firestone_arena_cards_normal": {
+      "arena_card_tiers_min": 80
+    },
+    "metastats_matchups": {
+      "matchups_min": 8
+    },
+    "hsguru_meta_standard_legend": {
+      "meta_table_rows_min": 4
+    }
+  }
+}

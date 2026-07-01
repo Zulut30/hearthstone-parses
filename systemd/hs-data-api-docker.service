@@ -1,0 +1,15 @@
+[Unit]
+Description=Hearthstone Data API Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/hs-data-api
+ExecStart=/usr/bin/docker compose -f /srv/hs-data-api/docker-compose.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f /srv/hs-data-api/docker-compose.yml down
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

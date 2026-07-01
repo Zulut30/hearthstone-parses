@@ -1,0 +1,10 @@
+[Unit]
+Description=Evening API-tier Hearthstone parser refresh in Docker
+
+[Timer]
+OnCalendar=*-*-* 18:00:00 Europe/Warsaw
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

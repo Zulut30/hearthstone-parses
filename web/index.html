@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hearthstone Parses — Демо данных</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/ui/assets/style.css?v=bg-heroes-v3" />
+</head>
+<body>
+  <nav class="topnav">
+    <a class="topnav-brand" href="/ui">
+      <span class="topnav-logo">⚔️</span>
+      <span class="topnav-title">Hearthstone <b>Parses</b></span>
+    </a>
+    <div class="topnav-links">
+      <a class="topnav-link" href="/ui" aria-current="page">Данные</a>
+      <a class="topnav-link" href="/ui/technologies">Технологии</a>
+      <a class="topnav-link" href="/ui/logs">Логи</a>
+      <a class="topnav-link topnav-link--ext" href="/docs" target="_blank" rel="noopener">API ↗</a>
+    </div>
+  </nav>
+  <header class="header">
+    <h1>Демо данных</h1>
+    <p class="sub">Парсинг HSGuru / HSReplay + карты из <a href="https://hearthstonejson.com" target="_blank" rel="noopener">HearthstoneJSON</a>. Выберите источник слева, чтобы увидеть распарсенные данные.</p>
+    <div id="stats" class="stats"></div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <h2>Источники</h2>
+      <div id="source-list" class="source-list"></div>
+    </aside>
+    <section class="content">
+      <div id="placeholder" class="placeholder">
+        <span class="placeholder-icon">📊</span>
+        <span class="placeholder-title">Выберите источник</span>
+        <span class="placeholder-text">Откройте источник в списке слева, чтобы увидеть распарсенные данные.</span>
+      </div>
+      <article id="detail" class="detail hidden"></article>
+    </section>
+  </main>
+
+  <script src="/ui/assets/app.js?v=bg-heroes-v3"></script>
+</body>
+</html>

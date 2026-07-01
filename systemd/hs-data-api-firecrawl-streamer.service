@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh HSGuru streamer decks via Firecrawl
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/hs-data-api
+EnvironmentFile=/etc/hs-data-api.env
+ExecStart=/opt/hs-data-api/venv/bin/python /opt/hs-data-api/scripts/firecrawl-streamer-decks.py
+ExecStartPost=-/usr/bin/chown -R hs-data-api:hs-data-api /var/lib/hs-data-api
+
+UMask=0022
+NoNewPrivileges=true

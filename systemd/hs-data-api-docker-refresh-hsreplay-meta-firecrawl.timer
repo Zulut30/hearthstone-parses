@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh HSReplay Firecrawl meta rank snapshots daily
+
+[Timer]
+OnCalendar=*-*-* 03:05:00 Europe/Warsaw
+AccuracySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

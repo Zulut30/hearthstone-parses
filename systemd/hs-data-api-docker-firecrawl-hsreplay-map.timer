@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh HSReplay Firecrawl crawl map and derived index weekly
+
+[Timer]
+OnCalendar=Mon *-*-* 02:35:00 Europe/Warsaw
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

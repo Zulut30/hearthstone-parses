@@ -1,0 +1,15 @@
+[Unit]
+Description=Audit Hearthstone data freshness and cached-after-failure state
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/hs-data-api
+EnvironmentFile=/etc/hs-data-api.env
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48 --alert
+# The alert path writes logs and Telegram dedup state; keep ownership compatible with the API service.
+ExecStartPost=-/usr/bin/chown -R hs-data-api:hs-data-api /var/lib/hs-data-api
+ExecStopPost=-/usr/bin/chown -R hs-data-api:hs-data-api /var/lib/hs-data-api
+UMask=0022
+NoNewPrivileges=true

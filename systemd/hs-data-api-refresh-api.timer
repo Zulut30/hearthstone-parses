@@ -1,0 +1,12 @@
+[Unit]
+Description=Intraday API-tier refresh (keeps daily-volatile data fresh between full runs)
+
+[Timer]
+# Full refresh runs at 04:30; one midday run keeps API-tier data fresh while
+# capping IPRoyal proxy traffic at two refreshes per day.
+OnCalendar=*-*-* 16:30:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

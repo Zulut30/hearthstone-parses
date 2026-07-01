@@ -1,0 +1,14 @@
+[Unit]
+Description=SOCKS5 proxy for scraping via 57.129.100.27 (SSH dynamic forward)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/ssh -N -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -i /root/.ssh/qwen_to_57 -D 127.0.0.1:1080 debian@57.129.100.27
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
