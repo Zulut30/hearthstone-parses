@@ -70,6 +70,7 @@ ACTION_GROUPS: dict[str, str] = {
     "quality.field_fill.warn": "quality",
     "quality.regression.warn": "quality",
     "source_contract.validate.fail": "quality",
+    "source_semantic.validate.fail": "quality",
     "dataset.save": "storage",
     "dataset.save.skip": "storage",
     "dataset.save.skip_regression": "storage",

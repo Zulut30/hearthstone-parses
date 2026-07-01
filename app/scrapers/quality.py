@@ -6,6 +6,7 @@ from typing import Any
 from ..quality_thresholds import threshold_for
 from ..refresh_log import log_action
 from ..source_contracts import contract_quality_ok, contract_quality_report
+from ..source_validators import validate_structured
 from ..sources import Source
 
 CF_MARKERS = (
@@ -69,6 +70,7 @@ def quality_metrics(source: Source, parsed: dict[str, Any]) -> dict[str, Any]:
     cards = structured.get("cards") or []
     radars = structured.get("radars") or []
     contract_report = contract_quality_report(source.id, structured) if structured else {}
+    semantic_report = validate_structured(source.id, structured) if structured else None
     return {
         "table_rows": sum(len(t.get("objects") or t.get("rows") or []) for t in tables),
         "deck_codes": len(parsed.get("deck_codes") or []),
@@ -86,6 +88,17 @@ def quality_metrics(source: Source, parsed: dict[str, Any]) -> dict[str, Any]:
         "critical_fields": contract_report.get("critical_fields"),
         "quality_score": contract_report.get("quality_score"),
         "missing_critical_fields": contract_report.get("warnings"),
+        "semantic_score": semantic_report.score if semantic_report else None,
+        "semantic_metrics": semantic_report.metrics if semantic_report else None,
+        "semantic_issues": [
+            {
+                "code": issue.code,
+                "field": issue.field,
+                "severity": issue.severity,
+                "message": issue.message,
+            }
+            for issue in (semantic_report.issues if semantic_report else [])
+        ],
     }
 
 
@@ -121,6 +134,28 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
                     extra={"critical_fields": _contract_report.get("critical_fields")},
                 )
             return False, f"source contract failed: {contract_reason}"
+        semantic_report = validate_structured(source.id, structured)
+        if not semantic_report.ok:
+            _log_quality_action(
+                "source_semantic.validate.fail",
+                source_id=source.id,
+                level="warn",
+                detail=semantic_report.reason,
+                extra={
+                    "semantic_score": semantic_report.score,
+                    "semantic_metrics": semantic_report.metrics,
+                    "semantic_issues": [
+                        {
+                            "code": issue.code,
+                            "field": issue.field,
+                            "severity": issue.severity,
+                            "message": issue.message,
+                        }
+                        for issue in semantic_report.issues
+                    ],
+                },
+            )
+            return False, f"source semantic validation failed: {semantic_report.reason}"
 
     if source.site == "hsguru":
         if source.category == "meta":

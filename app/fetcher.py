@@ -40,13 +40,14 @@ from .source_tiers import (
     validate_tier_registry,
 )
 from .parser import parse_html
+from .publish_gate import validate_candidate_for_publish
 from .scrapers.browser_pool import PatchrightPool
 from .scrapers.flaresolverr import set_active_flaresolverr_session, set_flaresolverr_source
 from .scrapers.flaresolverr_session import FlareSolverrSession
 from .config import http_retry_attempts, proxy_check_url
 from .scrapers.http_resilience import is_session_blocked, resilient_http_get
 from .scrapers.proxy import burn_proxy_session, check_proxy_health, proxy_url_for_source
-from .scrapers.quality import is_cloudflare_challenge, quality_metrics, validate_parsed_data
+from .scrapers.quality import is_cloudflare_challenge, quality_metrics
 from .scrapers.rotator import fetch_html
 from .sources import SOURCES, SOURCE_BY_ID, Source
 from .api_only_sources import blocks_browser_fallback
@@ -168,7 +169,12 @@ def _preserve_cached_ok_status(source: Source, failed_status: dict[str, Any]) ->
     if not isinstance(parsed, dict) or not parsed:
         return None
     try:
-        ok, reason = validate_parsed_data(source, parsed)
+        gate = validate_candidate_for_publish(
+            source,
+            parsed,
+            backend=dataset.get("backend"),
+        )
+        ok, reason = gate.ok, gate.reason
     except Exception as exc:
         ok, reason = False, f"cached validation raised {type(exc).__name__}: {exc}"
     if not ok:
@@ -198,6 +204,16 @@ def _preserve_cached_ok_status(source: Source, failed_status: dict[str, Any]) ->
     status["last_refresh_error"] = (
         failed_status.get("detail") or failed_status.get("error") or "live refresh failed"
     )
+    try:
+        cached_dt = datetime.fromisoformat(cached_at.replace("Z", "+00:00"))
+        if cached_dt.tzinfo is None:
+            cached_dt = cached_dt.replace(tzinfo=UTC)
+        status["cached_dataset_age_hours"] = round(
+            max(0.0, (datetime.now(UTC) - cached_dt).total_seconds() / 3600),
+            2,
+        )
+    except ValueError:
+        pass
     save_status(source.id, status)
     log_action(
         "dataset.preserve_previous_good",
@@ -755,7 +771,8 @@ async def _try_firecrawl_html(
             parsed = _dedupe_streamer_decks_parsed(parsed)
         parsed = _enrich_firecrawl_trinkets_from_cache(source, parsed)
         parsed = _enrich_firecrawl_bg_heroes_from_cache(source, parsed)
-        ok, validation_reason = validate_parsed_data(source, parsed)
+        gate = validate_candidate_for_publish(source, parsed, backend="firecrawl")
+        ok, validation_reason = gate.ok, gate.reason
         qmetrics = quality_metrics(source, parsed)
         if not ok:
             log_action(
@@ -765,7 +782,7 @@ async def _try_firecrawl_html(
                 state="quality_error",
                 level="warn",
                 detail=validation_reason,
-                extra={"quality_metrics": qmetrics},
+                extra={"quality_metrics": qmetrics, "publish_gate": gate.extra},
             )
             return None
 
@@ -1013,8 +1030,9 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         try:
             parsed = await _fetch_hsreplay_api_source(source)
             if parsed is not None:
-                ok, reason = validate_parsed_data(source, parsed)
                 backend = parsed.pop("_backend", "hsreplay_api")
+                gate = validate_candidate_for_publish(source, parsed, backend=backend)
+                ok, reason = gate.ok, gate.reason
                 content_length = parsed.get("counts", {}).get("api_bytes", 0)
                 qmetrics = quality_metrics(source, parsed)
                 if ok:
@@ -1104,6 +1122,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                     detail=reason,
                     tier=source_tier,
                     level="warn",
+                    extra={"quality_metrics": qmetrics, "publish_gate": gate.extra},
                 )
                 if status.get("state") != "ok":
                     await send_telegram_alert(source.id, "quality_error", status["detail"], source.url)
@@ -1320,7 +1339,8 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
 
     log_action("parse.html", source_id=source.id, backend=backend, bytes_out=content_length)
     parsed = parse_html(source, body, page_snapshot)
-    ok, reason = validate_parsed_data(source, parsed)
+    gate = validate_candidate_for_publish(source, parsed, backend=backend)
+    ok, reason = gate.ok, gate.reason
     qmetrics = quality_metrics(source, parsed)
     if not ok:
         log_action(
@@ -1330,7 +1350,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             backend=backend,
             detail=reason,
             level="warn",
-            extra={"quality_metrics": qmetrics},
+            extra={"quality_metrics": qmetrics, "publish_gate": gate.extra},
         )
         is_auth_error = source.site == "hsreplay" and any(
             k in reason.lower() for k in ("session not authenticated", "premium data", "login required")
