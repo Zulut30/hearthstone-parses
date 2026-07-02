@@ -229,6 +229,47 @@ def _finish_run(run_id: int, *, state: str, archetypes_ok: int, error: str | Non
             )
     finally:
         conn.close()
+    _save_source_status(run_id, run_state=state, archetypes_ok=archetypes_ok, error=error)
+
+
+def _save_source_status(run_id: int, *, run_state: str, archetypes_ok: int, error: str | None) -> None:
+    """Write a status file for the registered pipeline source (Phase 5).
+
+    Maps the SQLite run-state domain ("ok"/"partial"/"failed") onto
+    ``SourceState`` so stale_monitor/refresh_log see this pipeline like any
+    other registered source. Modeled on hsreplay_bg_hero_details save_status.
+    """
+    from .source_state import SourceState
+    from .storage import save_status
+
+    state = {
+        "ok": SourceState.OK,
+        "partial": SourceState.PARTIAL,
+    }.get(run_state, SourceState.FETCH_ERROR)
+    detail = f"Archetype DB run {run_id}: state={run_state}, archetypes_ok={archetypes_ok}."
+    if error:
+        detail += f" error={error[:800]}"
+    try:
+        save_status(
+            SOURCE,
+            {
+                "source_id": SOURCE,
+                "site": "hsreplay",
+                "category": "meta",
+                "url": "https://hsreplay.net/meta/",
+                "state": state,
+                "fetched_at": datetime.now(UTC).isoformat(),
+                "backend": "hsreplay_api",
+                "detail": detail,
+            },
+        )
+    except Exception as exc:  # status write must not fail the SQLite run
+        log_action(
+            "hsreplay.archetype_db.status_write.fail",
+            source_id=SOURCE,
+            level="warn",
+            detail=str(exc)[:500],
+        )
 
 
 def store_archetype_snapshot(
