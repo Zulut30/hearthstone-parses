@@ -111,11 +111,18 @@ class PartitionedSources(NamedTuple):
 
 
 def partition_sources(sources: list[Source]) -> PartitionedSources:
+    """Split sources into scrape tiers; kind="pipeline" sources are skipped.
+
+    Pipeline sources are refreshed by dedicated systemd timers/commands and
+    have no scrape tier, so they never enter the fetch planner.
+    """
     light: list[Source] = []
     medium: list[Source] = []
     patchright: list[Source] = []
     protected: list[Source] = []
     for source in sources:
+        if source.kind != "scrape":
+            continue
         match tier_for(source.id):
             case SourceTier.LIGHT_API:
                 light.append(source)
@@ -129,10 +136,21 @@ def partition_sources(sources: list[Source]) -> PartitionedSources:
 
 
 def validate_tier_registry() -> None:
-    configured = {s.id for s in SOURCES}
-    if configured != _ALL_TIER_IDS:
-        missing = configured - _ALL_TIER_IDS
-        extra = _ALL_TIER_IDS - configured
+    """Every kind="scrape" source must map to exactly one tier.
+
+    kind="pipeline" sources (dedicated systemd timers) are exempt from tier
+    coverage and must NOT appear in any tier set.
+    """
+    scrape_ids = {s.id for s in SOURCES if s.kind == "scrape"}
+    pipeline_ids = {s.id for s in SOURCES if s.kind != "scrape"}
+    leaked = pipeline_ids & _ALL_TIER_IDS
+    if leaked:
+        raise RuntimeError(
+            f"Pipeline sources must not be assigned a scrape tier: {sorted(leaked)}"
+        )
+    if scrape_ids != _ALL_TIER_IDS:
+        missing = scrape_ids - _ALL_TIER_IDS
+        extra = _ALL_TIER_IDS - scrape_ids
         raise RuntimeError(
             f"Source tier registry mismatch: missing={sorted(missing)} extra={sorted(extra)}"
         )

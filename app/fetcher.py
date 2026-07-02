@@ -1707,6 +1707,18 @@ async def _refresh_sources_unlocked(
     if source_ids:
         selected = [SOURCE_BY_ID[source_id] for source_id in source_ids]
 
+    # kind="pipeline" sources are refreshed by dedicated systemd timers and
+    # must never enter the scrape planner (they also have no tier mapping).
+    pipeline_skipped = [s.id for s in selected if s.kind != "scrape"]
+    if pipeline_skipped:
+        selected = [s for s in selected if s.kind == "scrape"]
+        log_action(
+            "refresh.skip_pipeline_sources",
+            level="warn" if source_ids else "info",
+            detail="pipeline sources are refreshed by their dedicated timers/commands",
+            extra={"source_ids": pipeline_skipped, "run_id": run_id},
+        )
+
     if tier_filter:
         tier_enum = SourceTier(tier_filter)
         selected = [s for s in selected if tier_for(s.id) == tier_enum]

@@ -397,6 +397,18 @@ async def refresh(
         missing = [item for item in source_id if item not in SOURCE_BY_ID]
         if missing:
             raise HTTPException(status_code=404, detail={"unknown_sources": missing})
+        pipeline = [item for item in source_id if SOURCE_BY_ID[item].kind == "pipeline"]
+        if pipeline:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "pipeline_sources": pipeline,
+                    "message": (
+                        "Pipeline sources are refreshed by their dedicated systemd "
+                        "timers/endpoints, not by /admin/refresh."
+                    ),
+                },
+            )
     return {"results": await refresh_sources(source_id)}
 
 

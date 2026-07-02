@@ -531,6 +531,18 @@ def main(argv: list[str] | None = None) -> int:
         if missing:
             print(f"Unknown source ids: {', '.join(missing)}", file=sys.stderr)
             return 2
+        pipeline = [
+            source_id
+            for source_id in args.source
+            if SOURCE_BY_ID[source_id].kind == "pipeline"
+        ]
+        if pipeline:
+            print(
+                f"Pipeline sources (own systemd timers, not scraped by refresh): {', '.join(pipeline)}. "
+                "Use their dedicated commands (e.g. refresh-bg-hero-details, refresh-hsreplay-archetypes).",
+                file=sys.stderr,
+            )
+            return 2
         source_ids = None if args.all else (args.source or None)
         results = asyncio.run(
             refresh_sources(source_ids, tier=args.tier)
