@@ -22,13 +22,18 @@ def _age_hours(fetched_at: str | None) -> float | None:
 
 
 def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
-    """Sources with dataset or status older than HS_STALE_HOURS."""
-    limit_h = stale_dataset_hours()
+    """Sources with dataset or status older than the per-source threshold.
+
+    The threshold is ``source.stale_hours`` when set (slow-cadence pipeline
+    sources) and the global ``HS_STALE_HOURS`` otherwise.
+    """
+    default_limit_h = stale_dataset_hours()
     now_label = datetime.now(UTC).isoformat()
     stale: list[dict[str, Any]] = []
     configured = {s.id for s in SOURCES}
 
     for source in SOURCES:
+        limit_h = getattr(source, "stale_hours", None) or default_limit_h
         st = load_status(source.id) or {}
         state = st.get("state") or SourceState.NEVER_FETCHED
         if state == SourceState.OK and not include_ok:
@@ -85,7 +90,7 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
                 continue
             st = load_status(sid) or {}
             age_h = _age_hours(st.get("fetched_at"))
-            if age_h is not None and age_h >= limit_h:
+            if age_h is not None and age_h >= default_limit_h:
                 stale.append(
                     {
                         "source_id": sid,
