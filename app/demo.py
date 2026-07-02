@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .deck_decode import decode_all_codes_in_text, decode_deck_code, first_deck_code_from_text
+from .source_state import SourceState
 from .sources import SOURCE_BY_ID, SOURCES, Source
 from .storage import load_dataset, load_status
 from .structured import build_structured
@@ -115,10 +116,10 @@ def build_overview() -> dict[str, Any]:
                 "site": source.site,
                 "category": source.category,
                 "description": source.description,
-                "state": status.get("state", "never_fetched"),
+                "state": status.get("state", SourceState.NEVER_FETCHED),
                 "fetched_at": dataset.get("fetched_at") if dataset else None,
                 "has_dataset": dataset is not None,
             }
         )
-    ok = sum(1 for i in items if i["state"] == "ok")
+    ok = sum(1 for i in items if i["state"] == SourceState.OK)
     return {"sources": items, "ok_count": ok, "total": len(items)}
