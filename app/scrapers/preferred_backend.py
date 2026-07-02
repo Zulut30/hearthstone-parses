@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..config import browser_preferred_sticky_backends, stale_dataset_hours
+from ..source_state import SourceState
 
 
 def preferred_browser_backend(previous: dict[str, Any] | None) -> str | None:
@@ -13,7 +14,7 @@ def preferred_browser_backend(previous: dict[str, Any] | None) -> str | None:
     Scrapling/CloakBrowser successes do not stick — cron should try FlareSolverr first again.
     Stale ok status does not stick (forces full rotator retry).
     """
-    if not previous or previous.get("state") != "ok":
+    if not previous or previous.get("state") != SourceState.OK:
         return None
     backend = (previous.get("backend") or "").strip().lower()
     if not backend or backend not in browser_preferred_sticky_backends():
