@@ -363,6 +363,10 @@ def firecrawl_fallback_max_attempts_per_refresh() -> int:
     return max(0, int(os.environ.get("HS_FIRECRAWL_FALLBACK_MAX_ATTEMPTS_PER_REFRESH", "8")))
 
 
+def firecrawl_fallback_max_attempts_per_source() -> int:
+    return max(1, int(os.environ.get("HS_FIRECRAWL_FALLBACK_MAX_ATTEMPTS_PER_SOURCE", "2")))
+
+
 def fingerprint_node_enabled() -> bool:
     return os.environ.get("HS_FINGERPRINT_SUITE_ENABLED", "true").strip().lower() in {
         "1",

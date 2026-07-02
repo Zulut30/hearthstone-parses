@@ -20,6 +20,7 @@ from .config import (
     fetch_proxy_url,
     fetch_require_proxy,
     firecrawl_fallback_max_attempts_per_refresh,
+    firecrawl_fallback_max_attempts_per_source,
     firecrawl_fallback_source_ids,
     firecrawl_primary_source_ids,
     flaresolverr_session_per_source,
@@ -68,6 +69,9 @@ from .telegram_alerts import mark_alert_sent, should_send_alert
 
 logger = logging.getLogger(__name__)
 _firecrawl_fallback_attempts = 0
+# Fairness cap: один сбойный источник не должен съедать весь глобальный
+# бюджет fallback-попыток (он же бюджет Firecrawl-кредитов) за refresh.
+_firecrawl_fallback_attempts_by_source: dict[str, int] = {}
 
 
 def now_iso() -> str:
@@ -743,7 +747,20 @@ async def _try_firecrawl_html(
                 extra={"reason": reason},
             )
             return None
+        per_source_cap = firecrawl_fallback_max_attempts_per_source()
+        source_attempts = _firecrawl_fallback_attempts_by_source.get(source.id, 0)
+        if source_attempts >= per_source_cap:
+            log_action(
+                "firecrawl.fetch.skip",
+                source_id=source.id,
+                backend="firecrawl",
+                level="warn",
+                detail=f"Firecrawl per-source fallback cap reached ({per_source_cap})",
+                extra={"reason": reason},
+            )
+            return None
         _firecrawl_fallback_attempts += 1
+        _firecrawl_fallback_attempts_by_source[source.id] = source_attempts + 1
     try:
         from .firecrawl_backend import scrape_source
 
@@ -1673,6 +1690,7 @@ async def _refresh_sources_unlocked(
 ) -> list[dict[str, Any]]:
     global _firecrawl_fallback_attempts
     _firecrawl_fallback_attempts = 0
+    _firecrawl_fallback_attempts_by_source.clear()
     validate_tier_registry()
     from .refresh_context import begin_refresh_run, end_refresh_run
     from .scrapers.rotator import reset_backend_circuits

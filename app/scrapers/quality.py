@@ -266,13 +266,8 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return True, "ok"
         if structured.get("type") == "arena_class_matrix":
             classes = structured.get("classes") or []
-            matchups = structured.get("matchups") or []
             if len(classes) < 8:
                 return False, f"arena class stats too few ({len(classes)})"
-            # dual_class_data пропадает вне сезона двухклассовой арены: пустой
-            # список — норма, а вот частичный парс (1..49 строк) — ошибка.
-            if matchups and len(matchups) < 50:
-                return False, f"arena dual-class matchups too few ({len(matchups)})"
             return True, "ok"
         if structured.get("type") == "arena_class_pages":
             classes = structured.get("classes") or []

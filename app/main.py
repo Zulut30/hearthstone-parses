@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -55,7 +56,7 @@ def require_admin(x_api_key: Annotated[str | None, Header()] = None) -> None:
     expected = api_key()
     if not expected:
         raise HTTPException(status_code=503, detail="Admin API key is not configured")
-    if x_api_key == expected:
+    if x_api_key and secrets.compare_digest(x_api_key, expected):
         return
     raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key")
 

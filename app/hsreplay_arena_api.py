@@ -58,10 +58,20 @@ def winrate_to_tier(win_rate: float | None) -> str | None:
     return "F"
 
 
-def _pct(value: float | int | None) -> str | None:
+def _pct(value: float | int | str | None) -> str | None:
     if value is None:
         return None
-    return f"{float(value):.2f}%"
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return None
+
+
+def _win_rate_sort_key(row: dict[str, Any]) -> float:
+    try:
+        return float(row.get("win_rate") or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _first_present(row: dict[str, Any], *keys: str) -> Any:
@@ -71,12 +81,21 @@ def _first_present(row: dict[str, Any], *keys: str) -> Any:
     return None
 
 
-def _class_name(class_id: int | None) -> str | None:
+def _class_name(class_id: int | str | None) -> str | None:
     if class_id is None:
         return None
     try:
         return CardClass(int(class_id)).name.replace("_", " ").title()
-    except (ValueError, KeyError):
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def _region_name(region: Any) -> str | None:
+    if region is None:
+        return None
+    try:
+        return REGION_NAMES.get(int(region))
+    except (TypeError, ValueError):
         return None
 
 
@@ -133,7 +152,7 @@ def normalize_winning_deck(row: dict[str, Any], *, locale: str = "ruRU") -> dict
     return {
         "draft_id": draft_id,
         "player": row.get("battletag"),
-        "region": REGION_NAMES.get(int(row["region"])) if row.get("region") is not None else None,
+        "region": _region_name(row.get("region")),
         "record": record,
         "class": _class_name(row.get("primary_deck_class")),
         "main_class": _class_name(row.get("primary_deck_class")),
@@ -155,27 +174,13 @@ def normalize_class_row(row: dict[str, Any]) -> dict[str, Any]:
     deck_class = row.get("deck_class")
     win_rate = row.get("win_rate")
     return {
-        "class": _class_name(int(deck_class)) if deck_class is not None else None,
+        "class": _class_name(deck_class),
         "deck_class": deck_class,
         "winrate": _pct(win_rate),
         "win_rate": win_rate,
         "num_drafts": row.get("num_drafts"),
         "pick_rate": row.get("pick_rate"),
         "pct_7_plus": row.get("pct_7_plus"),
-    }
-
-
-def normalize_dual_class_row(row: dict[str, Any]) -> dict[str, Any]:
-    primary = row.get("deck_class")
-    secondary = row.get("secondary_deck_class")
-    win_rate = row.get("win_rate")
-    return {
-        "class_a": _class_name(int(primary)) if primary is not None else None,
-        "class_b": _class_name(int(secondary)) if secondary is not None else None,
-        "deck_class": primary,
-        "secondary_deck_class": secondary,
-        "winrate": _pct(win_rate),
-        "win_rate": win_rate,
     }
 
 
@@ -186,7 +191,10 @@ def normalize_arena_card_row(row: dict[str, Any], *, locale: str = "ruRU") -> di
         if dbf is not None:
             from .cards_index import cards_by_dbfid
 
-            card = cards_by_dbfid().get(int(dbf))
+            try:
+                card = cards_by_dbfid().get(int(dbf))
+            except (TypeError, ValueError):
+                card = None
             card_id = (card or {}).get("id") or ""
     if not card_id:
         return None
@@ -252,7 +260,7 @@ def _parse_arena_cards_payload(payload: dict[str, Any], *, locale: str = "ruRU")
                     card["arena_class"] = class_key
                     parsed.append(card)
             if parsed:
-                parsed.sort(key=lambda c: float(c.get("win_rate") or 0), reverse=True)
+                parsed.sort(key=_win_rate_sort_key, reverse=True)
                 by_class[str(class_key)] = parsed
         return by_class
     if isinstance(raw, list):
@@ -263,7 +271,7 @@ def _parse_arena_cards_payload(payload: dict[str, Any], *, locale: str = "ruRU")
                 if card:
                     parsed.append(card)
         if parsed:
-            parsed.sort(key=lambda c: float(c.get("win_rate") or 0), reverse=True)
+            parsed.sort(key=_win_rate_sort_key, reverse=True)
             by_class["ALL"] = parsed
     return by_class
 
@@ -299,17 +307,14 @@ async def fetch_class_stats(
         for row in payload.get("data") or []
         if isinstance(row, dict)
     ]
-    matchups = [
-        normalize_dual_class_row(row)
-        for row in payload.get("dual_class_data") or []
-        if isinstance(row, dict)
-    ]
-    classes.sort(key=lambda c: float(c.get("win_rate") or 0), reverse=True)
+    classes.sort(key=_win_rate_sort_key, reverse=True)
 
     return {
         "type": "arena_class_matrix",
         "classes": classes,
-        "matchups": matchups,
+        # dual-class арена удалена из игры; ключ сохранён пустым для
+        # совместимости с потребителями датасета (уберём в Phase 8).
+        "matchups": [],
         "source": {
             "key": "hsreplay",
             "url": ARENA_PAGE_URL,
