@@ -339,6 +339,35 @@ SOURCES: tuple[Source, ...] = (
         "meta",
         description="Vicious Syndicate Data Reaper Live class/deck distribution and power tier list.",
     ),
+    # --- Pipeline sources (kind="pipeline") -----------------------------------
+    # Refreshed by dedicated systemd timers, NOT by the generic scrape planner
+    # (fetcher tiers). stale_hours = timer period + ~24h slack.
+    Source(
+        id="hsreplay_battlegrounds_hero_details",
+        url="https://hsreplay.net/battlegrounds/heroes/",
+        site="hsreplay",
+        category="battlegrounds",
+        description=(
+            "BG hero detail cache built by the weekly systemd timer "
+            "hs-data-api-docker-refresh-bg-hero-details.timer (Mon 04:35 Europe/Warsaw); "
+            "stale_hours = 168h period + 24h slack."
+        ),
+        stale_hours=192,
+        kind="pipeline",
+    ),
+    Source(
+        id="hsreplay_archetypes",
+        url="https://hsreplay.net/meta/",
+        site="hsreplay",
+        category="meta",
+        description=(
+            "HSReplay Standard archetype SQLite database built twice per week by the "
+            "systemd timer hs-data-api-docker-refresh-hsreplay-archetypes.timer "
+            "(Mon,Thu 03:20 Europe/Warsaw); stale_hours = 96h max gap + 24h slack."
+        ),
+        stale_hours=120,
+        kind="pipeline",
+    ),
 )
 
 
