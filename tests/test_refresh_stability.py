@@ -586,6 +586,12 @@ class RefreshStabilityTest(unittest.TestCase):
             category="battlegrounds",
             url="https://hsreplay.net/battlegrounds/heroes/",
         )
+        # The fixture models real premium rows WITHOUT game counts but must
+        # otherwise be realistic: the semantic validator _validate_bg_heroes
+        # (app/source_validators.py:66-175) requires unique dbfIds (>=70% of
+        # rows), avg_placement diversity (>=10 distinct values in 1.0..8.0),
+        # tier diversity (>=2 tiers), and per-row placement_distribution as a
+        # LIST of 8 percent buckets summing to ~100 (98..102) for >=70% of rows.
         parsed = {
             "title": "HSReplay Battlegrounds heroes",
             "structured": {
@@ -594,11 +600,15 @@ class RefreshStabilityTest(unittest.TestCase):
                 "heroes": [
                     {
                         "hero": f"Hero {idx}",
-                        "pick_rate": "10.0%",
-                        "avg_placement": "4,50",
+                        "dbfId": 100000 + idx,
+                        "pick_rate": f"{3.0 + idx * 0.1:.1f}%",
+                        # locale format with comma is accepted by _parse_decimal
+                        # (app/source_validators.py:52-59)
+                        "avg_placement": f"{4.0 + idx * 0.05:.2f}".replace(".", ","),
                         "best_comp": "Механизмы",
-                        "tier": "A",
-                        "placement_distribution": {"1": "10%", "8": "5%"},
+                        "tier": ["S", "A", "B", "C", "D"][idx % 5],
+                        # 8 buckets, sum = 100%
+                        "placement_distribution": ["12.5%"] * 8,
                     }
                     for idx in range(30)
                 ],

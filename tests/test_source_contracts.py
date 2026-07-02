@@ -50,12 +50,21 @@ class SourceContractsTest(unittest.TestCase):
         self.assertIn("final_deck", report["critical_fields"])
 
     def test_trinket_contract_checks_canonical_id_fill(self) -> None:
+        # The trinket contract now requires stats fields on top of canonical ids:
+        # critical_fields=("name", "trinket_id", "pick_rate", "avg_placement")
+        # with min_field_fill_rate=0.90 (app/source_contracts.py:150-160), so a
+        # realistic full row carries pick_rate/avg_placement as well.
         report = contract_quality_report(
             "hsreplay_battlegrounds_trinkets_lesser",
             {
                 "type": "bg_trinkets",
                 "trinkets": [
-                    {"name": f"Trinket {idx}", "trinket_id": f"BG30_MagicItem_{idx}"}
+                    {
+                        "name": f"Trinket {idx}",
+                        "trinket_id": f"BG30_MagicItem_{idx}",
+                        "pick_rate": "10.0%",
+                        "avg_placement": "4.50",
+                    }
                     for idx in range(80)
                 ],
             },
@@ -187,34 +196,55 @@ class SourceContractsTest(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertIn("too few rows", "; ".join(report["warnings"]))
 
-    def test_hsguru_matchups_contract_checks_key_fields(self) -> None:
+    def test_hsguru_matchups_contract_checks_min_rows(self) -> None:
+        # hsguru_matchups_legend uses the generic hsguru contract
+        # (app/source_contracts.py:381-404): min_rows=3, NO critical_fields —
+        # so per-field quality_score is None by design
+        # (app/source_contracts.py:561: score is None when no rates collected)
+        # and the contract gate is the row count.
+        contract = get_contract("hsguru_matchups_legend")
+        self.assertIsNotNone(contract)
+        self.assertEqual(contract.critical_fields, ())  # type: ignore[union-attr]
+        self.assertEqual(contract.min_rows, 3)  # type: ignore[union-attr]
+
+        rows = [
+            {"archetype": f"Deck {idx}", "vs": "Opponent", "winrate": "50%"}
+            for idx in range(120)
+        ]
         report = contract_quality_report(
             "hsguru_matchups_legend",
-            {
-                "type": "matchups",
-                "matchups": [
-                    {"archetype": f"Deck {idx}", "vs": "Opponent", "winrate": "50%"}
-                    for idx in range(120)
-                ],
-            },
+            {"type": "matchups", "matchups": rows},
         )
 
         self.assertTrue(report["ok"])
-        self.assertEqual(report["quality_score"], 1.0)
+        self.assertEqual(report["rows_total"], len(rows))
+        self.assertIsNone(report["quality_score"])
+
+        tiny = contract_quality_report(
+            "hsguru_matchups_legend",
+            {"type": "matchups", "matchups": rows[:2]},
+        )
+
+        self.assertFalse(tiny["ok"])
+        self.assertIn("too few rows", "; ".join(tiny["warnings"]))
 
     def test_vicious_radars_contract_rejects_tiny_optional_fetch_result(self) -> None:
         contract = get_contract("vicious_syndicate_radars")
 
         self.assertIsNotNone(contract)
-        self.assertGreaterEqual(contract.min_rows, 10)  # type: ignore[union-attr]
+        # min_rows was lowered to 5 (app/source_contracts.py:223-231): a radar
+        # fetch is optional, but fewer than 5 radars is still a broken result.
+        self.assertEqual(contract.min_rows, 5)  # type: ignore[union-attr]
 
+        # Derive the "tiny" fixture from the contract instead of hardcoding.
+        tiny_count = contract.min_rows - 1  # type: ignore[union-attr]
         report = contract_quality_report(
             "vicious_syndicate_radars",
             {
                 "type": "vicious_syndicate_radars",
                 "radars": [
                     {"nodes": [{"name": "A"}], "edges": [{"source": "A", "target": "B"}]}
-                    for _ in range(8)
+                    for _ in range(tiny_count)
                 ],
             },
         )

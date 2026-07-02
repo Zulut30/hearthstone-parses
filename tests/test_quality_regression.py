@@ -102,8 +102,16 @@ class DatasetRegressionTest(unittest.TestCase):
         self.assertEqual(extra["rows_before"], 3489)
         self.assertEqual(extra["rows_after"], 2069)
 
-    @patch("app.dataset_regression.dataset_regression_drop_ratio", return_value=0.30)
+    @patch("app.dataset_regression.dataset_regression_drop_ratio", return_value=0.10)
     def test_hsguru_meta_allows_rank_slice_volatility(self, _ratio: object) -> None:
+        # Rank-slice volatility is now expressed via the per-source contract:
+        # hsguru_meta_* contracts set regression_drop_ratio=0.30
+        # (app/source_contracts.py:382-404), and
+        # regression_drop_ratio_for_source takes max(default, contract)
+        # (app/source_contracts.py:425-429). The old blanket 0.50 allowance for
+        # top-legend slices is gone. Base default is patched to 0.10 so the test
+        # proves the contract RAISES the allowance: a 25% drop (44 -> 33) would
+        # regress at 0.10 but passes at the contract's 0.30.
         source = SOURCE_BY_ID["hsguru_meta_wild_top_legend"]
         prev = {
             "structured": {
@@ -117,7 +125,7 @@ class DatasetRegressionTest(unittest.TestCase):
             "structured": {
                 "type": "meta",
                 "strategies": [
-                    {"Archetype": f"Deck {idx}", "Popularity": "1%"} for idx in range(23)
+                    {"Archetype": f"Deck {idx}", "Popularity": "1%"} for idx in range(33)
                 ],
             }
         }
@@ -125,7 +133,7 @@ class DatasetRegressionTest(unittest.TestCase):
         reg, _, extra = check_dataset_regression(source, previous_data=prev, new_data=new)
 
         self.assertFalse(reg)
-        self.assertEqual(extra["drop_ratio"], 0.50)
+        self.assertEqual(extra["drop_ratio"], 0.30)
 
     @patch("app.dataset_regression.dataset_regression_drop_ratio", return_value=0.30)
     def test_bg_trinkets_regression_counts_active_rows_only(self, _ratio: object) -> None:

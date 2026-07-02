@@ -23,7 +23,12 @@ class SourceTiersTest(unittest.TestCase):
             LIGHT_API_IDS | MEDIUM_API_IDS | BROWSER_PATCHRIGHT_IDS | BROWSER_PROTECTED_IDS
         )
         self.assertEqual(configured, all_tier_ids)
-        self.assertEqual(len(configured), 40)
+        # Derive from the registry (app/sources.py SOURCES, 44 entries as of
+        # Phase 2) instead of hardcoding the count: the invariant under test is
+        # tier coverage, not the absolute number of sources.
+        self.assertEqual(len(configured), len(SOURCES))
+        # Guard against duplicate ids silently shrinking the configured set.
+        self.assertEqual(len([s.id for s in SOURCES]), len(configured))
 
     def test_tier_for_each_source(self) -> None:
         for source in SOURCES:
@@ -39,10 +44,15 @@ class SourceTiersTest(unittest.TestCase):
             + len(parts.browser_protected)
         )
         self.assertEqual(total, len(SOURCES))
-        self.assertEqual(len(parts.light_api), 15)
-        self.assertEqual(len(parts.medium_api), 9)
-        self.assertEqual(len(parts.browser_patchright), 2)
-        self.assertEqual(len(parts.browser_protected), 14)
+        # Per-tier sizes are defined by the ID sets in app/source_tiers.py
+        # (LIGHT_API_IDS etc.); since the registry covers all sources exactly,
+        # each partition must match its ID set instead of a hardcoded count.
+        self.assertEqual(len(parts.light_api), len(LIGHT_API_IDS))
+        self.assertEqual(len(parts.medium_api), len(MEDIUM_API_IDS))
+        self.assertEqual(len(parts.browser_patchright), len(BROWSER_PATCHRIGHT_IDS))
+        self.assertEqual(len(parts.browser_protected), len(BROWSER_PROTECTED_IDS))
+        self.assertEqual({s.id for s in parts.light_api}, LIGHT_API_IDS)
+        self.assertEqual({s.id for s in parts.browser_protected}, BROWSER_PROTECTED_IDS)
 
 
 if __name__ == "__main__":
