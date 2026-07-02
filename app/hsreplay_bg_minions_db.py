@@ -191,6 +191,7 @@ async def refresh_bg_minion_database() -> dict[str, Any]:
         minions = structured.get("minions") or []
         total = len(minions)
         ok = _store_minions(run_id, structured)
+        # NOTE: SQLite run-state domain ("ok"/"partial"/"failed"/"running"), not app.source_state.SourceState.
         state = "ok" if ok == total and ok else "partial" if ok else "failed"
         _finish_run(run_id, state=state, minions_total=total, minions_ok=ok)
         return {"ok": state in {"ok", "partial"}, "state": state, "run_id": run_id, "minions_total": total, "minions_ok": ok, "source": structured.get("source")}

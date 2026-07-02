@@ -770,6 +770,7 @@ async def refresh_hsreplay_archetype_database(
                     detail=str(exc)[:1000],
                     extra={"run_id": run_id, "archetype_id": archetype_id},
                 )
+        # NOTE: SQLite run-state domain ("ok"/"partial"/"failed"/"running"), not app.source_state.SourceState.
         state = "ok" if not errors else ("partial" if ok else "failed")
         _finish_run(run_id, state=state, archetypes_ok=ok, error=json.dumps(errors, ensure_ascii=False) if errors else None)
         return {"ok": state in {"ok", "partial"}, "state": state, "run_id": run_id, "archetypes_total": len(archetypes), "archetypes_ok": ok, "errors": errors, "snapshots": snapshots}
