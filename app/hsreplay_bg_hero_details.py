@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from .cards_index import card_label, cards_by_dbfid
 from .hsreplay_bg_stats import BG_COMPOSITION_NAMES_API, _composition_names_from_text
 from .hsreplay_client import fetch_hsreplay_json, fetch_text_via_flaresolverr
+from .source_state import SourceState
 from .storage import load_dataset, save_dataset, save_status
 
 SOURCE_ID = "hsreplay_battlegrounds_hero_details"
@@ -448,7 +449,7 @@ async def refresh_bg_hero_details(
         },
     }
     dataset = {
-        "state": "ok" if details else "partial",
+        "state": SourceState.OK if details else SourceState.PARTIAL,
         "fetched_at": fetched_at,
         "http_status": 200,
         "final_url": HEROES_API,
