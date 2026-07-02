@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import api_key, cors_allowed_origins
 from .demo import build_demo_view, build_overview
 from .fetcher import refresh_sources
+from .source_state import SourceState
 from .sources import SOURCES, SOURCE_BY_ID
 from .storage import load_dataset, load_status, root_dir, save_dataset, save_status
 
@@ -303,13 +304,13 @@ def build_health_diagnostics() -> dict:
     cached_after_failure_sources: list[str] = []
     hard_failed_sources: list[str] = []
     for source, status in zip(SOURCES, statuses, strict=True):
-        state = status["state"] if status else "never_fetched"
+        state = status["state"] if status else SourceState.NEVER_FETCHED
         states[state] = states.get(state, 0) + 1
         if status and status.get("serving_cached_dataset"):
             cached_sources.append(source.id)
-            if status.get("last_refresh_state") not in (None, "ok"):
+            if status.get("last_refresh_state") not in (None, SourceState.OK):
                 cached_after_failure_sources.append(source.id)
-        if state != "ok":
+        if state != SourceState.OK:
             hard_failed_sources.append(source.id)
 
     from .stale_monitor import find_stale_sources
@@ -456,7 +457,7 @@ def upload_dataset(
     source = SOURCE_BY_ID[source_id]
     fetched_at = datetime.now(UTC).isoformat()
     dataset = {
-        "state": "ok",
+        "state": SourceState.OK,
         "fetched_at": fetched_at,
         "http_status": None,
         "final_url": source.url,
@@ -470,7 +471,7 @@ def upload_dataset(
         "url": source.url,
         "fetch_url": source.fetch_url,
         "fragment": source.fragment,
-        "state": "ok",
+        "state": SourceState.OK,
         "fetched_at": fetched_at,
         "http_status": None,
         "final_url": source.url,
