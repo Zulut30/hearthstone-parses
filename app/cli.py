@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from .fetcher import refresh_sources
+from .source_state import SourceState
 from .sources import SOURCE_BY_ID
 
 DEFAULT_ENV_FILE = Path("/etc/hs-data-api.env")
@@ -240,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
                 "source_id": source.id,
                 "site": source.site,
                 "category": source.category,
-                "state": status.get("state", "never_fetched"),
+                "state": status.get("state", SourceState.NEVER_FETCHED),
                 "backend": status.get("backend"),
                 "serving_cached_dataset": bool(status.get("serving_cached_dataset")),
                 "structured_type": structured.get("type"),
