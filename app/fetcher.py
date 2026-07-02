@@ -33,6 +33,7 @@ from .config import (
     request_timeout_seconds,
     user_agent,
 )
+from .source_state import EFFECTIVE_OK_CACHED, FAILURE_STATES, SourceState
 from .source_tiers import (
     API_FIRST_TIERS,
     SourceTier,
@@ -193,7 +194,7 @@ def _preserve_cached_ok_status(source: Source, failed_status: dict[str, Any]) ->
     cached_at = str(dataset.get("fetched_at") or failed_status.get("fetched_at") or now_iso())
     status = _status_payload(
         source,
-        "ok",
+        SourceState.OK,
         fetched_at=cached_at,
         http_status=dataset.get("http_status"),
         final_url=dataset.get("final_url") or source.url,
@@ -202,7 +203,7 @@ def _preserve_cached_ok_status(source: Source, failed_status: dict[str, Any]) ->
         detail="Serving cached dataset; latest live refresh failed.",
     )
     status["serving_cached_dataset"] = True
-    status["effective_state"] = "ok_cached"
+    status["effective_state"] = EFFECTIVE_OK_CACHED
     status["last_refresh_state"] = failed_status.get("state")
     status["last_refresh_at"] = failed_status.get("fetched_at")
     status["last_refresh_error"] = (
@@ -222,7 +223,7 @@ def _preserve_cached_ok_status(source: Source, failed_status: dict[str, Any]) ->
     log_action(
         "dataset.preserve_previous_good",
         source_id=source.id,
-        state="ok",
+        state=SourceState.OK,
         backend=status.get("backend"),
         level="warn",
         detail=str(status["last_refresh_error"])[:500],
@@ -307,7 +308,7 @@ async def send_telegram_alert(source_id: str, state: str, detail: str, url: str)
 async def _maybe_cached_after_failure_alert(source: Source, status: dict[str, Any]) -> None:
     if not status.get("serving_cached_dataset"):
         return
-    if status.get("last_refresh_state") in (None, "ok"):
+    if status.get("last_refresh_state") in (None, SourceState.OK):
         return
     detail = (
         "Serving cached dataset after live refresh failed; "
@@ -436,7 +437,7 @@ def _save_dataset_with_checks(
     log_action(
         "dataset.save",
         source_id=source.id,
-        state="ok",
+        state=SourceState.OK,
         backend=dataset.get("backend"),
         bytes_out=dataset.get("content_length"),
         extra=extra if extra else None,
@@ -445,13 +446,7 @@ def _save_dataset_with_checks(
 
 
 async def _maybe_stale_data_alert(source: Source, status: dict[str, Any]) -> None:
-    if status.get("state") not in {
-        "fetch_error",
-        "blocked_by_protection",
-        "http_error",
-        "quality_error",
-        "proxy_required",
-    }:
+    if status.get("state") not in FAILURE_STATES:
         return
     from .config import stale_dataset_hours
 
@@ -796,7 +791,7 @@ async def _try_firecrawl_html(
                 "firecrawl.validate.fail",
                 source_id=source.id,
                 backend="firecrawl",
-                state="quality_error",
+                state=SourceState.QUALITY_ERROR,
                 level="warn",
                 detail=validation_reason,
                 extra={"quality_metrics": qmetrics, "publish_gate": gate.extra},
@@ -804,7 +799,7 @@ async def _try_firecrawl_html(
             return None
 
         dataset = {
-            "state": "ok",
+            "state": SourceState.OK,
             "fetched_at": fetched_at,
             "http_status": scraped.status_code,
             "final_url": scraped.final_url,
@@ -814,7 +809,7 @@ async def _try_firecrawl_html(
             "data": parsed,
         }
         reg, reg_msg = _save_dataset_with_checks(source, dataset, fetched_at=fetched_at)
-        state = "partial" if reg else "ok"
+        state = SourceState.PARTIAL if reg else SourceState.OK
         status = _status_payload(
             source,
             state,
@@ -852,7 +847,7 @@ async def _try_firecrawl_html(
             "firecrawl.fetch.fail",
             source_id=source.id,
             backend="firecrawl",
-            state="fetch_error",
+            state=SourceState.FETCH_ERROR,
             level="warn",
             error_type=type(exc).__name__,
             detail=str(exc)[:1000],
@@ -1019,18 +1014,18 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             "proxy.health.fail",
             level="error",
             source_id=source.id,
-            state="proxy_required",
+            state=SourceState.PROXY_REQUIRED,
             detail="HS_FETCH_PROXY_URL not configured",
         )
         status = _status_payload(
             source,
-            "proxy_required",
+            SourceState.PROXY_REQUIRED,
             fetched_at=fetched_at,
             detail="Set HS_FETCH_PROXY_URL in /etc/hs-data-api.env",
         )
         status = _save_failure_status(source, status)
-        if status.get("state") != "ok":
-            await send_telegram_alert(source.id, "proxy_required", status["detail"], source.url)
+        if status.get("state") != SourceState.OK:
+            await send_telegram_alert(source.id, SourceState.PROXY_REQUIRED, status["detail"], source.url)
         return _finish(status)
 
     if source.id in firecrawl_primary_source_ids():
@@ -1071,7 +1066,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                     reg, reg_msg = _save_dataset_with_checks(
                         source, dataset, fetched_at=fetched_at
                     )
-                    state = "partial" if reg else "ok"
+                    state = SourceState.PARTIAL if reg else SourceState.OK
                     status = _status_payload(
                         source,
                         state,
@@ -1121,7 +1116,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                         return _finish(firecrawl_status)
                 status = _status_payload(
                     source,
-                    "quality_error",
+                    SourceState.QUALITY_ERROR,
                     fetched_at=fetched_at,
                     http_status=200,
                     final_url=source.url,
@@ -1134,15 +1129,15 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                 log_action(
                     "api.validate.fail",
                     source_id=source.id,
-                    state="quality_error",
+                    state=SourceState.QUALITY_ERROR,
                     backend=backend,
                     detail=reason,
                     tier=source_tier,
                     level="warn",
                     extra={"quality_metrics": qmetrics, "publish_gate": gate.extra},
                 )
-                if status.get("state") != "ok":
-                    await send_telegram_alert(source.id, "quality_error", status["detail"], source.url)
+                if status.get("state") != SourceState.OK:
+                    await send_telegram_alert(source.id, SourceState.QUALITY_ERROR, status["detail"], source.url)
                 return _finish(status)
             log_action(
                 "api.route.skip",
@@ -1171,7 +1166,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             log_action(
                 "api.route.fail",
                 source_id=source.id,
-                state="fetch_error",
+                state=SourceState.FETCH_ERROR,
                 error_type=type(exc).__name__,
                 detail=api_detail,
                 tier=source_tier,
@@ -1185,7 +1180,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                 )
                 status = _status_payload(
                     source,
-                    "fetch_error",
+                    SourceState.FETCH_ERROR,
                     fetched_at=fetched_at,
                     error=type(exc).__name__,
                     detail=f"API fetch failed (browser fallback disabled): {api_detail}",
@@ -1194,13 +1189,13 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                 log_action(
                     "api.fallback.blocked",
                     source_id=source.id,
-                    state="fetch_error",
+                    state=SourceState.FETCH_ERROR,
                     detail=api_detail,
                     tier=source_tier,
                     level="error",
                 )
-                if status.get("state") != "ok":
-                    await send_telegram_alert(source.id, "fetch_error", status["detail"], source.url)
+                if status.get("state") != SourceState.OK:
+                    await send_telegram_alert(source.id, SourceState.FETCH_ERROR, status["detail"], source.url)
                     await _maybe_stale_data_alert(source, status)
                 return _finish(status)
             logging.getLogger(__name__).warning(
@@ -1255,7 +1250,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         log_action(
             "browser.fetch.end",
             source_id=source.id,
-            state="fetch_error",
+            state=SourceState.FETCH_ERROR,
             error_type=type(exc).__name__,
             detail=str(exc)[:2000],
             level="error",
@@ -1269,14 +1264,14 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             return _finish(firecrawl_status)
         status = _status_payload(
             source,
-            "fetch_error",
+            SourceState.FETCH_ERROR,
             fetched_at=fetched_at,
             error=type(exc).__name__,
             detail=str(exc)[:2000],
         )
         status = _save_failure_status(source, status)
-        if status.get("state") != "ok":
-            await send_telegram_alert(source.id, "fetch_error", status["detail"], source.url)
+        if status.get("state") != SourceState.OK:
+            await send_telegram_alert(source.id, SourceState.FETCH_ERROR, status["detail"], source.url)
             await _maybe_stale_data_alert(source, status)
         return _finish(status)
     finally:
@@ -1285,7 +1280,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
     log_action(
         "browser.fetch.end",
         source_id=source.id,
-        state="ok",
+        state=SourceState.OK,
         backend=backend,
         http_status=http_status,
         bytes_out=len(body.encode("utf-8", errors="replace")),
@@ -1296,7 +1291,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         log_action(
             "protection.cloudflare",
             source_id=source.id,
-            state="blocked_by_protection",
+            state=SourceState.BLOCKED_BY_PROTECTION,
             backend=backend,
             level="error",
         )
@@ -1309,7 +1304,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             return _finish(firecrawl_status)
         status = _status_payload(
             source,
-            "blocked_by_protection",
+            SourceState.BLOCKED_BY_PROTECTION,
             fetched_at=fetched_at,
             http_status=http_status,
             final_url=final_url,
@@ -1319,8 +1314,8 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             used_residential_proxy=_source_uses_residential_proxy(source, backend),
         )
         status = _save_failure_status(source, status)
-        if status.get("state") != "ok":
-            await send_telegram_alert(source.id, "blocked_by_protection", status["detail"], source.url)
+        if status.get("state") != SourceState.OK:
+            await send_telegram_alert(source.id, SourceState.BLOCKED_BY_PROTECTION, status["detail"], source.url)
         return _finish(status)
 
     if http_status >= 400:
@@ -1340,7 +1335,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             return _finish(firecrawl_status)
         status = _status_payload(
             source,
-            "http_error",
+            SourceState.HTTP_ERROR,
             fetched_at=fetched_at,
             http_status=http_status,
             final_url=final_url,
@@ -1350,8 +1345,8 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             used_residential_proxy=_source_uses_residential_proxy(source, backend),
         )
         status = _save_failure_status(source, status)
-        if status.get("state") != "ok":
-            await send_telegram_alert(source.id, "http_error", status["detail"], source.url)
+        if status.get("state") != SourceState.OK:
+            await send_telegram_alert(source.id, SourceState.HTTP_ERROR, status["detail"], source.url)
         return _finish(status)
 
     log_action("parse.html", source_id=source.id, backend=backend, bytes_out=content_length)
@@ -1363,7 +1358,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         log_action(
             "quality.validate.fail",
             source_id=source.id,
-            state="quality_error",
+            state=SourceState.QUALITY_ERROR,
             backend=backend,
             detail=reason,
             level="warn",
@@ -1403,7 +1398,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
 
         status = _status_payload(
             source,
-            "quality_error",
+            SourceState.QUALITY_ERROR,
             fetched_at=fetched_at,
             http_status=http_status,
             final_url=final_url,
@@ -1413,12 +1408,12 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
             used_residential_proxy=_source_uses_residential_proxy(source, backend),
         )
         status = _save_failure_status(source, status)
-        if status.get("state") != "ok":
-            await send_telegram_alert(source.id, "quality_error", reason, source.url)
+        if status.get("state") != SourceState.OK:
+            await send_telegram_alert(source.id, SourceState.QUALITY_ERROR, reason, source.url)
         return _finish(status)
 
     dataset = {
-        "state": "ok",
+        "state": SourceState.OK,
         "fetched_at": fetched_at,
         "http_status": http_status,
         "final_url": final_url,
@@ -1434,7 +1429,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         backend=backend,
         extra={"quality_metrics": qmetrics},
     )
-    state = "partial" if reg else "ok"
+    state = SourceState.PARTIAL if reg else SourceState.OK
     status = _status_payload(
         source,
         state,
@@ -1457,7 +1452,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
 
 
 def _attach_proxy_egress(status: dict[str, Any], proxy_info: dict[str, str]) -> dict[str, Any]:
-    if proxy_info and status.get("state") == "ok" and status.get("used_residential_proxy"):
+    if proxy_info and status.get("state") == SourceState.OK and status.get("used_residential_proxy"):
         status["proxy_egress_ip"] = proxy_info.get("egress_ip")
     return status
 
@@ -1564,7 +1559,7 @@ async def _run_tier_after_cooldown(coro):
 def _fetch_error_status(source: Source, exc: BaseException) -> dict[str, Any]:
     return _status_payload(
         source,
-        "fetch_error",
+        SourceState.FETCH_ERROR,
         fetched_at=now_iso(),
         error=type(exc).__name__,
         detail=str(exc)[:2000],
@@ -1625,7 +1620,7 @@ async def _run_tier_parallel(
         else:
             results.append(item)
 
-    ok_count = sum(1 for s in results if s.get("state") == "ok")
+    ok_count = sum(1 for s in results if s.get("state") == SourceState.OK)
     logger.info(
         "refresh phase=%s duration=%.1fs ok=%d fail=%d concurrency=%d",
         phase,
@@ -1672,7 +1667,7 @@ async def _run_tier_serial_browser(
             set_active_flaresolverr_session(None)
             await fs_session.__aexit__(None, None, None)
 
-    ok_count = sum(1 for s in results if s.get("state") == "ok")
+    ok_count = sum(1 for s in results if s.get("state") == SourceState.OK)
     logger.info(
         "refresh phase=%s duration=%.1fs ok=%d fail=%d concurrency=1",
         phase,
@@ -1826,10 +1821,10 @@ async def _refresh_sources_unlocked(
             log_action("phase.begin", extra={"phase": phase_name})
             phase_results = await phase_factory()
             results.extend(phase_results)
-            ok_count = sum(1 for s in phase_results if s.get("state") == "ok")
+            ok_count = sum(1 for s in phase_results if s.get("state") == SourceState.OK)
             log_action(
                 "phase.end",
-                state="ok" if ok_count == len(phase_results) else "partial",
+                state=SourceState.OK if ok_count == len(phase_results) else SourceState.PARTIAL,
                 duration_ms=(time.monotonic() - phase_started) * 1000,
                 level="info" if ok_count == len(phase_results) else "warn",
                 extra={
@@ -1848,11 +1843,11 @@ async def _refresh_sources_unlocked(
         if client is not None:
             await client.aclose()
         end_refresh_run()
-        ok_total = sum(1 for s in results if s.get("state") == "ok")
+        ok_total = sum(1 for s in results if s.get("state") == SourceState.OK)
         traffic = _refresh_traffic_summary(results)
         log_action(
             "refresh.end",
-            state="ok" if ok_total == len(results) else "partial",
+            state=SourceState.OK if ok_total == len(results) else SourceState.PARTIAL,
             level="info" if ok_total == len(results) else "warn",
             extra={
                 "ok": ok_total,
