@@ -19,6 +19,7 @@ from typing import Any, Iterator
 
 from .config import log_rotate_max_age_days, log_rotate_max_bytes, stale_dataset_hours
 from .hsreplay_auth_status import hsreplay_auth_status
+from .source_state import ERROR_STATES, WARN_STATES, SourceState
 from .storage import load_dataset, load_status, root_dir
 
 _logger = logging.getLogger(__name__)
@@ -192,9 +193,9 @@ def _next_step() -> int:
 def _level_for(state: str | None, level: str | None, error_type: str | None) -> str:
     if level:
         return level
-    if error_type or state in ("fetch_error", "http_error", "blocked_by_protection", "proxy_required"):
+    if error_type or state in ERROR_STATES:
         return "error"
-    if state in ("quality_error", "partial"):
+    if state in WARN_STATES:
         return "warn"
     return "info"
 
@@ -378,7 +379,7 @@ def complete_source_trace(
 ) -> None:
     log_action(
         "source.complete",
-        level="info" if status.get("state") == "ok" else "error",
+        level="info" if status.get("state") == SourceState.OK else "error",
         source_id=source_id,
         trace_id=trace_id or _current_trace_id.get(),
         state=status.get("state"),
@@ -488,7 +489,7 @@ def build_run_timeline(run_id: str) -> dict[str, Any]:
     failed = [
         sid
         for sid, evs in by_source.items()
-        if any(e.get("action") == "source.complete" and e.get("state") != "ok" for e in evs)
+        if any(e.get("action") == "source.complete" and e.get("state") != SourceState.OK for e in evs)
     ]
     return {
         "run_id": run_id,
@@ -540,7 +541,7 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
             last_trace_by_source[sid] = str(row["trace_id"])
         if row.get("action") == "source.complete":
             last_end_by_source[sid] = row
-        if row.get("level") == "error" or row.get("state") not in (None, "ok"):
+        if row.get("level") == "error" or row.get("state") not in (None, SourceState.OK):
             failure_counts[sid] += 1
         if row.get("action") == "dataset.preserve_previous_good":
             preserved_counts[sid] += 1
@@ -550,7 +551,7 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
             action_errors[str(row["action"])] += 1
         if row.get("action") == "dataset.db_store.fail" and sid:
             db_store_failures[sid] += 1
-        if row.get("action") == "source.complete" and row.get("state") not in (None, "ok"):
+        if row.get("action") == "source.complete" and row.get("state") not in (None, SourceState.OK):
             failures.append(row)
 
     statuses = [load_status(s.id) for s in SOURCES]
@@ -558,12 +559,12 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
     cached_now: list[str] = []
     live_failed_cached_now: list[str] = []
     for st in statuses:
-        state_now[st.get("state") if st else "never_fetched"] += 1
+        state_now[st.get("state") if st else SourceState.NEVER_FETCHED] += 1
         if st and st.get("serving_cached_dataset"):
             source_id = str(st.get("source_id") or "")
             if source_id:
                 cached_now.append(source_id)
-            if st.get("last_refresh_state") not in (None, "ok"):
+            if st.get("last_refresh_state") not in (None, SourceState.OK):
                 live_failed_cached_now.append(source_id)
 
     stale_sources = _stale_sources()
@@ -579,7 +580,7 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
         preserved_24h = preserved_counts.get(source.id, 0)
         contract = get_contract(source.id)
         risk = "low"
-        if st.get("state") != "ok" or st.get("serving_cached_dataset") or source.id in stale_ids:
+        if st.get("state") != SourceState.OK or st.get("serving_cached_dataset") or source.id in stale_ids:
             risk = "high"
         elif failures_24h >= 3 or preserved_24h:
             risk = "medium"
@@ -589,7 +590,7 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
             {
                 "source_id": source.id,
                 "site": source.site,
-                "state": st.get("state", "never_fetched"),
+                "state": st.get("state", SourceState.NEVER_FETCHED),
                 "fetched_at": st.get("fetched_at"),
                 "backend": st.get("backend"),
                 "serving_cached_dataset": bool(st.get("serving_cached_dataset")),
@@ -617,7 +618,7 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
                     "preserved_count_24h": preserved_24h,
                     "serving_cached_dataset": bool(st.get("serving_cached_dataset")),
                     "is_stale": source.id in stale_ids,
-                    "state": st.get("state", "never_fetched"),
+                    "state": st.get("state", SourceState.NEVER_FETCHED),
                     "recommendation": (contract.recommendation if contract else None)
                     or ("Investigate recent errors in trace timeline" if failures_24h else "Monitor source"),
                 }
@@ -625,7 +626,7 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
 
     vulnerabilities.sort(
         key=lambda v: (
-            0 if v["state"] != "ok" else 1,
+            0 if v["state"] != SourceState.OK else 1,
             -v["failures_24h"],
             v["source_id"],
         )
