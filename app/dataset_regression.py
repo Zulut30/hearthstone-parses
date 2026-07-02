@@ -45,8 +45,8 @@ def estimate_metric_count(source: Source, data: dict[str, Any]) -> int:
     if stype == "bg_compositions":
         return len(structured.get("compositions") or [])
     if stype == "arena_class_matrix":
-        # matchups сезонные (dual-class арена) и штатно схлопываются в 0 —
-        # для регрессии сравниваем только стабильное ядро: классы.
+        # dual-class арена удалена из игры: matchups всегда пуст,
+        # для регрессии сравниваем только классы.
         return len(structured.get("classes") or [])
     if stype == "arena_legendary_groups":
         return len(structured.get("groups") or [])
