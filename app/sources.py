@@ -12,6 +12,14 @@ class Source:
     category: str
     parser: str = "generic_html"
     description: str = ""
+    # Per-source freshness threshold in hours; None => global HS_STALE_HOURS
+    # (config.stale_dataset_hours()). Set for sources refreshed on slow cadences
+    # (e.g. weekly systemd timers) so they are not reported stale between runs.
+    stale_hours: float | None = None
+    # "scrape" — fetched by the generic refresh pipeline (fetcher tiers);
+    # "pipeline" — refreshed by a dedicated command/systemd timer, never scraped
+    # by the tier planner.
+    kind: str = "scrape"
 
     @property
     def fetch_url(self) -> str:
