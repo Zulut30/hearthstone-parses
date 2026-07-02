@@ -666,11 +666,11 @@ def build_summary(*, since_hours: float = 24.0) -> dict[str, Any]:
         "cached_sources": cached_now,
         "cached_after_failure_sources": live_failed_cached_now,
         "freshness": {
-            # orphan_status — статус-файлы без зарегистрированного источника
-            # (см. stale_monitor: "reported for cleanup only"); в списке
-            # остаются, но общий ok и exit-code freshness-check не роняют.
-            "ok": not [s for s in stale_sources if s.get("reason") != "orphan_status"]
-            and not cached_now,
+            # Phase 5: the former orphan pipelines (hsreplay_archetypes,
+            # hsreplay_battlegrounds_hero_details) are registered in SOURCES
+            # with their own stale_hours, so orphan statuses no longer need a
+            # freshness carve-out; any remaining orphan is a real problem.
+            "ok": not stale_sources and not cached_now,
             "stale_count": len(stale_sources),
             "cached_count": len(cached_now),
             "cached_after_failure_count": len(live_failed_cached_now),
