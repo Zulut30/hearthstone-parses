@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import data_dir
+from .source_state import SourceState
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +377,7 @@ def store_dataset_to_db(source_id: str, payload: dict[str, Any]) -> None:
     init_db() # Ensure tables exist
 
     fetched_at = payload.get("fetched_at") or datetime.now(timezone.utc).isoformat()
-    state = payload.get("state") or "ok"
+    state = payload.get("state") or SourceState.OK
     
     # Safely get structured dict
     data_dict = payload.get("data") or {}
