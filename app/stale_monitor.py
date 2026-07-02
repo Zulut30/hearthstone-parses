@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .config import stale_dataset_hours
+from .source_state import SourceState
 from .sources import SOURCES
 from .storage import load_dataset, load_status
 
@@ -29,8 +30,8 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
 
     for source in SOURCES:
         st = load_status(source.id) or {}
-        state = st.get("state") or "never_fetched"
-        if state == "ok" and not include_ok:
+        state = st.get("state") or SourceState.NEVER_FETCHED
+        if state == SourceState.OK and not include_ok:
             continue
 
         fetched_at = st.get("fetched_at")
@@ -47,9 +48,9 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
             continue
         live_failed_cache = bool(st.get("serving_cached_dataset")) and st.get("last_refresh_state") not in (
             None,
-            "ok",
+            SourceState.OK,
         )
-        if state == "ok" and include_ok:
+        if state == SourceState.OK and include_ok:
             stale.append(
                 {
                     "source_id": source.id,
@@ -61,7 +62,7 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
                     "reason": "live_failed_cached" if live_failed_cache else "ok_but_stale",
                 }
             )
-        elif state != "ok":
+        elif state != SourceState.OK:
             stale.append(
                 {
                     "source_id": source.id,
@@ -100,7 +101,7 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
 
 def _stale_alert_state(item: dict[str, Any]) -> str:
     is_live_failed_cache = item.get("reason") == "live_failed_cached"
-    base = "stale_ok" if item.get("state") == "ok" and not is_live_failed_cache else "stale_data"
+    base = "stale_ok" if item.get("state") == SourceState.OK and not is_live_failed_cache else "stale_data"
     try:
         age_h = float(item.get("dataset_age_hours") or 0)
     except (TypeError, ValueError):
