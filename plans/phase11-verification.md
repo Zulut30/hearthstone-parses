@@ -56,8 +56,32 @@ The three production data findings are exactly the kind of silent-success/stalen
 
 ## External steps still required
 
-1. Human review and merge PR #2.
-2. Deploy the merged commit from `/srv/hs-data-api` using the documented fast-forward-only procedure.
-3. Refresh `vicious_syndicate_radars`, `vicious_syndicate_live_beta`, and `hsreplay_battlegrounds_hero_details`; do not publish candidates that fail the new gates.
-4. Run production smoke for health, all legacy Deckview paths, all v1 routes, ETag/304, UI/docs, and `freshness-check --since-hours 48`.
-5. Observe every Docker timer for 24 hours and confirm no new contract, semantic, freshness, or systemd failures.
+1. Observe every Docker timer for 24 hours and confirm no new contract,
+   semantic, freshness, or systemd failures.
+
+## Production rollout — 2026-07-12
+
+- PR #2 was merged as `4149615`; the fingerprint-runtime and pipeline-audit
+  follow-ups were merged as `e3418b1` and `90af02f`.
+- The production checkout was advanced to `main` without deleting its previous
+  local history. The old line is retained as
+  `production-pre-stabilization-20260712`, and its uncommitted files are retained
+  in stash `pre-stabilization-deploy-2026-07-12T10:28Z`.
+- A clean production image was built and deployed. The running API container is
+  healthy, Chromium is installed, and the Node fingerprint generator was
+  executed successfully inside the container.
+- All 46 source status files were updated during the rollout: 44 sources are
+  `ok`; only the two Vicious sources are `quality_error` for confirmed upstream
+  states. `freshness-check --since-hours 48` passes with zero stale and zero
+  cached-after-failure sources.
+- Both dedicated pipelines completed successfully:
+  `hsreplay_battlegrounds_hero_details` and `hsreplay_archetypes` are `ok`.
+- Public smoke passed: `/health` is healthy, `/datasets` exposes 46 legacy
+  sources, `/v1/system/sources` exposes 46 sources, and conditional GET returns
+  HTTP 304 with an empty body.
+- Production concurrency was normalized to light/medium `3/2`; duplicate legacy
+  env keys were removed and per-backend timeout was normalized to 240 seconds.
+- `quality-check` now handles dedicated pipelines by their status and structured
+  payload rather than applying an HTML-title test. Its only two bad sources are
+  the expected Vicious upstream failures; four valid datasets remain in the
+  warning score band for observation.
