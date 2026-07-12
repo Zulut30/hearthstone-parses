@@ -501,6 +501,68 @@ def _validate_bg_trinkets(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
+def _validate_bg_minions(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    minions = [row for row in (structured.get("minions") or []) if isinstance(row, dict)]
+    with_stats = sum(
+        1
+        for row in minions
+        if row.get("impact") is not None and row.get("win_share") and row.get("popularity")
+    )
+    report.metrics.update({"minions": len(minions), "minions_with_stats": with_stats})
+    if len(minions) < 50:
+        report.add_issue(
+            "bg_minions.too_few_rows",
+            f"bg minions too few ({len(minions)} < 50)",
+            field="minions",
+        )
+    if with_stats < 40:
+        report.add_issue(
+            "bg_minions.missing_stats",
+            f"bg minions missing stats ({with_stats}/{len(minions)}; minimum 40)",
+            field="impact,win_share,popularity",
+        )
+    report.score = round(
+        (min(len(minions) / 50.0, 1.0) + min(with_stats / 40.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_bg_compositions(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    compositions = [
+        row for row in (structured.get("compositions") or []) if isinstance(row, dict)
+    ]
+    with_stats = sum(
+        1
+        for row in compositions
+        if row.get("first_place")
+        and row.get("avg_placement") is not None
+        and row.get("popularity")
+    )
+    report.metrics.update(
+        {"compositions": len(compositions), "compositions_with_stats": with_stats}
+    )
+    if len(compositions) < 5:
+        report.add_issue(
+            "bg_compositions.too_few_rows",
+            f"bg compositions too few ({len(compositions)} < 5)",
+            field="compositions",
+        )
+    if with_stats < 5:
+        report.add_issue(
+            "bg_compositions.missing_stats",
+            f"bg compositions missing stats ({with_stats}/{len(compositions)}; minimum 5)",
+            field="first_place,avg_placement,popularity",
+        )
+    report.score = round(
+        (min(len(compositions) / 5.0, 1.0) + min(with_stats / 5.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -512,6 +574,8 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_comps": _validate_bg_comps,
     "bg_card_stats": _validate_bg_card_stats,
     "bg_trinkets": _validate_bg_trinkets,
+    "bg_minions": _validate_bg_minions,
+    "bg_compositions": _validate_bg_compositions,
 }
 
 

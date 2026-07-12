@@ -334,6 +334,58 @@ class SourceValidatorsTest(unittest.TestCase):
             ).ok
         )
 
+    def test_bg_minions_require_forty_stat_rows(self) -> None:
+        minions = [
+            {
+                "name": f"Minion {idx}",
+                "impact": 0.1 if idx < 39 else None,
+                "win_share": "50%" if idx < 39 else None,
+                "popularity": "5%" if idx < 39 else None,
+            }
+            for idx in range(50)
+        ]
+        report = validate_structured(
+            "hsreplay_battlegrounds_minions",
+            {"type": "bg_minions", "minions": minions},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn("bg_minions.missing_stats", {issue.code for issue in report.issues})
+        minions[39].update({"impact": 0.2, "win_share": "50%", "popularity": "5%"})
+        self.assertTrue(
+            validate_structured(
+                "hsreplay_battlegrounds_minions",
+                {"type": "bg_minions", "minions": minions},
+            ).ok
+        )
+
+    def test_bg_compositions_require_five_complete_stat_rows(self) -> None:
+        compositions = [
+            {
+                "name": f"Comp {idx}",
+                "first_place": "20%" if idx < 4 else None,
+                "avg_placement": 4.0 if idx < 4 else None,
+                "popularity": "5%" if idx < 4 else None,
+            }
+            for idx in range(5)
+        ]
+        report = validate_structured(
+            "hsreplay_battlegrounds_compositions",
+            {"type": "bg_compositions", "compositions": compositions},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn("bg_compositions.missing_stats", {issue.code for issue in report.issues})
+        compositions[4].update(
+            {"first_place": "20%", "avg_placement": 4.0, "popularity": "5%"}
+        )
+        self.assertTrue(
+            validate_structured(
+                "hsreplay_battlegrounds_compositions",
+                {"type": "bg_compositions", "compositions": compositions},
+            ).ok
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

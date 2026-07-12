@@ -25,8 +25,8 @@ and the replacement has a focused regression test.
 | classes ≥8 | Arena class matrix | contract + type validator | transferred + tested; old branch removed |
 | classes ≥10 and ≥10 with stats | Arena class pages | contract + type validator | transferred + tested; old branch removed |
 | heroes ≥30, names ≥20, stats ≥20 | BG heroes | `source_validators` + contract | transferred + tested; old branch removed |
-| minions ≥50 and ≥40 with stats | BG minions | contract + type validator | pending |
-| compositions ≥5 and ≥5 with stats | BG compositions | contract + type validator | pending |
+| minions ≥50 and ≥40 with stats | BG minions | contract + type validator | transferred + tested; old branch removed |
+| compositions ≥5 and ≥5 with stats | BG compositions | contract + type validator | transferred + tested; old branch removed |
 | cards ≥ dynamic source threshold and tier labels present | Arena card tiers | contract + type validator | pending |
 | classes ≥5, cards ≥300, tier ids ≥200 | HearthArena tier list | contract + type validator | pending |
 | cards ≥30, metrics ≥20, blocked payload rejected | card stats | contract + type validator | pending |

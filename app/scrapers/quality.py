@@ -166,34 +166,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "bg_minions":
-            minions = structured.get("minions") or []
-            if len(minions) < 50:
-                return False, f"bg minions too few ({len(minions)})"
-            with_stats = sum(
-                1
-                for item in minions
-                if item.get("impact") is not None
-                and item.get("win_share")
-                and item.get("popularity")
-            )
-            if with_stats < 40:
-                return False, f"bg minions missing stats ({with_stats}/{len(minions)})"
-            return True, "ok"
-        if structured.get("type") == "bg_compositions":
-            comps = structured.get("compositions") or []
-            if len(comps) < 5:
-                return False, f"bg compositions too few ({len(comps)})"
-            with_stats = sum(
-                1
-                for item in comps
-                if item.get("first_place")
-                and item.get("avg_placement") is not None
-                and item.get("popularity")
-            )
-            if with_stats < 5:
-                return False, f"bg compositions missing stats ({with_stats}/{len(comps)})"
-            return True, "ok"
         if structured.get("type") == "arena_card_tiers":
             cards = structured.get("cards") or []
             default_min = 20 if "legendary" in source.id else 100
