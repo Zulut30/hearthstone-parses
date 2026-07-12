@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from .cards_index import resolve_card_name
+from .parsing_normalize import looks_like_name, normalize_percent_text
 from .sources import SOURCE_BY_ID, Source
 
 PERCENT_RE = re.compile(r"^\d+(\.\d+)?%$")
@@ -137,15 +138,13 @@ _DESC_PREFIXES = (
 
 
 def _looks_like_hero_name(line: str) -> bool:
-    if line in _HERO_SKIP or len(line) < 3 or len(line) > 55:
-        return False
-    if _is_percent(line) or line.startswith("(") or line.startswith("×"):
-        return False
-    if line[0].islower() or line.startswith(_DESC_PREFIXES):
-        return False
-    if line.isdigit() or line in {"Record", "Player", "Final Deck", "Quests", "Trinket"}:
-        return False
-    return True
+    return looks_like_name(
+        line,
+        skipped=_HERO_SKIP,
+        description_prefixes=_DESC_PREFIXES,
+        forbidden={"Record", "Player", "Final Deck", "Quests", "Trinket"},
+        max_length=55,
+    )
 
 
 def parse_bg_heroes(lines: list[str]) -> list[dict[str, Any]]:
@@ -221,14 +220,7 @@ def parse_hsguru_matchups(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _parse_percent_value(value: str) -> str | None:
-    v = value.strip().replace(",", ".")
-    if "%" in v:
-        return v
-    try:
-        float(v)
-        return f"{v}%"
-    except ValueError:
-        return None
+    return normalize_percent_text(value)
 
 
 def parse_cards_from_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -411,17 +403,14 @@ TRINKET_TIER_MARKERS = {"s", "a", "b", "c", "d", "e", "f"}
 
 
 def _looks_like_trinket_name(line: str) -> bool:
-    if line in _TRINKET_SKIP or len(line) < 4 or len(line) > 80:
-        return False
-    if not line[0].isalnum():
-        return False
-    if _is_percent(line) or line[0].islower() or line.startswith(_DESC_PREFIXES):
-        return False
-    if line.isdigit() or line.endswith(" Place") or "Place:" in line:
-        return False
-    if line.endswith(".") or line.endswith(","):
-        return False
-    return True
+    return looks_like_name(
+        line,
+        skipped=_TRINKET_SKIP,
+        description_prefixes=_DESC_PREFIXES,
+        min_length=4,
+        forbidden={line} if line.endswith(" Place") or "Place:" in line else (),
+        reject_terminal_punctuation=True,
+    )
 
 
 def normalize_trinket_tribe(value: Any) -> tuple[str | None, str | None]:

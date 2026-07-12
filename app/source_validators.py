@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import re
 from typing import Any, Callable
 
+from .parsing_normalize import parse_decimal, parse_percent
 from .quality_thresholds import threshold_for
 
 
@@ -42,26 +43,6 @@ class ValidationReport:
         return "; ".join(issue.message for issue in self.issues) or "ok"
 
 
-def _parse_percent(value: Any) -> float | None:
-    raw = str(value or "").strip().replace(",", ".")
-    if raw.endswith("%"):
-        raw = raw[:-1]
-    try:
-        return float(raw)
-    except ValueError:
-        return None
-
-
-def _parse_decimal(value: Any) -> float | None:
-    raw = str(value or "").strip().replace(",", ".")
-    if not re.fullmatch(r"\d+(?:\.\d+)?", raw):
-        return None
-    try:
-        return float(raw)
-    except ValueError:
-        return None
-
-
 def _valid_name(value: Any) -> bool:
     return str(value or "").strip() not in {"", "-", "—", "Unknown"}
 
@@ -72,8 +53,8 @@ def _validate_bg_heroes(_source_id: str, structured: dict[str, Any]) -> Validati
     row_count = len(heroes)
     names = [str(row.get("hero") or "").strip() for row in heroes]
     dbf_ids = [row.get("dbfId") for row in heroes if row.get("dbfId") is not None]
-    avg_values = [_parse_decimal(row.get("avg_placement")) for row in heroes]
-    pick_rates = [_parse_percent(row.get("pick_rate")) for row in heroes]
+    avg_values = [parse_decimal(row.get("avg_placement")) for row in heroes]
+    pick_rates = [parse_percent(row.get("pick_rate")) for row in heroes]
     distributions = [
         row.get("placement_distribution")
         for row in heroes
@@ -86,7 +67,7 @@ def _validate_bg_heroes(_source_id: str, structured: dict[str, Any]) -> Validati
     for dist in distributions:
         if len(dist) != 8:
             continue
-        parsed = [_parse_percent(value) for value in dist]
+        parsed = [parse_percent(value) for value in dist]
         if any(value is None for value in parsed):
             continue
         total = sum(value for value in parsed if value is not None)
