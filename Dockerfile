@@ -20,16 +20,19 @@ RUN apt-get update \
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /app/requirements.txt \
-    && python -m patchright install chromium || true
+    && python -m patchright install chromium
 
 COPY app /app/app
 COPY web /app/web
 COPY scripts /app/scripts
 COPY .env.example /app/.env.example
 
-RUN chmod +x /app/scripts/*.sh 2>/dev/null || true \
+RUN chmod +x /app/scripts/*.sh \
     && mkdir -p /var/lib/hs-data-api/datasets /var/lib/hs-data-api/statuses /var/lib/hs-data-api/logs
 
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
 CMD ["python", "-m", "app.server"]
