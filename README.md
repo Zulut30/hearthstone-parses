@@ -105,12 +105,17 @@ Firestone - public API fallback для Battlegrounds и Arena. Обычно не
 Vicious Syndicate используется для Data Reaper Live и radar graphs. Live Beta берётся из Firebase/embedded app data, radars - из deck-library/radar pages.
 
 После крупных обновлений Hearthstone Vicious может временно отдавать только
-агрегаты `Other <Class>` или radar предыдущего Data Reaper issue. API помечает
-такие ответы как `upstream_unclassified` / `upstream_stale` и не заменяет ими
-последний качественный cache. Если публичные radar-страницы требуют сессию,
+агрегаты `Other <Class>` или radar предыдущего Data Reaper issue. Live-заглушки
+`upstream_unclassified` не публикуются. Последний доступный полноценный radar
+публикуется с `upstream_stale` и номерами активного/последнего report issue,
+пока на сайте не появится новый radar. Если radar-страницы требуют сессию,
 cookies можно импортировать командой
 `python -m app.cli vicious-import-storage /path/to/cookies.json`; принимаются
 Playwright `storage_state` и экспорт Cookie-Editor.
+
+Docker timer `hs-data-api-docker-refresh-vicious-syndicate.timer` проверяет оба
+источника каждые два часа и автоматически заменит issue 349, когда Vicious
+опубликует более новый полноценный radar.
 
 | Source ID | Что парсим | Какие данные отдаёт |
 |-----------|------------|---------------------|

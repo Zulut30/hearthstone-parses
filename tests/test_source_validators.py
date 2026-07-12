@@ -161,7 +161,7 @@ class SourceValidatorsTest(unittest.TestCase):
         self.assertIn("vicious_live.too_few_classes", codes)
         self.assertIn("vicious_live.too_few_tier_decks", codes)
 
-    def test_vicious_radars_reject_stale_issue_despite_fresh_fetch(self) -> None:
+    def test_vicious_radars_publish_latest_available_issue_with_warning(self) -> None:
         structured = {
             "type": "vicious_syndicate_radars",
             "issue": "349",
@@ -171,10 +171,11 @@ class SourceValidatorsTest(unittest.TestCase):
 
         report = validate_structured("vicious_syndicate_radars", structured)
 
-        self.assertFalse(report.ok)
-        self.assertIn("vicious_radars.outdated_issue", {issue.code for issue in report.issues})
+        self.assertTrue(report.ok)
+        issue = next(issue for issue in report.issues if issue.code == "vicious_radars.outdated_issue")
+        self.assertEqual(issue.severity, "warning")
 
-    def test_vicious_radars_reject_old_content_even_when_issue_matches(self) -> None:
+    def test_vicious_radars_warn_on_old_content_even_when_issue_matches(self) -> None:
         structured = {
             "type": "vicious_syndicate_radars",
             "issue": "352",
@@ -184,8 +185,26 @@ class SourceValidatorsTest(unittest.TestCase):
 
         report = validate_structured("vicious_syndicate_radars", structured)
 
+        self.assertTrue(report.ok)
+        issue = next(issue for issue in report.issues if issue.code == "vicious_radars.stale_content")
+        self.assertEqual(issue.severity, "warning")
+
+    def test_vicious_radars_still_reject_missing_issue_metadata(self) -> None:
+        report = validate_structured(
+            "vicious_syndicate_radars",
+            {
+                "type": "vicious_syndicate_radars",
+                "issue": "Unknown",
+                "latest_report_issue": "352",
+                "latest_report_published_at": datetime.now(UTC).date().isoformat(),
+            },
+        )
+
         self.assertFalse(report.ok)
-        self.assertIn("vicious_radars.stale_content", {issue.code for issue in report.issues})
+        self.assertIn(
+            "vicious_radars.missing_issue_freshness",
+            {issue.code for issue in report.issues},
+        )
 
     def test_vicious_radars_accept_current_recent_report(self) -> None:
         structured = {

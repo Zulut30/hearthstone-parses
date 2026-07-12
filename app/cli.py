@@ -36,6 +36,7 @@ def load_env_file(path: Path = DEFAULT_ENV_FILE) -> None:
                 "HS_IPROYAL_",
                 "HS_PROXY_",
                 "HSREPLAY_",
+                "VICIOUS_SYNDICATE_",
                 "TELEGRAM_",
             )
         ):

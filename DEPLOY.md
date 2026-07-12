@@ -181,11 +181,15 @@ cd /srv/hs-data-api
 ./venv/bin/python -m app.cli quality-check
 ```
 
-Нормальный результат — `upstream_state=ready`. Состояния
-`upstream_unclassified`, `upstream_stale` и `upstream_unavailable` означают,
-что Vicious ещё не опубликовал полноценные данные. Они должны оставить
-последний валидный cache, а не публиковать заглушки как реальные архетипы.
-Никогда не ослабляйте quality-gate ради зелёного refresh.
+Нормальный результат — `upstream_state=ready`. Live-состояния
+`upstream_unclassified` и `upstream_unavailable` оставляют последний валидный
+cache. Для radar `upstream_stale` означает, что API публикует последний
+полноценный граф с явными номерами radar/report issue и автоматически заменит
+его после появления нового. Пустые/повреждённые графы не публикуются.
+
+Timer `hs-data-api-docker-refresh-vicious-syndicate.timer` проверяет Vicious
+каждые два часа с jitter до 10 минут. Никогда не ослабляйте структурный
+quality-gate ради зелёного refresh.
 
 ## HSGuru stale/cached-after-failure recovery
 

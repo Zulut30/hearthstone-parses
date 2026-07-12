@@ -37,6 +37,7 @@ def test_docker_systemd_installer_covers_every_timer(tmp_path: Path) -> None:
 
     expected_timers = sorted(path.name for path in (ROOT / "systemd").glob("hs-data-api-docker-*.timer"))
     assert "hs-data-api-docker-rebuild-hsreplay-index.timer" in expected_timers
+    assert "hs-data-api-docker-refresh-vicious-syndicate.timer" in expected_timers
     installed_timers = sorted(path.name for path in staged_systemd.glob("hs-data-api-docker-*.timer"))
     calls = calls_file.read_text(encoding="utf-8").splitlines()
     enabled_timers = sorted(line.removeprefix("enable --now ") for line in calls if line.startswith("enable --now "))
@@ -50,3 +51,7 @@ def test_docker_systemd_installer_covers_every_timer(tmp_path: Path) -> None:
     assert "/custom/hs-api/docker-compose.yml" in (
         staged_systemd / "hs-data-api-docker-refresh-bg-hero-details.service"
     ).read_text(encoding="utf-8")
+    vicious_service = staged_systemd / "hs-data-api-docker-refresh-vicious-syndicate.service"
+    assert vicious_service.is_file()
+    assert "vicious_syndicate_live_beta" in vicious_service.read_text(encoding="utf-8")
+    assert "vicious_syndicate_radars" in vicious_service.read_text(encoding="utf-8")
