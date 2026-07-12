@@ -98,10 +98,8 @@ cd /opt/hs-data-api
 git pull
 ./venv/bin/pip install -r requirements.txt
 sudo ./scripts/merge-env-example.sh /etc/hs-data-api.env
-sudo cp systemd/*.timer systemd/*.service /etc/systemd/system/  # или sed как в install.sh
-sudo systemctl daemon-reload
+sudo ./scripts/install-docker-systemd.sh
 sudo systemctl enable --now hs-flaresolverr.service hs-data-api-refresh.timer hs-data-api-refresh-api.timer hs-data-api-freshness-check.timer
-sudo systemctl enable --now hs-data-api-docker-refresh-hsreplay-archetypes.timer 2>/dev/null || true
 sudo systemctl disable --now hs-data-api-refresh-protected.timer 2>/dev/null || true
 sudo systemctl restart hs-data-api hs-flaresolverr
 ./scripts/audit.sh
@@ -114,6 +112,9 @@ Production refresh schedule:
 - `hs-data-api-freshness-check.timer`: audit at `07:45` and `18:45 Europe/Warsaw`.
 - `hs-data-api-docker-firecrawl-hsreplay-map.timer`: weekly HSReplay crawl-map/index refresh at `02:35 Europe/Warsaw` on Mondays.
 - `hs-data-api-docker-refresh-hsreplay-archetypes.timer`: HSReplay Standard archetype SQLite snapshots at `03:20 Europe/Warsaw` on Mondays and Thursdays.
+- `scripts/install-docker-systemd.sh`: автоматически устанавливает и включает все
+  `hs-data-api-docker-*.timer`, поэтому новый pipeline timer не останется только
+  в репозитории после следующего деплоя.
 - `hs-data-api-protected-recovery.service`: conditional fallback launched by failed freshness audit; refreshes only stale/cached-after-failure `browser_protected` sources.
 - `hs-data-api-refresh-protected.timer`: disabled by default; the morning full run already includes protected sources. Use `systemctl start hs-data-api-refresh-protected.service` only for manual recovery.
 
