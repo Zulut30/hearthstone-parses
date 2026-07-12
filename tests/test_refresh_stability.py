@@ -44,8 +44,9 @@ from app.vicious_syndicate import find_radar_url, looks_like_vicious_deck_librar
 
 class RefreshStabilityTest(unittest.TestCase):
     def test_test_process_refuses_default_production_writes(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "Refusing to write production parser data"):
-            save_status("test_should_not_touch_prod", {"state": "ok"})
+        with patch("app.storage.data_dir", return_value=Path("/var/lib/hs-data-api")):
+            with self.assertRaisesRegex(RuntimeError, "Refusing to write production parser data"):
+                save_status("test_should_not_touch_prod", {"state": "ok"})
 
     def test_save_dataset_keeps_backup_before_overwrite(self) -> None:
         with TemporaryDirectory() as td:
