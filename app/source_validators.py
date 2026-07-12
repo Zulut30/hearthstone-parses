@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 import re
 from typing import Any, Callable
 
+from .quality_thresholds import threshold_for
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -563,6 +565,43 @@ def _validate_bg_compositions(_source_id: str, structured: dict[str, Any]) -> Va
     return report
 
 
+def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    cards = [row for row in (structured.get("cards") or []) if isinstance(row, dict)]
+    default_min = 20 if "legendary" in source_id else 100
+    minimum_cards = int(threshold_for(source_id, "arena_card_tiers_min", default_min))
+    has_tier_labels = "firestone" in source_id or any(
+        row.get("tier")
+        or row.get("win_rate") is not None
+        or row.get("deck_winrate")
+        for row in cards[:50]
+    )
+    report.metrics.update(
+        {
+            "cards": len(cards),
+            "minimum_cards": minimum_cards,
+            "has_tier_labels": has_tier_labels,
+        }
+    )
+    if len(cards) < minimum_cards:
+        report.add_issue(
+            "arena_card_tiers.too_few_cards",
+            f"arena card tiers too few ({len(cards)} < {minimum_cards})",
+            field="cards",
+        )
+    if not has_tier_labels:
+        report.add_issue(
+            "arena_card_tiers.missing_tier_labels",
+            "arena card tiers missing tier labels",
+            field="tier,win_rate,deck_winrate",
+        )
+    report.score = round(
+        (min(len(cards) / max(minimum_cards, 1), 1.0) + float(has_tier_labels)) / 2,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -576,6 +615,7 @@ _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_trinkets": _validate_bg_trinkets,
     "bg_minions": _validate_bg_minions,
     "bg_compositions": _validate_bg_compositions,
+    "arena_card_tiers": _validate_arena_card_tiers,
 }
 
 

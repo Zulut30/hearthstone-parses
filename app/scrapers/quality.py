@@ -166,20 +166,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "arena_card_tiers":
-            cards = structured.get("cards") or []
-            default_min = 20 if "legendary" in source.id else 100
-            min_cards = int(threshold_for(source.id, "arena_card_tiers_min", default_min))
-            if len(cards) < min_cards:
-                return False, f"arena card tiers too few ({len(cards)})"
-            if "firestone" not in source.id and not any(
-                c.get("tier")
-                or c.get("win_rate") is not None
-                or c.get("deck_winrate")
-                for c in cards[:50]
-            ):
-                return False, "arena card tiers missing tier labels"
-            return True, "ok"
         if structured.get("type") == "heartharena_tierlist":
             classes = structured.get("classes") or []
             if len(classes) < 5:

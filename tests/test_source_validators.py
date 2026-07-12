@@ -386,6 +386,37 @@ class SourceValidatorsTest(unittest.TestCase):
             ).ok
         )
 
+    def test_arena_card_tiers_require_labels_for_hsreplay(self) -> None:
+        cards = [{"name": f"Card {idx}"} for idx in range(100)]
+        report = validate_structured(
+            "hsreplay_arena_cards_test",
+            {"type": "arena_card_tiers", "cards": cards},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "arena_card_tiers.missing_tier_labels",
+            {issue.code for issue in report.issues},
+        )
+        cards[0]["tier"] = "A"
+        self.assertTrue(
+            validate_structured(
+                "hsreplay_arena_cards_test",
+                {"type": "arena_card_tiers", "cards": cards},
+            ).ok
+        )
+
+    def test_arena_card_tiers_keep_firestone_label_exemption(self) -> None:
+        report = validate_structured(
+            "firestone_arena_cards_test",
+            {
+                "type": "arena_card_tiers",
+                "cards": [{"name": f"Card {idx}"} for idx in range(100)],
+            },
+        )
+
+        self.assertTrue(report.ok)
+
 
 if __name__ == "__main__":
     unittest.main()
