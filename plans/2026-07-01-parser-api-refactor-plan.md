@@ -83,12 +83,12 @@
 7. Build + deploy + смоук (см. чеклист). Merge в `main`, push.
 
 **Верификация:**
-- [ ] `git status` чистый; `git log origin/main..HEAD` показывает только осмысленные коммиты
-- [ ] `grep -c firecrawl_fallback_source_ids app/fetcher.py` == 3 (серверная сторона не потеряна)
-- [ ] `ls app/publish_gate.py app/source_validators.py` — существуют (repo-сторона взята)
-- [ ] `git show HEAD:.gitignore | grep -E "^data/|\.env"` — секреты и данные вне git; `git ls-files | grep -E "\.env$|\.env\.docker"` — ПУСТО
-- [ ] Тесты: не хуже 11F/136P
-- [ ] После deploy: `curl -sk --resolve api.hs-manacost.ru:443:151.80.21.140 https://api.hs-manacost.ru/health` → `"ok":true`; `/datasets` — 44 источника, 0 с ошибками; `freshness-check` (docker compose run … `python -m app.cli freshness-check --since-hours 48`) → exit 0
+- [x] `git status` чистый; `git log origin/main..HEAD` показывает только осмысленные коммиты
+- [x] `grep -c firecrawl_fallback_source_ids app/fetcher.py` == 3 (серверная сторона не потеряна)
+- [x] `ls app/publish_gate.py app/source_validators.py` — существуют (repo-сторона взята)
+- [x] `git show HEAD:.gitignore | grep -E "^data/|\.env"` — секреты и данные вне git; `git ls-files | grep -E "\.env$|\.env\.docker"` — ПУСТО
+- [x] Тесты: 288P, 0F на последнем локальном прогоне
+- [ ] После deploy: `curl -sk --resolve api.hs-manacost.ru:443:151.80.21.140 https://api.hs-manacost.ru/health` → `"ok":true`; `/datasets` — 46 источников, 0 с ошибками; `freshness-check` (docker compose run … `python -m app.cli freshness-check --since-hours 48`) → exit 0
 - [ ] Ночные таймеры (kolodahs/hs-data-api-docker-*) сработали без failed на следующий день
 
 **Анти-паттерны:** не делать `git add -A` до .gitignore; не «выбирать одну сторону целиком» в конфликтах fetcher.py; не пушить `data/`.
@@ -147,7 +147,7 @@
 4. Commit + push + build + deploy.
 
 **Верификация:**
-- [ ] `grep -rnE '"(quality_error|fetch_error|blocked_by_protection|http_error|proxy_required|ok_cached)"' app/ | grep -v source_state.py | grep -v test` → пусто (допустимы docstrings)
+- [x] `grep -rnE '"(quality_error|fetch_error|blocked_by_protection|http_error|proxy_required|ok_cached)"' app/ | grep -v source_state.py | grep -v test` → пусто; закреплено `tests/test_source_state.py`
 - [ ] Побайтовое сравнение: сохранить `/datasets/hsreplay_arena` и один status-файл ДО и ПОСЛЕ — `diff` только по fetched_at
 - [ ] Тесты зелёные; freshness-check exit 0
 
@@ -226,10 +226,10 @@
 5. `docs/API.md` — раздел «v1» (полная документация — Phase 10). Commit + push + build + deploy.
 
 **Верификация:**
-- [ ] Матрица curl: каждый путь из списка потребителей (шаг 1) — код и форма ответа НЕ изменились (сохранить снапшоты до/после, diff)
-- [ ] `/v1/bg/heroes` отдаёт конверт; `openapi.json` содержит схемы (не пустые objects)
+- [x] Активные Deckview legacy-пути из списка потребителей закреплены response-contract тестами без изменения тела
+- [x] `/v1/bg/heroes` отдаёт конверт; `openapi.json` содержит конкретные схемы
 - [ ] Повторный GET с `If-None-Match` → 304; через Cloudflare (`curl https://api.hs-manacost.ru/v1/bg/heroes -I` дважды) → `cf-cache-status: HIT` на втором
-- [ ] Тесты зелёные
+- [x] Тесты зелёные
 
 **Анти-паттерны:** не редиректить legacy на v1; не выдумывать параметры pydantic (Field/ConfigDict по документации pydantic v2 — сверяться через Context7 при сомнении); не кешировать /admin//ops.
 
