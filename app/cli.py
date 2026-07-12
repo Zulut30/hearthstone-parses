@@ -231,7 +231,6 @@ def main(argv: list[str] | None = None) -> int:
             structured = data.get("structured") or data.get("hsreplay_extracted") or {}
             error_type = None
             try:
-                validate_ok, reason = validate_parsed_data(source, data) if data else (False, "missing dataset")
                 metrics = quality_metrics(source, data) if data else {}
                 contract = get_contract(source.id)
                 contract_report = (
@@ -239,6 +238,20 @@ def main(argv: list[str] | None = None) -> int:
                     if contract is not None and structured
                     else None
                 )
+                if source.kind == "pipeline":
+                    state = status.get("state", SourceState.NEVER_FETCHED)
+                    validate_ok = state == SourceState.OK and bool(structured)
+                    reason = (
+                        "ok"
+                        if validate_ok
+                        else f"pipeline status/structured data invalid (state={state})"
+                    )
+                else:
+                    validate_ok, reason = (
+                        validate_parsed_data(source, data)
+                        if data
+                        else (False, "missing dataset")
+                    )
             except Exception as exc:
                 validate_ok = False
                 reason = f"quality-check raised {type(exc).__name__}: {exc}"

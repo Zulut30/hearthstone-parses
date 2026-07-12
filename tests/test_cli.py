@@ -95,6 +95,33 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
 
+    def test_quality_check_uses_pipeline_status_and_structured_payload(self) -> None:
+        source = Source(
+            "pipeline_source",
+            "https://example.test",
+            "hsreplay",
+            "meta",
+            kind="pipeline",
+        )
+        with patch("app.cli.SOURCE_BY_ID", {"pipeline_source": source}), patch(
+            "app.storage.load_status",
+            return_value={"state": "ok", "backend": "pipeline"},
+        ), patch(
+            "app.storage.load_dataset",
+            return_value={
+                "data": {
+                    "structured": {
+                        "type": "hsreplay_archetype_database",
+                        "archetypes": [],
+                    }
+                }
+            },
+        ), patch("app.scrapers.quality.validate_parsed_data") as generic_validate:
+            exit_code = cli.main(["quality-check"])
+
+        self.assertEqual(exit_code, 0)
+        generic_validate.assert_not_called()
+
     def test_rebuild_index_uses_refresh_lock(self) -> None:
         with patch("app.fetcher.RefreshLock") as refresh_lock, patch(
             "app.firecrawl_map.build_hsreplay_index",
