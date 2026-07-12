@@ -162,7 +162,17 @@ def cards_by_id(locale: str = "enUS") -> dict[str, dict[str, Any]]:
 
 
 def card_from_id(card_id: str, *, locale: str = "ruRU") -> dict[str, Any]:
-    localized = cards_by_id(locale).get(card_id)
+    try:
+        localized = cards_by_id(locale).get(card_id)
+    except Exception:
+        if locale == "enUS":
+            raise
+        logger.warning(
+            "Localized HearthstoneJSON index unavailable for %s; falling back to enUS",
+            locale,
+            exc_info=True,
+        )
+        localized = None
     card = localized or cards_by_id("enUS").get(card_id)
     return card_label(card)
 

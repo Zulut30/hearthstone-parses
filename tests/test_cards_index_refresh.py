@@ -80,3 +80,18 @@ def test_card_from_id_uses_locale_id_instead_of_translated_name_lookup(
     localized = cards_index.card_from_id("CARD_1", locale="ruRU")
 
     assert localized["name"] == "Тайное испытание"
+
+
+def test_card_from_id_falls_back_to_english_when_locale_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    english = [{"id": "CARD_1", "dbfId": 1, "name": "Arcane Test"}]
+    monkeypatch.setattr(
+        cards_index.httpx,
+        "get",
+        Mock(side_effect=[RuntimeError("ru endpoint unavailable"), _response(english)]),
+    )
+
+    fallback = cards_index.card_from_id("CARD_1", locale="ruRU")
+
+    assert fallback["name"] == "Arcane Test"
