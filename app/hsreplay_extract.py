@@ -10,7 +10,7 @@ from .structured import (
     TRINKET_TIER_MARKERS,
     enrich_trinket_variant_fields,
     normalize_trinket_tribe,
-    trinket_variant_key,
+    trinket_identity_key,
 )
 
 CARD_HREF_RE = re.compile(r"/cards/(\d+)")
@@ -179,6 +179,32 @@ def _row_stats_from_element(el: Tag | None) -> dict[str, str]:
     return stats
 
 
+def _fallback_trinket_entry(
+    *,
+    name: str,
+    href: str,
+    row: Tag | None,
+) -> dict[str, Any]:
+    dbf_match = re.search(r"/battlegrounds/trinkets/(\d+)", href)
+    dbf_id = int(dbf_match.group(1)) if dbf_match else None
+    meta = card_label(cards_by_dbfid().get(dbf_id)) if dbf_id else {}
+    card_id = str(meta.get("id") or dbf_id or "")
+    canonical_name = meta.get("name")
+    if canonical_name in (None, "Unknown"):
+        canonical_name = name
+    return enrich_trinket_variant_fields(
+        {
+            "name": str(canonical_name)[:80],
+            "url": href,
+            "dbfId": dbf_id,
+            "id": card_id or None,
+            "trinket_id": card_id or None,
+            "description": "",
+            **_row_stats_from_element(row),
+        }
+    )
+
+
 def extract_bg_heroes(soup: BeautifulSoup) -> list[dict[str, Any]]:
     by_dbf = cards_by_dbfid()
     heroes: dict[int, dict[str, Any]] = {}
@@ -279,21 +305,28 @@ def extract_bg_comps(soup: BeautifulSoup) -> list[dict[str, Any]]:
     return comps
 
 
-def extract_bg_trinkets(soup: BeautifulSoup) -> list[dict[str, Any]]:
+def _extract_bg_trinkets_with_diagnostics(
+    soup: BeautifulSoup,
+) -> tuple[list[dict[str, Any]], str, int]:
     trinkets: list[dict[str, Any]] = []
     seen: set[str] = set()
+    parser_level = "primary"
+    dropped_rows = 0
     for img in soup.find_all("img", alt=re.compile(r"^BG\d+_MagicItem_")):
         card_id = _clean(str(img.get("alt") or ""))
         row = img.find_parent(lambda t: t.name == "div" and t.get("tabindex") == "0")
         if row is None:
+            dropped_rows += 1
             continue
         lines = [_clean(x) for x in row.get_text("\n").splitlines() if _clean(x)]
         if len(lines) < 4:
+            dropped_rows += 1
             continue
         cost = int(lines[0]) if lines[0].isdigit() else None
         name_idx = 1 if cost is not None else 0
         name = lines[name_idx] if name_idx < len(lines) else ""
         if len(name) < 4 or not name[0].isalnum():
+            dropped_rows += 1
             continue
         tribe = tribe_ru = None
         desc_idx = name_idx + 1
@@ -333,13 +366,14 @@ def extract_bg_trinkets(soup: BeautifulSoup) -> list[dict[str, Any]]:
         if avg_placement:
             entry["avg_placement"] = avg_placement
         entry = enrich_trinket_variant_fields(entry)
-        key = trinket_variant_key(entry)
+        key = trinket_identity_key(entry)
         if key in seen:
+            dropped_rows += 1
             continue
         seen.add(key)
         trinkets.append(entry)
     if len(trinkets) >= 20:
-        return trinkets
+        return trinkets, parser_level, dropped_rows
 
     for tr in soup.find_all("tr"):
         link = tr.find("a", href=re.compile(r"/battlegrounds/trinkets/\d+"))
@@ -347,29 +381,41 @@ def extract_bg_trinkets(soup: BeautifulSoup) -> list[dict[str, Any]]:
             continue
         name = _clean(link.get_text())
         if len(name) < 4 or not name[0].isalnum():
+            dropped_rows += 1
             continue
-        entry = enrich_trinket_variant_fields({"name": name[:80], "url": link.get("href", ""), **_row_stats_from_element(tr)})
-        key = trinket_variant_key(entry)
+        href = str(link.get("href") or "")
+        entry = _fallback_trinket_entry(name=name, href=href, row=tr)
+        key = trinket_identity_key(entry)
         if key in seen:
+            dropped_rows += 1
             continue
         seen.add(key)
         trinkets.append(entry)
+        parser_level = "fallback_tr"
     if len(trinkets) >= 5:
-        return trinkets
+        return trinkets, parser_level, dropped_rows
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href", "")
         if "/battlegrounds/trinkets/" not in href or href.count("/") < 4:
             continue
         name = _clean(anchor.get_text())
         if len(name) < 4 or not name[0].isalnum():
+            dropped_rows += 1
             continue
         row = anchor.find_parent("tr") or anchor.find_parent("li")
-        entry = enrich_trinket_variant_fields({"name": name[:80], "url": href, **_row_stats_from_element(row)})
-        key = trinket_variant_key(entry)
+        entry = _fallback_trinket_entry(name=name, href=href, row=row)
+        key = trinket_identity_key(entry)
         if key in seen:
+            dropped_rows += 1
             continue
         seen.add(key)
         trinkets.append(entry)
+        parser_level = "fallback_anchor"
+    return trinkets, parser_level, dropped_rows
+
+
+def extract_bg_trinkets(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    trinkets, _parser_level, _dropped_rows = _extract_bg_trinkets_with_diagnostics(soup)
     return trinkets
 
 
@@ -837,7 +883,7 @@ def extract_for_source(
                 heroes = parsed_lines
         return {"type": "bg_heroes", "heroes": heroes, "blocked": len(heroes) < 30}
     if source_id in ("hsreplay_battlegrounds_trinkets_lesser", "hsreplay_battlegrounds_trinkets_greater"):
-        trinkets = extract_bg_trinkets(soup)
+        trinkets, parser_level, dropped_rows = _extract_bg_trinkets_with_diagnostics(soup)
         from .structured import parse_bg_trinkets
 
         line_sets = []
@@ -848,7 +894,14 @@ def extract_for_source(
             parsed_lines = parse_bg_trinkets(lines)
             if len(parsed_lines) > len(trinkets):
                 trinkets = parsed_lines
-        return {"type": "bg_trinkets", "trinkets": trinkets}
+                parser_level = "fallback_lines"
+                dropped_rows = 0
+        return {
+            "type": "bg_trinkets",
+            "trinkets": trinkets,
+            "parser_level": parser_level,
+            "dropped_rows": dropped_rows,
+        }
     if source_id == "hsreplay_arena_winning_decks":
         lines = [_clean(x) for x in soup.get_text("\n").splitlines() if _clean(x)]
         decks = extract_arena_winning_decks(soup, html)

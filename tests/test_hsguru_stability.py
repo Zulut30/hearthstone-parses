@@ -5,6 +5,8 @@ import unittest
 from unittest.mock import patch
 
 from app.scrapers import rotator
+from app.publish_gate import PublishGateResult
+from app.scrapers.base import FetchResult
 from app.sources import SOURCE_BY_ID
 
 
@@ -78,6 +80,37 @@ class HSGuruStabilityTest(unittest.TestCase):
                 asyncio.run(rotator.fetch_html(source))
 
         burn.assert_not_called()
+
+    def test_rotator_preview_uses_publish_gate_with_backend_identity(self) -> None:
+        source = SOURCE_BY_ID["hsguru_meta_standard_legend"]
+
+        async def backend(_source):
+            return FetchResult(
+                html="hsguru.com".ljust(25_000, "x"),
+                final_url=source.url,
+                backend="test",
+            )
+
+        with patch("app.scrapers.rotator.fetch_max_retries", return_value=1), patch(
+            "app.scrapers.rotator.source_can_use_flaresolverr_without_proxy",
+            return_value=True,
+        ), patch("app.scrapers.rotator.log_action"), patch(
+            "app.scrapers.rotator._ordered_backends",
+            return_value=[("firecrawl", backend, lambda: True)],
+        ), patch(
+            "app.scrapers.rotator.validate_candidate_for_publish",
+            return_value=PublishGateResult(False, "backend policy rejected", {"backend": "firecrawl"}),
+        ) as gate:
+            with self.assertRaises(RuntimeError):
+                asyncio.run(
+                    rotator.fetch_html(
+                        source,
+                        parse_preview=lambda _html: {"title": "HSGuru", "structured": {}},
+                    )
+                )
+
+        gate.assert_called_once()
+        self.assertEqual(gate.call_args.kwargs["backend"], "firecrawl")
 
 
 if __name__ == "__main__":

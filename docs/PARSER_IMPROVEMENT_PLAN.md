@@ -1,6 +1,6 @@
 # План улучшения парсера Hearthstone Parses
 
-Обновлено: 2026-06-02 (статус реализации).
+Обновлено: 2026-07-12 (статус реализации). Детальный stabilization/refactor plan и Definition of Done: [`plans/2026-07-01-parser-api-refactor-plan.md`](../plans/2026-07-01-parser-api-refactor-plan.md).
 
 ## Статус фаз
 
@@ -17,6 +17,10 @@
 | D2 Auth `/ops/*` | **Сделано** |
 | D3 Loki/Vector | **Открыто** (опционально) |
 | D4 Runbook | **Сделано** (`docs/PROXY_AND_RELIABILITY.md`) |
+| Phase 6 Contracts/publish gate | **Сделано** (единая валидация и regression guard) |
+| Phase 7 Parser resilience | **Сделано** (fallback diagnostics, normalizer, 6 snapshot fixtures + mutations) |
+| Phase 8 API v1 | **Сделано в коде** (`/v1/*`, typed envelope, ETag/304; production deploy ожидает merge) |
+| Phase 9 pydantic-settings | **Отложено** (опционально; 69 env accessor’ов, отдельный migration PR) |
 
 ## Деплой
 
@@ -32,14 +36,14 @@ sudo ./scripts/merge-env-example.sh
 
 | Цель | Метрика |
 |------|---------|
-| Стабильный refresh | `states.ok >= 31` после 3 cron |
+| Стабильный refresh | 46 зарегистрированных источников, нет новых quality/freshness failures после cron |
 | Прозрачность | `/ui/logs` + `/ops/summary` (с API key) |
 | HSReplay JSON | каналы `direct,flaresolverr,curl_cffi,jina` |
 
 ## Команды
 
 ```bash
-/opt/hs-data-api/venv/bin/python -m app.cli preflight --strict
+/srv/hs-data-api/venv/bin/python -m app.cli preflight --strict
 curl -s -H "X-API-Key: $HS_API_KEY" http://127.0.0.1:8000/ops/summary | jq '.hsreplay_auth,.stale_datasets'
 systemctl list-timers 'hs-data-api-*'
 ```

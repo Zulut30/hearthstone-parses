@@ -14,7 +14,7 @@ flowchart TB
         Route{Тип источника}
         APIpath[API-first: Firestone / HSReplay JSON / MetaStats]
         Browser[Browser path: rotator + patchright / FlareSolverr]
-        Quality[app/scrapers/quality.py]
+        Quality[publish_gate + contracts + semantic validators]
         Store[app/storage.py]
     end
 
@@ -44,7 +44,7 @@ flowchart TB
 | Jitter между **браузерными** источниками | 8с × random(0.75–1.25) (`HS_REFRESH_DELAY_BROWSER_ONLY=true`) | `fetcher.py` |
 | Параллель API-тиров | light_api до 5, medium_api до 2 + stagger 0.3–1.0с | `fetcher.py`, `source_tiers.py` |
 | User-Agent | 6 вариантов Chrome, хэш от `source.id` | `browser_pool.py` |
-| Quality gate | Минимум карт/метрик/таблиц перед сохранением | `quality.py` |
+| Publish gate | Backend policy, contract, semantic quality и regression guard перед сохранением | `publish_gate.py`, `source_contracts.py`, `source_validators.py` |
 | HSReplay relogin | Авто-перелогин при истечении Premium-сессии | `fetcher.py`, `hsreplay_auth.py` |
 | Telegram | Алерт при `fetch_error`, `quality_error`, CF block | `fetcher.py` |
 | FlareSolverr | Отдельная browser-сессия **на каждый источник** (по умолчанию) | `fetcher.py` |
@@ -103,7 +103,7 @@ flowchart TB
 
 В логах: `refresh phase=light_api duration=... ok=... fail=...`.
 
-## Надёжность по типам источников (33 шт.)
+## Надёжность по типам источников (46: 44 scrape + 2 pipeline)
 
 | Группа | Источники | Backend | Стабильность |
 |--------|-----------|---------|--------------|
@@ -126,7 +126,7 @@ flowchart TB
 
 ```bash
 # Эксперимент с CloakBrowser на одном источнике:
-/opt/hs-data-api/venv/bin/python -m app.cli refresh --lab-backends --source hsguru_meta_standard_legend
+/srv/hs-data-api/venv/bin/python -m app.cli refresh --lab-backends --source hsguru_meta_standard_legend
 ```
 
 ## HSReplay каналы
@@ -163,7 +163,7 @@ HS_STALE_HOURS=12
 Очистка устаревших status-файлов без источника в `SOURCES`:
 
 ```bash
-/opt/hs-data-api/venv/bin/python /opt/hs-data-api/scripts/cleanup-orphan-statuses.py
+/srv/hs-data-api/venv/bin/python /srv/hs-data-api/scripts/cleanup-orphan-statuses.py
 ```
 
 При частых 429/403 на одном IP: сначала увеличьте delay до 12–15с; затем попробуйте `HS_IPROYAL_ROTATE_PER_FETCH=true` (если IPRoyal не отвечает 407).
@@ -205,7 +205,7 @@ HS_STALE_HOURS=12
 3. Точечный refresh (последовательно, без шторма):
 
 ```bash
-HS_REFRESH_PARALLEL_LIGHT=1 /opt/hs-data-api/venv/bin/python -m app.cli refresh \
+HS_REFRESH_PARALLEL_LIGHT=1 /srv/hs-data-api/venv/bin/python -m app.cli refresh \
   --source SOURCE_ID_1 --source SOURCE_ID_2
 ```
 
@@ -217,7 +217,7 @@ HS_REFRESH_PARALLEL_LIGHT=1 /opt/hs-data-api/venv/bin/python -m app.cli refresh 
 
 ### FlareSolverr down
 
-Падают 11× `hsguru_*` и часть HSReplay HTML. `docker compose -f /opt/hs-data-api/docker-compose.yml restart flaresolverr`.
+Падают 11× `hsguru_*` и часть HSReplay HTML. `docker compose -f /srv/hs-data-api/docker-compose.yml restart flaresolverr`.
 
 ### Proxy 407
 

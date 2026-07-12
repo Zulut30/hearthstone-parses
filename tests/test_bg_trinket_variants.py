@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from bs4 import BeautifulSoup
 
-from app.hsreplay_extract import extract_bg_trinkets
+from app.hsreplay_extract import extract_bg_trinkets, extract_for_source
 from app.structured import parse_bg_trinkets
 
 
@@ -75,3 +77,43 @@ def test_extract_bg_trinkets_reads_hsreplay_variant_badges() -> None:
     assert {row["tribe"] for row in trinkets} == {"Murloc", "Undead"}
     assert {row["trinket_id"] for row in trinkets} == {"BG30_MagicItem_426"}
     assert all(row["variant_key"] for row in trinkets)
+
+
+def test_trinket_extractor_reports_fallback_level_and_dropped_rows() -> None:
+    html = """
+    <img alt="BG30_MagicItem_broken">
+    <a href="/battlegrounds/trinkets/123/valid-trinket">Valid Trinket</a>
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    structured = extract_for_source(
+        "hsreplay_battlegrounds_trinkets_lesser",
+        soup,
+        html,
+    )
+
+    assert structured["parser_level"] == "fallback_anchor"
+    assert structured["dropped_rows"] == 1
+    assert [row["name"] for row in structured["trinkets"]] == ["Valid Trinket"]
+
+
+def test_fallback_trinket_uses_canonical_identity_and_deduplicates_primary() -> None:
+    html = """
+    <div tabindex="0">
+      <img alt="BG_TEST_001"><div>2</div><div>Test Trinket</div>
+      <div>Stable description.</div><div>1.0%</div><div>4.0</div>
+    </div>
+    <a href="/battlegrounds/trinkets/123/test-trinket">Test Trinket</a>
+    """
+    with patch(
+        "app.hsreplay_extract.cards_by_dbfid",
+        return_value={123: {"dbfId": 123, "id": "BG_TEST_001", "name": "Test Trinket"}},
+    ):
+        structured = extract_for_source(
+            "hsreplay_battlegrounds_trinkets_lesser",
+            BeautifulSoup(html, "lxml"),
+            html,
+        )
+
+    assert len(structured["trinkets"]) == 1
+    assert structured["trinkets"][0]["trinket_id"] == "BG_TEST_001"

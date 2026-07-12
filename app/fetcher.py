@@ -1124,6 +1124,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                     content_length=content_length,
                     backend=backend,
                     used_residential_proxy=_source_uses_residential_proxy(source, backend),
+                    quality=qmetrics,
                 )
                 status = _save_failure_status(source, status)
                 log_action(

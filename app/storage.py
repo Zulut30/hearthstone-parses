@@ -8,11 +8,16 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .config import DEFAULT_DATA_DIR, data_dir
+from .config import (
+    DEFAULT_DATA_DIR,
+    data_dir,
+    json_backup_keep_per_file,
+    pytest_current_test,
+    python_environment,
+)
 
 _dataset_write_lock = threading.Lock()
 _production_data_dir = Path(DEFAULT_DATA_DIR).resolve()
-_BACKUP_KEEP_PER_FILE = int(os.environ.get("HS_JSON_BACKUP_KEEP_PER_FILE", "5"))
 
 
 def root_dir() -> Path:
@@ -33,9 +38,9 @@ def status_path(source_id: str) -> Path:
 
 
 def _is_test_process() -> bool:
-    if os.environ.get("PYTEST_CURRENT_TEST"):
+    if pytest_current_test():
         return True
-    if os.environ.get("PYTHON_ENV", "").strip().lower() == "test":
+    if python_environment() == "test":
         return True
     argv = " ".join(sys.argv).lower()
     return "pytest" in argv or "unittest" in argv
@@ -57,7 +62,8 @@ def _assert_not_test_prod_write(path: Path) -> None:
 
 
 def _prune_backups(backup_path: Path) -> None:
-    if _BACKUP_KEEP_PER_FILE <= 0:
+    keep_per_file = json_backup_keep_per_file()
+    if keep_per_file <= 0:
         return
     prefix = backup_path.name.split(".", 1)[0]
     siblings = sorted(
@@ -65,7 +71,7 @@ def _prune_backups(backup_path: Path) -> None:
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
-    for old in siblings[_BACKUP_KEEP_PER_FILE:]:
+    for old in siblings[keep_per_file:]:
         old.unlink(missing_ok=True)
 
 

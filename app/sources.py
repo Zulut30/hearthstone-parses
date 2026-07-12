@@ -348,11 +348,11 @@ SOURCES: tuple[Source, ...] = (
         site="hsreplay",
         category="battlegrounds",
         description=(
-            "BG hero detail cache built by the weekly systemd timer "
-            "hs-data-api-docker-refresh-bg-hero-details.timer (Mon 04:35 Europe/Warsaw); "
-            "stale_hours = 168h period + 24h slack."
+            "BG hero detail cache built twice weekly by the systemd timer "
+            "hs-data-api-docker-refresh-bg-hero-details.timer (Mon,Thu 04:35 Europe/Warsaw); "
+            "stale_hours = 96h maximum gap + 24h slack."
         ),
-        stale_hours=192,
+        stale_hours=120,
         kind="pipeline",
     ),
     Source(

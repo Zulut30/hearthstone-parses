@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 import unittest
 
 from app.refresh_log import _level_for
@@ -41,6 +43,21 @@ class SourceStateWireFormatTest(unittest.TestCase):
         for member in SourceState:
             self.assertIs(SourceState(member.value), member)
             self.assertEqual(json.dumps(member), json.dumps(member.value))
+
+    def test_failure_state_literals_are_centralized(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "app"
+        pattern = re.compile(
+            r'"(?:quality_error|fetch_error|blocked_by_protection|http_error|proxy_required|ok_cached)"'
+        )
+        offenders = []
+        for path in root.rglob("*.py"):
+            if path.name == "source_state.py":
+                continue
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.search(line):
+                    offenders.append(f"{path.relative_to(root.parent)}:{line_number}")
+
+        self.assertEqual(offenders, [])
 
 
 class LevelForMappingUnchangedTest(unittest.TestCase):

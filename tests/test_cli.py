@@ -95,6 +95,18 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
 
+    def test_rebuild_index_uses_refresh_lock(self) -> None:
+        with patch("app.fetcher.RefreshLock") as refresh_lock, patch(
+            "app.firecrawl_map.build_hsreplay_index",
+            return_value={"ok": True},
+        ) as build:
+            exit_code = cli.main(["rebuild-hsreplay-index"])
+
+        self.assertEqual(exit_code, 0)
+        refresh_lock.assert_called_once_with()
+        refresh_lock.return_value.__enter__.assert_called_once_with()
+        build.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

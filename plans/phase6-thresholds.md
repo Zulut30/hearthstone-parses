@@ -1,0 +1,47 @@
+# Phase 6 validation threshold inventory
+
+Authoritative inventory for moving per-source/per-type rules out of
+`app/scrapers/quality.py`. A row is complete only when the old branch is removed
+and the replacement has a focused regression test.
+
+| Existing rule | Scope | New home | Status |
+| --- | --- | --- | --- |
+| HTML ≥ 2,000 bytes | default fetched page | `SourceContract.min_html_bytes` | transferred + tested |
+| HSGuru meta/matchups HTML ≥ 25,000 bytes | HSGuru meta/matchups | `SourceContract.min_html_bytes` | transferred + tested |
+| HSGuru streamer HTML ≥ 8,000 bytes | HSGuru streamer decks | `SourceContract.min_html_bytes` | transferred + tested |
+| meta rows ≥ configured 5 | HSGuru structured meta | contract + type validator | transferred + tested; raw table fallback retained |
+| streamer deck codes ≥2 or rows ≥3 | HSGuru structured streamer decks | contract + type validator | transferred + tested; raw table fallback retained |
+| matchup rows ≥3 plus winrate content | HSGuru structured matchups | contract + type validator | transferred + tested; raw text fallback retained |
+| decks ≥5 | MetaStats decks | `SourceContract` (current minimum 40) | old weaker branch removed; tested by contract suite |
+| matchups ≥ configured 10 | MetaStats matchups | `SourceContract` (current minimum 50) | old weaker branch removed; tested by contract suite |
+| decks ≥5 | Hearthstone Decks | `SourceContract` (current minimum 40) | old weaker branch removed; tested by contract suite |
+| classes ≥8, tier brackets ≥3, tier rows ≥20 | Vicious Live | `source_validators` + contract | transferred + tested; old branch removed |
+| radars ≥5 | Vicious radars | `SourceContract` | old branch removed; tested |
+| groups ≥10 and at least one `key_card` | Arena legendary groups | contract + type validator | transferred + tested; old branch removed |
+| comps ≥3 and ≥max(3, half) with cards | BG comps | type validator | transferred + tested; old branch removed |
+| cards ≥50 and ≥40 with placement stats | BG card stats | type validator | transferred + tested; old branch removed |
+| trinkets ≥8 and ≥max(6, half) valid | BG trinkets | type validator | transferred + tested; old branch removed |
+| decks ≥1 and at least one `final_deck` | Arena winning decks | contract + type validator | transferred + tested; old branch removed |
+| classes ≥8 | Arena class matrix | contract + type validator | transferred + tested; old branch removed |
+| classes ≥10 and ≥10 with stats | Arena class pages | contract + type validator | transferred + tested; old branch removed |
+| heroes ≥30, names ≥20, stats ≥20 | BG heroes | `source_validators` + contract | transferred + tested; old branch removed |
+| minions ≥50 and ≥40 with stats | BG minions | contract + type validator | transferred + tested; old branch removed |
+| compositions ≥5 and ≥5 with stats | BG compositions | contract + type validator | transferred + tested; old branch removed |
+| cards ≥ dynamic source threshold and tier labels present | Arena card tiers | contract + source-aware validator | transferred + tested; old branch removed |
+| classes ≥5, cards ≥300, tier ids ≥200 | HearthArena tier list | contract + type validator | transferred + tested; old branch removed |
+| cards ≥30, metrics ≥20, blocked payload rejected | card stats | contract + type validator | transferred + tested; old branch removed |
+| classes ≥8, archetypes ≥20, metrics ≥20 | HSReplay meta archetypes | contract + type validator | transferred + tested; old branch removed |
+| premium-login/userdata/content markers | HSReplay raw-page fallback | page/auth structural checks | remains in `quality.py` by design |
+| default text lines ≥10 | unstructured fallback | page structural check | remains in `quality.py` by design |
+
+## Completion evidence
+
+- `app/scrapers/quality.py` contains no per-`structured.type` dispatch; it only
+  coordinates contract/semantic validation and raw-page structural fallbacks.
+- Browser rotators call `validate_candidate_for_publish`, not
+  `validate_parsed_data` directly.
+- Live parity audit on 2026-07-12 checked all 46 cached datasets: 44 usable
+  datasets passed both layers; only the already identified Vicious radar/live
+  datasets failed semantic validation.
+- `tests/test_phase6_validation_consolidation.py` prevents threshold-inventory
+  regressions and validation-path bypasses.

@@ -4,11 +4,13 @@ import os
 
 from ..config import (
     cloakbrowser_fingerprint_seed,
+    cloakbrowser_display,
     cloakbrowser_geoip,
     cloakbrowser_headless,
     cloakbrowser_hsguru_headless,
     cloakbrowser_humanize,
     hsreplay_storage_path,
+    runtime_display,
 )
 from ..sources import Source
 from .base import FetchResult
@@ -18,10 +20,9 @@ from .proxy import assert_proxy_configured, residential_proxy_url
 
 
 def _ensure_display_for_headed() -> None:
-    if os.environ.get("DISPLAY"):
+    if runtime_display():
         return
-    display = os.environ.get("HS_CLOAKBROWSER_DISPLAY", ":99")
-    os.environ["DISPLAY"] = display
+    os.environ["DISPLAY"] = cloakbrowser_display()
 
 
 def _headless_for(source: Source) -> bool:

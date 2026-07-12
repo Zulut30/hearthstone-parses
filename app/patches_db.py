@@ -14,6 +14,11 @@ PATCH_COLUMNS = """
     wiki_rank,
     wiki_title,
     wiki_url,
+    official_title,
+    official_url,
+    official_published_at,
+    official_modified_at,
+    official_summary,
     hs_manacost_version,
     title,
     slug,
@@ -40,6 +45,11 @@ def _create_table(conn: sqlite3.Connection) -> None:
             wiki_rank INTEGER,
             wiki_title TEXT NOT NULL,
             wiki_url TEXT NOT NULL,
+            official_title TEXT,
+            official_url TEXT,
+            official_published_at TEXT,
+            official_modified_at TEXT,
+            official_summary TEXT,
             hs_manacost_version TEXT,
             title TEXT,
             slug TEXT,
@@ -95,6 +105,7 @@ def _needs_rebuild(conn: sqlite3.Connection) -> bool:
         "match_state",
         "hs_manacost_version",
         "source_url",
+        "official_url",
     }
     if not required.issubset(columns):
         return True
@@ -117,6 +128,11 @@ def _normalize_patch_payload(patch: dict[str, Any]) -> dict[str, Any]:
         "wiki_rank": patch.get("wiki_rank"),
         "wiki_title": patch.get("wiki_title") or f"Patch {version}",
         "wiki_url": wiki_url,
+        "official_title": patch.get("official_title"),
+        "official_url": patch.get("official_url"),
+        "official_published_at": patch.get("official_published_at"),
+        "official_modified_at": patch.get("official_modified_at"),
+        "official_summary": patch.get("official_summary"),
         "hs_manacost_version": patch.get("hs_manacost_version"),
         "title": patch.get("title"),
         "slug": patch.get("slug"),
@@ -154,12 +170,17 @@ def _insert_patch(conn: sqlite3.Connection, patch: dict[str, Any]) -> None:
     conn.execute(
         f"""
         INSERT INTO hearthstone_patches ({PATCH_COLUMNS})
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(version) DO UPDATE SET
             display_version = excluded.display_version,
             wiki_rank = excluded.wiki_rank,
             wiki_title = excluded.wiki_title,
             wiki_url = excluded.wiki_url,
+            official_title = excluded.official_title,
+            official_url = excluded.official_url,
+            official_published_at = excluded.official_published_at,
+            official_modified_at = excluded.official_modified_at,
+            official_summary = excluded.official_summary,
             hs_manacost_version = excluded.hs_manacost_version,
             title = excluded.title,
             slug = excluded.slug,
@@ -181,6 +202,11 @@ def _insert_patch(conn: sqlite3.Connection, patch: dict[str, Any]) -> None:
             normalized["wiki_rank"],
             normalized["wiki_title"],
             normalized["wiki_url"],
+            normalized["official_title"],
+            normalized["official_url"],
+            normalized["official_published_at"],
+            normalized["official_modified_at"],
+            normalized["official_summary"],
             normalized["hs_manacost_version"],
             normalized["title"],
             normalized["slug"],
@@ -212,6 +238,11 @@ def _rebuild_table(conn: sqlite3.Connection) -> None:
             "wiki_rank": row.get("wiki_rank") if "wiki_rank" in columns else None,
             "wiki_title": row.get("wiki_title") if "wiki_title" in columns else f"Patch {version}",
             "wiki_url": row.get("wiki_url") or f"https://hearthstone.wiki.gg/wiki/Patch_{version}",
+            "official_title": row.get("official_title"),
+            "official_url": row.get("official_url"),
+            "official_published_at": row.get("official_published_at"),
+            "official_modified_at": row.get("official_modified_at"),
+            "official_summary": row.get("official_summary"),
             "hs_manacost_version": row.get("hs_manacost_version"),
             "title": row.get("title"),
             "slug": row.get("slug"),
@@ -278,6 +309,15 @@ def delete_patches_not_in(versions: set[str]) -> int:
                 tuple(sorted(versions)),
             )
         return int(cursor.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def count_patches() -> int:
+    init_patches_db()
+    conn = get_db_connection()
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM hearthstone_patches").fetchone()[0])
     finally:
         conn.close()
 

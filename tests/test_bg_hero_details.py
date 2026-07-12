@@ -1,15 +1,40 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
-from app.hsreplay_bg_hero_details import _normalize_hero_power, _normalize_tavern_up, _tavern_recommendations
+from app.hsreplay_bg_hero_details import (
+    _normalize_hero_power,
+    _normalize_tavern_up,
+    _tavern_recommendations,
+    refresh_bg_hero_details,
+)
 from app.main import app
 
 
 class BattlegroundsHeroDetailsTest(unittest.TestCase):
+    @staticmethod
+    def _hero_index(count: int, *, mode: str) -> dict:
+        return {
+            "mode": mode,
+            "heroes": [
+                {
+                    "hero": f"Hero {idx}",
+                    "dbfId": 50_000 + idx,
+                    "tier": "A",
+                    "pick_rate_value": 1.0,
+                    "avg_placement": 4.0,
+                    "adjusted_avg_placement": 4.0,
+                    "placement_distribution": ["12.50%"] * 8,
+                    "key_minions_top3": [],
+                }
+                for idx in range(count)
+            ],
+        }
+
     def test_tavern_up_recommendations_choose_most_common_tier_per_turn(self) -> None:
         payload = {
             "series": {
@@ -126,6 +151,62 @@ class BattlegroundsHeroDetailsTest(unittest.TestCase):
         self.assertEqual(duos.json()["heroes"][0]["hero"], "Duos Hero")
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["hero"]["dbfId"], 57946)
+
+    def test_partial_refresh_preserves_last_known_good_snapshot(self) -> None:
+        solo = self._hero_index(40, mode="solo")
+        duos = self._hero_index(30, mode="duos")
+
+        async def detail(dbf_id: int, **_kwargs: object) -> dict | None:
+            if dbf_id != 50_000:
+                raise RuntimeError("upstream detail unavailable")
+            return {"hero": {"dbfId": dbf_id}, "best_composition": None}
+
+        with (
+            patch("app.hsreplay_bg_hero_details._composition_names", new=AsyncMock(return_value={})),
+            patch(
+                "app.hsreplay_bg_hero_details.fetch_hero_index",
+                new=AsyncMock(side_effect=[solo, duos]),
+            ),
+            patch("app.hsreplay_bg_hero_details.fetch_hero_detail", side_effect=detail),
+            patch("app.hsreplay_bg_hero_details.load_dataset", return_value={"fetched_at": "old"}),
+            patch("app.hsreplay_bg_hero_details.save_dataset") as save_dataset,
+            patch("app.hsreplay_bg_hero_details.save_status") as save_status,
+        ):
+            result = asyncio.run(refresh_bg_hero_details())
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["published"])
+        self.assertTrue(result["serving_cached_dataset"])
+        self.assertIn("hero detail coverage too low", result["quality_errors"][0])
+        save_dataset.assert_not_called()
+        status = save_status.call_args.args[1]
+        self.assertEqual(status["state"], "partial")
+        self.assertTrue(status["serving_cached_dataset"])
+
+    def test_complete_refresh_is_published_atomically(self) -> None:
+        solo = self._hero_index(30, mode="solo")
+        duos = self._hero_index(20, mode="duos")
+
+        async def detail(dbf_id: int, **_kwargs: object) -> dict:
+            return {"hero": {"dbfId": dbf_id}, "best_composition": None}
+
+        with (
+            patch("app.hsreplay_bg_hero_details._composition_names", new=AsyncMock(return_value={})),
+            patch(
+                "app.hsreplay_bg_hero_details.fetch_hero_index",
+                new=AsyncMock(side_effect=[solo, duos]),
+            ),
+            patch("app.hsreplay_bg_hero_details.fetch_hero_detail", side_effect=detail),
+            patch("app.hsreplay_bg_hero_details.load_dataset", return_value={"fetched_at": "old"}),
+            patch("app.hsreplay_bg_hero_details.save_dataset") as save_dataset,
+            patch("app.hsreplay_bg_hero_details.save_status"),
+        ):
+            result = asyncio.run(refresh_bg_hero_details())
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["published"])
+        self.assertEqual(result["detail_coverage"], 1.0)
+        save_dataset.assert_called_once()
 
 
 if __name__ == "__main__":

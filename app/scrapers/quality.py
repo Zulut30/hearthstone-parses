@@ -5,7 +5,7 @@ from typing import Any
 
 from ..quality_thresholds import threshold_for
 from ..refresh_log import log_action
-from ..source_contracts import contract_quality_ok, contract_quality_report
+from ..source_contracts import contract_quality_ok, contract_quality_report, get_contract
 from ..source_validators import validate_structured
 from ..sources import Source
 
@@ -30,21 +30,12 @@ def is_cloudflare_challenge(html: str) -> bool:
     return any(marker in lowered for marker in CF_MARKERS)
 
 
-def _looks_like_bg_avg_placement(value: Any) -> bool:
-    raw = str(value or "").strip().replace(",", ".")
-    if not re.fullmatch(r"\d+\.\d+", raw):
-        return False
-    try:
-        parsed = float(raw)
-    except ValueError:
-        return False
-    return 1.0 <= parsed <= 8.0
-
-
 def looks_like_real_page(html: str, source: Source) -> bool:
     if is_cloudflare_challenge(html):
         return False
-    if len(html) < 2000:
+    contract = get_contract(source.id)
+    min_html_bytes = contract.min_html_bytes if contract else 2_000
+    if len(html.encode("utf-8")) < min_html_bytes:
         return False
     if source.site == "hsreplay":
         return bool(
@@ -55,9 +46,6 @@ def looks_like_real_page(html: str, source: Source) -> bool:
             )
         )
     if source.site == "hsguru":
-        min_bytes = 25_000 if source.category in {"meta", "matchups"} else 8_000
-        if len(html) < min_bytes:
-            return False
         return bool(
             re.search(r"hsguru\.com|archetype|matchup|streamer|meta|canvas", html, re.I)
         ) and "just a moment" not in html.lower()
@@ -135,6 +123,29 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
                 )
             return False, f"source contract failed: {contract_reason}"
         semantic_report = validate_structured(source.id, structured)
+        semantic_warnings = [
+            issue for issue in semantic_report.issues if issue.severity == "warning"
+        ]
+        if semantic_warnings:
+            _log_quality_action(
+                "source_semantic.validate.warn",
+                source_id=source.id,
+                level="warn",
+                detail="; ".join(issue.message for issue in semantic_warnings),
+                extra={
+                    "semantic_score": semantic_report.score,
+                    "semantic_metrics": semantic_report.metrics,
+                    "semantic_issues": [
+                        {
+                            "code": issue.code,
+                            "field": issue.field,
+                            "severity": issue.severity,
+                            "message": issue.message,
+                        }
+                        for issue in semantic_warnings
+                    ],
+                },
+            )
         if not semantic_report.ok:
             _log_quality_action(
                 "source_semantic.validate.fail",
@@ -158,6 +169,8 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return False, f"source semantic validation failed: {semantic_report.reason}"
 
     if source.site == "hsguru":
+        if structured:
+            return True, "ok"
         if source.category == "meta":
             min_rows = int(threshold_for(source.id, "meta_table_rows_min", 5))
             if table_rows < min_rows:
@@ -174,212 +187,13 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
                 return False, "matchups content not detected"
             return True, "ok"
 
-    if source.site == "metastats":
-        structured = parsed.get("structured") or {}
-        if source.id == "metastats_decks":
-            decks = structured.get("decks") or []
-            if len(decks) < 5:
-                return False, f"metastats too few decks ({len(decks)})"
-            return True, "ok"
-        if source.id == "metastats_matchups":
-            matchups = structured.get("matchups") or []
-            min_matchups = int(threshold_for(source.id, "matchups_min", 10))
-            if len(matchups) < min_matchups:
-                return False, f"metastats matchups too few ({len(matchups)})"
-            return True, "ok"
-
-    if source.site == "hearthstone-decks":
-        structured = parsed.get("structured") or {}
-        decks = structured.get("decks") or []
-        if len(decks) < 5:
-            return False, f"hearthstone-decks too few decks ({len(decks)})"
-        return True, "ok"
-
     if source.site == "vicious-syndicate":
-        structured = parsed.get("structured") or {}
-        if structured.get("type") == "vicious_live":
-            class_distribution = structured.get("class_distribution") or []
-            tier_list = structured.get("tier_list") or []
-            tier_decks = sum(len(row.get("decks") or []) for row in tier_list)
-            if len(class_distribution) < 8:
-                return False, f"vicious live too few classes ({len(class_distribution)})"
-            if len(tier_list) < 3 or tier_decks < 20:
-                return False, f"vicious live too few tier decks ({tier_decks})"
-            return True, "ok"
-        radars = structured.get("radars") or []
-        if len(radars) < 5:
-            return False, f"vicious-syndicate too few radars ({len(radars)})"
+        if not structured:
+            return False, "vicious-syndicate structured data missing"
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "arena_legendary_groups":
-            if len(structured.get("groups") or []) < 10:
-                return False, f"legendary groups too few ({len(structured.get('groups') or [])})"
-            if not any(g.get("key_card") for g in structured.get("groups") or []):
-                return False, "legendary groups missing key_card"
-            return True, "ok"
-        if structured.get("type") == "bg_comps":
-            comps = structured.get("comps") or []
-            if len(comps) < 3:
-                return False, f"bg comps too few ({len(comps)})"
-            with_cards = sum(
-                1 for c in comps if (c.get("main_cards") or c.get("additional_cards"))
-            )
-            if with_cards < max(3, len(comps) // 2):
-                return False, f"bg comps mostly empty ({with_cards}/{len(comps)} with cards)"
-            return True, "ok"
-        if structured.get("type") == "bg_card_stats":
-            tiers = structured.get("tiers") or {}
-            total_cards = sum(len(cards) for cards in tiers.values())
-            if total_cards < 50:
-                return False, f"bg_card_stats too few total cards ({total_cards})"
-            with_stats = sum(
-                1
-                for cards in tiers.values()
-                for c in cards
-                if c.get("average_placement") is not None or c.get("total_played")
-            )
-            if with_stats < 40:
-                return False, f"bg_card_stats missing placement stats ({with_stats}/{total_cards})"
-            return True, "ok"
-        if structured.get("type") == "bg_trinkets":
-            trinkets = structured.get("trinkets") or []
-            if len(trinkets) < 8:
-                return False, f"bg trinkets too few ({len(trinkets)})"
-            valid = [
-                t
-                for t in trinkets
-                if t.get("pick_rate")
-                and t.get("name")
-                and len(str(t["name"])) >= 4
-                and str(t["name"])[0].isalnum()
-            ]
-            if len(valid) < max(6, len(trinkets) // 2):
-                return False, f"bg trinkets invalid names/stats ({len(valid)}/{len(trinkets)})"
-            return True, "ok"
-        if structured.get("type") == "arena_winning_decks":
-            decks = structured.get("decks") or []
-            if len(decks) < 1:
-                return False, "arena winning decks empty"
-            if not any((d.get("final_deck") or []) for d in decks):
-                return False, "arena winning decks missing final_deck"
-            return True, "ok"
-        if structured.get("type") == "arena_class_matrix":
-            classes = structured.get("classes") or []
-            if len(classes) < 8:
-                return False, f"arena class stats too few ({len(classes)})"
-            return True, "ok"
-        if structured.get("type") == "arena_class_pages":
-            classes = structured.get("classes") or []
-            if len(classes) < 10:
-                return False, f"arena class pages too few ({len(classes)})"
-            with_stats = sum(1 for row in classes if row.get("win_rate") is not None and row.get("pick_rate") is not None)
-            if with_stats < 10:
-                return False, f"arena class pages missing stats ({with_stats}/{len(classes)})"
-            return True, "ok"
-        if structured.get("type") == "bg_heroes":
-            heroes = structured.get("heroes") or []
-            if structured.get("blocked"):
-                return False, "bg heroes blocked"
-            if len(heroes) < 30:
-                return False, f"bg heroes too few ({len(heroes)})"
-            named = sum(1 for h in heroes if str(h.get("hero") or "").strip() not in {"", "-", "—"})
-            if named < 20:
-                return False, f"bg heroes missing names ({named}/{len(heroes)})"
-            with_stats = sum(
-                1
-                for h in heroes
-                if _looks_like_bg_avg_placement(h.get("avg_placement"))
-                and h.get("pick_rate")
-            )
-            if with_stats < 20:
-                return False, f"bg heroes missing stats ({with_stats}/{len(heroes)})"
-            return True, "ok"
-        if structured.get("type") == "bg_minions":
-            minions = structured.get("minions") or []
-            if len(minions) < 50:
-                return False, f"bg minions too few ({len(minions)})"
-            with_stats = sum(
-                1
-                for item in minions
-                if item.get("impact") is not None
-                and item.get("win_share")
-                and item.get("popularity")
-            )
-            if with_stats < 40:
-                return False, f"bg minions missing stats ({with_stats}/{len(minions)})"
-            return True, "ok"
-        if structured.get("type") == "bg_compositions":
-            comps = structured.get("compositions") or []
-            if len(comps) < 5:
-                return False, f"bg compositions too few ({len(comps)})"
-            with_stats = sum(
-                1
-                for item in comps
-                if item.get("first_place")
-                and item.get("avg_placement") is not None
-                and item.get("popularity")
-            )
-            if with_stats < 5:
-                return False, f"bg compositions missing stats ({with_stats}/{len(comps)})"
-            return True, "ok"
-        if structured.get("type") == "arena_card_tiers":
-            cards = structured.get("cards") or []
-            default_min = 20 if "legendary" in source.id else 100
-            min_cards = int(threshold_for(source.id, "arena_card_tiers_min", default_min))
-            if len(cards) < min_cards:
-                return False, f"arena card tiers too few ({len(cards)})"
-            if "firestone" not in source.id and not any(
-                c.get("tier")
-                or c.get("win_rate") is not None
-                or c.get("deck_winrate")
-                for c in cards[:50]
-            ):
-                return False, "arena card tiers missing tier labels"
-            return True, "ok"
-        if structured.get("type") == "heartharena_tierlist":
-            classes = structured.get("classes") or []
-            if len(classes) < 5:
-                return False, f"heartharena classes too few ({len(classes)})"
-            total_cards = structured.get("total_cards", 0)
-            if total_cards < 300:
-                return False, f"heartharena cards too few ({total_cards})"
-            with_tier = sum(
-                1 for cl in classes for c in (cl.get("cards") or []) if c.get("tier_id")
-            )
-            if with_tier < 200:
-                return False, f"heartharena cards missing tier_id ({with_tier})"
-            return True, "ok"
-        if structured.get("type") == "card_stats":
-            cards = structured.get("cards") or []
-            if structured.get("blocked") and len(cards) < 10:
-                return False, "card stats blocked or empty"
-            if len(cards) < 30:
-                return False, f"card stats too few ({len(cards)})"
-            with_metrics = sum(
-                1 for c in cards if c.get("deck_winrate") or c.get("deck_popularity")
-            )
-            if with_metrics < 20:
-                return False, f"card stats missing metrics ({with_metrics}/{len(cards)})"
-            return True, "ok"
-        if structured.get("type") == "hsreplay_meta_archetypes":
-            classes = structured.get("classes") or []
-            archetypes = [
-                archetype
-                for class_group in classes
-                for archetype in (class_group.get("archetypes") or [])
-            ]
-            if len(classes) < 8:
-                return False, f"meta archetypes too few classes ({len(classes)})"
-            if len(archetypes) < 20:
-                return False, f"meta archetypes too few rows ({len(archetypes)})"
-            with_metrics = sum(
-                1
-                for archetype in archetypes
-                if archetype.get("winrate") and archetype.get("popularity") and archetype.get("games")
-            )
-            if with_metrics < 20:
-                return False, f"meta archetypes missing metrics ({with_metrics}/{len(archetypes)})"
+        if structured and get_contract(source.id) is not None:
             return True, "ok"
         if any("could not load data" in line.lower() for line in text_lines):
             return False, "hsreplay premium data not loaded (login required)"
@@ -400,4 +214,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return True, "ok"
         return False, "hsreplay page missing userdata/tables/content"
 
+    if structured and get_contract(source.id) is not None:
+        return True, "ok"
     return len(text_lines) >= 10, "minimal content check"

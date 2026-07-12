@@ -8,6 +8,7 @@ from typing import Any
 from .cards_index import card_from_id, card_label, cards_by_dbfid, cards_by_id
 from .firecrawl_backend import scrape_source
 from .hsreplay_client import fetch_hsreplay_html, fetch_hsreplay_markdown, jina_url
+from .parsing_normalize import strip_markdown_links
 from .sources import Source
 
 # --- simple on-disk cache for comp *detail* pages (to dampen 403/451/504 noise) ---
@@ -185,13 +186,6 @@ def parse_hsreplay_minion_cards(section: str) -> list[dict[str, Any]]:
     return cards
 
 
-def _extract_markdown_links(section: str) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for label, url in re.findall(r"\[([^\]]+)\]\((https://hsreplay\.net/battlegrounds/minions/\d+/[^)]+)\)", section):
-        out.append({"label": _clean_md_text(label), "url": url})
-    return out
-
-
 def _section_after_heading(markdown: str, heading_re: str) -> str:
     match = re.search(heading_re, markdown, flags=re.I | re.M)
     if not match:
@@ -214,7 +208,7 @@ def _summary_text_from_section(section: str) -> str:
             continue
         if "hearthstonejson.com" in line or "hsreplay.net/battlegrounds/minions/" in line:
             continue
-        line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+        line = strip_markdown_links(line)
         line = _clean_md_text(line)
         if line:
             lines.append(line)

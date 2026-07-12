@@ -27,7 +27,13 @@ https://github.com/Zulut30/hearthstone-parses
 
 ## Подробный каталог источников
 
-Ниже перечислены все production-источники из `app/sources.py`. Каждый dataset доступен через:
+В реестре **46 источников: 44 scrape + 2 dedicated pipeline**. Авторитетная таблица генерируется напрямую из `app.sources.SOURCES`: [docs/SOURCES.md](docs/SOURCES.md). Проверка синхронизации входит в pytest; обновление после изменения реестра:
+
+```bash
+python scripts/generate-source-catalog.py
+```
+
+Каждый dataset доступен через:
 
 ```text
 GET /datasets/{source_id}
@@ -98,6 +104,14 @@ Firestone - public API fallback для Battlegrounds и Arena. Обычно не
 
 Vicious Syndicate используется для Data Reaper Live и radar graphs. Live Beta берётся из Firebase/embedded app data, radars - из deck-library/radar pages.
 
+После крупных обновлений Hearthstone Vicious может временно отдавать только
+агрегаты `Other <Class>` или radar предыдущего Data Reaper issue. API помечает
+такие ответы как `upstream_unclassified` / `upstream_stale` и не заменяет ими
+последний качественный cache. Если публичные radar-страницы требуют сессию,
+cookies можно импортировать командой
+`python -m app.cli vicious-import-storage /path/to/cookies.json`; принимаются
+Playwright `storage_state` и экспорт Cookie-Editor.
+
 | Source ID | Что парсим | Какие данные отдаёт |
 |-----------|------------|---------------------|
 | `vicious_syndicate_live_beta` | Data Reaper Live Beta | `type=vicious_live`, class distribution/pie chart, deck distribution, tier list, winrate/power/rank buckets, time ranges, total games when available. |
@@ -126,7 +140,7 @@ MetaStats - альтернативный public источник ranked коло
 
 ### Общие гарантии качества данных
 
-- Каждый source получает status: `ok`, `quality_error`, `fetch_error`, `partial` или `ok_cached`.
+- Каждый source получает state из `SourceState`: `ok`, `partial`, `fetch_error`, `http_error`, `blocked_by_protection`, `proxy_required`, `quality_error`, `never_fetched`. `ok_cached` используется только как вычисляемый `effective_state`, не как сохранённый source state.
 - `source_contracts.py` задаёт минимальные строки, обязательные поля, допустимый fallback и regression thresholds для критичных источников.
 - `dataset_regression.py` не даёт перезаписать хороший dataset резко уменьшившимся или неполным payload.
 - Для premium/anti-bot источников parser сохраняет последний хороший dataset, если live refresh временно упал.
@@ -154,10 +168,24 @@ cp .env.example /etc/hs-data-api.env
 python -m app.cli proxy-check
 python -m app.cli refresh --all
 python -m app.cli refresh-hsreplay-archetypes
-uvicorn app.server:app --host 0.0.0.0 --port 8000
+python -m app.server
 ```
 
 На production-сервере используйте `scripts/install.sh` и systemd units из `systemd/`.
+
+## Тесты
+
+Dev/test зависимости отделены от production image:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+`httpx2` используется только TestClient-тестами в соответствии с актуальным
+Starlette API; runtime HTTP-клиенты продолжают использовать `httpx`.
 
 ## Основные API endpoints
 

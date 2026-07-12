@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 import re
 from typing import Any, Callable
+
+from .parsing_normalize import parse_decimal, parse_percent
+from .quality_thresholds import threshold_for
 
 
 @dataclass(frozen=True)
@@ -39,38 +43,18 @@ class ValidationReport:
         return "; ".join(issue.message for issue in self.issues) or "ok"
 
 
-def _parse_percent(value: Any) -> float | None:
-    raw = str(value or "").strip().replace(",", ".")
-    if raw.endswith("%"):
-        raw = raw[:-1]
-    try:
-        return float(raw)
-    except ValueError:
-        return None
-
-
-def _parse_decimal(value: Any) -> float | None:
-    raw = str(value or "").strip().replace(",", ".")
-    if not re.fullmatch(r"\d+(?:\.\d+)?", raw):
-        return None
-    try:
-        return float(raw)
-    except ValueError:
-        return None
-
-
 def _valid_name(value: Any) -> bool:
     return str(value or "").strip() not in {"", "-", "—", "Unknown"}
 
 
-def _validate_bg_heroes(structured: dict[str, Any]) -> ValidationReport:
+def _validate_bg_heroes(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     heroes = [row for row in (structured.get("heroes") or []) if isinstance(row, dict)]
     row_count = len(heroes)
     names = [str(row.get("hero") or "").strip() for row in heroes]
     dbf_ids = [row.get("dbfId") for row in heroes if row.get("dbfId") is not None]
-    avg_values = [_parse_decimal(row.get("avg_placement")) for row in heroes]
-    pick_rates = [_parse_percent(row.get("pick_rate")) for row in heroes]
+    avg_values = [parse_decimal(row.get("avg_placement")) for row in heroes]
+    pick_rates = [parse_percent(row.get("pick_rate")) for row in heroes]
     distributions = [
         row.get("placement_distribution")
         for row in heroes
@@ -83,7 +67,7 @@ def _validate_bg_heroes(structured: dict[str, Any]) -> ValidationReport:
     for dist in distributions:
         if len(dist) != 8:
             continue
-        parsed = [_parse_percent(value) for value in dist]
+        parsed = [parse_percent(value) for value in dist]
         if any(value is None for value in parsed):
             continue
         total = sum(value for value in parsed if value is not None)
@@ -174,8 +158,676 @@ def _validate_bg_heroes(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-_VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
+def _validate_vicious_live(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    class_distribution = [
+        row for row in (structured.get("class_distribution") or []) if isinstance(row, dict)
+    ]
+    tier_list = [
+        row for row in (structured.get("tier_list") or []) if isinstance(row, dict)
+    ]
+    tier_deck_count = sum(len(row.get("decks") or []) for row in tier_list)
+    distribution_names = {
+        str(row.get("deck") or "").strip()
+        for row in (structured.get("deck_distribution") or [])
+        if isinstance(row, dict) and _valid_name(row.get("deck"))
+    }
+    tier_names = {
+        str(deck.get("deck") or "").strip()
+        for bracket in (structured.get("tier_list") or [])
+        if isinstance(bracket, dict)
+        for deck in (bracket.get("decks") or [])
+        if isinstance(deck, dict) and _valid_name(deck.get("deck"))
+    }
+    deck_names = distribution_names | tier_names
+    placeholder_names = {
+        name
+        for name in deck_names
+        if re.fullmatch(r"(?:Other|Unknown)\s+\S+", name, flags=re.IGNORECASE)
+    }
+    named_archetypes = deck_names - placeholder_names
+    placeholder_ratio = len(placeholder_names) / max(len(deck_names), 1)
+    report.metrics.update(
+        {
+            "upstream_state": structured.get("upstream_state"),
+            "unique_decks": len(deck_names),
+            "named_archetypes": len(named_archetypes),
+            "placeholder_decks": len(placeholder_names),
+            "placeholder_ratio": round(placeholder_ratio, 4),
+            "classes": len(class_distribution),
+            "tier_brackets": len(tier_list),
+            "tier_decks": tier_deck_count,
+        }
+    )
+
+    upstream_state = str(structured.get("upstream_state") or "ready")
+    if upstream_state != "ready":
+        report.add_issue(
+            "vicious_live.upstream_not_ready",
+            f"vicious live upstream is not ready ({upstream_state})",
+            field="upstream_state",
+        )
+
+    if len(class_distribution) < 8:
+        report.add_issue(
+            "vicious_live.too_few_classes",
+            f"vicious live too few classes ({len(class_distribution)} < 8)",
+            field="class_distribution",
+        )
+    if len(tier_list) < 3 or tier_deck_count < 20:
+        report.add_issue(
+            "vicious_live.too_few_tier_decks",
+            f"vicious live tier data too small ({len(tier_list)} brackets, {tier_deck_count} decks)",
+            field="tier_list",
+        )
+    if len(named_archetypes) < 3:
+        report.add_issue(
+            "vicious_live.too_few_named_archetypes",
+            f"vicious live named archetypes too few ({len(named_archetypes)} < 3)",
+            field="deck",
+        )
+    if placeholder_ratio > 0.75:
+        report.add_issue(
+            "vicious_live.placeholder_dominated",
+            f"vicious live placeholder decks dominate ({len(placeholder_names)}/{len(deck_names)})",
+            field="deck",
+        )
+    report.score = round(
+        sum(
+            (
+                min(len(class_distribution) / 8.0, 1.0),
+                min(len(tier_list) / 3.0, 1.0),
+                min(tier_deck_count / 20.0, 1.0),
+                min(len(named_archetypes) / 8.0, 1.0) * (1.0 - placeholder_ratio),
+            )
+        )
+        / 4,
+        4,
+    )
+    return report
+
+
+def _validate_vicious_radars(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    issue_raw = str(structured.get("issue") or "")
+    latest_issue_raw = str(structured.get("latest_report_issue") or "")
+    issue = int(issue_raw) if issue_raw.isdigit() else None
+    latest_issue = int(latest_issue_raw) if latest_issue_raw.isdigit() else None
+    published_raw = str(structured.get("latest_report_published_at") or "")
+    content_age_days: int | None = None
+    try:
+        published_at = datetime.fromisoformat(published_raw)
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=UTC)
+        content_age_days = max(0, (datetime.now(UTC) - published_at).days)
+    except ValueError:
+        pass
+    report.metrics.update(
+        {
+            "radar_issue": issue,
+            "latest_report_issue": latest_issue,
+            "latest_report_published_at": published_raw or None,
+            "content_age_days": content_age_days,
+        }
+    )
+
+    if issue is None or latest_issue is None:
+        report.add_issue(
+            "vicious_radars.missing_issue_freshness",
+            "vicious radars missing active/latest report issue metadata",
+            field="issue",
+        )
+    elif issue < latest_issue:
+        report.add_issue(
+            "vicious_radars.outdated_issue",
+            f"vicious radar issue is outdated ({issue} < {latest_issue})",
+            field="issue",
+        )
+    if content_age_days is None:
+        report.add_issue(
+            "vicious_radars.missing_published_at",
+            "vicious latest report publication date is missing or invalid",
+            field="latest_report_published_at",
+        )
+    elif content_age_days > 21:
+        report.add_issue(
+            "vicious_radars.stale_content",
+            f"vicious latest report content is stale ({content_age_days} days > 21)",
+            field="latest_report_published_at",
+        )
+    issue_score = 1.0 if issue is not None and issue == latest_issue else 0.0
+    age_score = 1.0 if content_age_days is not None and content_age_days <= 21 else 0.0
+    report.score = (issue_score + age_score) / 2
+    return report
+
+
+def _validate_arena_class_matrix(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    report.metrics["classes"] = len(classes)
+    if len(classes) < 8:
+        report.add_issue(
+            "arena_class_matrix.too_few_classes",
+            f"arena class stats too few ({len(classes)} < 8)",
+            field="classes",
+        )
+    report.score = round(min(len(classes) / 8.0, 1.0), 4)
+    return report
+
+
+def _validate_arena_class_pages(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    with_stats = sum(
+        1
+        for row in classes
+        if row.get("win_rate") is not None and row.get("pick_rate") is not None
+    )
+    report.metrics.update({"classes": len(classes), "classes_with_stats": with_stats})
+    if len(classes) < 10:
+        report.add_issue(
+            "arena_class_pages.too_few_classes",
+            f"arena class pages too few ({len(classes)} < 10)",
+            field="classes",
+        )
+    if with_stats < 10:
+        report.add_issue(
+            "arena_class_pages.missing_stats",
+            f"arena class pages missing stats ({with_stats}/{len(classes)}; minimum 10)",
+            field="win_rate,pick_rate",
+        )
+    report.score = round(
+        (min(len(classes) / 10.0, 1.0) + min(with_stats / 10.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_arena_winning_decks(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    decks = [row for row in (structured.get("decks") or []) if isinstance(row, dict)]
+    with_final_deck = sum(1 for row in decks if row.get("final_deck"))
+    report.metrics.update({"decks": len(decks), "decks_with_final_deck": with_final_deck})
+    if not decks:
+        report.add_issue(
+            "arena_winning_decks.empty",
+            "arena winning decks empty",
+            field="decks",
+        )
+    if with_final_deck < 1:
+        report.add_issue(
+            "arena_winning_decks.missing_final_deck",
+            "arena winning decks missing final_deck",
+            field="final_deck",
+        )
+    report.score = 1.0 if decks and with_final_deck else 0.0
+    return report
+
+
+def _validate_arena_legendary_groups(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    groups = [row for row in (structured.get("groups") or []) if isinstance(row, dict)]
+    with_key_card = sum(1 for row in groups if row.get("key_card"))
+    report.metrics.update({"groups": len(groups), "groups_with_key_card": with_key_card})
+    if len(groups) < 10:
+        report.add_issue(
+            "arena_legendary_groups.too_few_groups",
+            f"legendary groups too few ({len(groups)} < 10)",
+            field="groups",
+        )
+    if with_key_card < 1:
+        report.add_issue(
+            "arena_legendary_groups.missing_key_card",
+            "legendary groups missing key_card",
+            field="key_card",
+        )
+    report.score = round(
+        (min(len(groups) / 10.0, 1.0) + min(with_key_card, 1)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_bg_comps(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    comps = [row for row in (structured.get("comps") or []) if isinstance(row, dict)]
+    with_cards = sum(
+        1 for row in comps if row.get("main_cards") or row.get("additional_cards")
+    )
+    minimum_with_cards = max(3, len(comps) // 2)
+    report.metrics.update(
+        {
+            "comps": len(comps),
+            "comps_with_cards": with_cards,
+            "minimum_with_cards": minimum_with_cards,
+        }
+    )
+    if len(comps) < 3:
+        report.add_issue(
+            "bg_comps.too_few_comps",
+            f"bg comps too few ({len(comps)} < 3)",
+            field="comps",
+        )
+    if with_cards < minimum_with_cards:
+        report.add_issue(
+            "bg_comps.mostly_empty",
+            f"bg comps mostly empty ({with_cards}/{len(comps)} with cards; minimum {minimum_with_cards})",
+            field="main_cards,additional_cards",
+        )
+    report.score = round(
+        (min(len(comps) / 3.0, 1.0) + min(with_cards / max(minimum_with_cards, 1), 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_bg_card_stats(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    tiers = structured.get("tiers") or {}
+    cards = [
+        card
+        for tier_cards in tiers.values()
+        if isinstance(tier_cards, list)
+        for card in tier_cards
+        if isinstance(card, dict)
+    ] if isinstance(tiers, dict) else []
+    with_stats = sum(
+        1
+        for card in cards
+        if card.get("average_placement") is not None or card.get("total_played")
+    )
+    report.metrics.update({"cards": len(cards), "cards_with_stats": with_stats})
+    if len(cards) < 50:
+        report.add_issue(
+            "bg_card_stats.too_few_cards",
+            f"bg card stats too few ({len(cards)} < 50)",
+            field="tiers",
+        )
+    if with_stats < 40:
+        report.add_issue(
+            "bg_card_stats.missing_stats",
+            f"bg card stats missing placement stats ({with_stats}/{len(cards)}; minimum 40)",
+            field="average_placement,total_played",
+        )
+    report.score = round(
+        (min(len(cards) / 50.0, 1.0) + min(with_stats / 40.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_bg_trinkets(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    trinkets = [row for row in (structured.get("trinkets") or []) if isinstance(row, dict)]
+    valid = [
+        row
+        for row in trinkets
+        if row.get("pick_rate")
+        and len(str(row.get("name") or "")) >= 4
+        and str(row.get("name") or "")[:1].isalnum()
+    ]
+    minimum_valid = max(6, len(trinkets) // 2)
+    report.metrics.update(
+        {
+            "trinkets": len(trinkets),
+            "valid_trinkets": len(valid),
+            "minimum_valid": minimum_valid,
+            "parser_level": structured.get("parser_level"),
+            "dropped_rows": int(structured.get("dropped_rows") or 0),
+        }
+    )
+    parser_level = str(structured.get("parser_level") or "primary")
+    if parser_level != "primary":
+        report.add_issue(
+            "bg_trinkets.fallback_parser",
+            f"bg trinkets parsed with fallback level {parser_level}",
+            field="parser_level",
+            severity="warning",
+        )
+    if len(trinkets) < 8:
+        report.add_issue(
+            "bg_trinkets.too_few_rows",
+            f"bg trinkets too few ({len(trinkets)} < 8)",
+            field="trinkets",
+        )
+    if len(valid) < minimum_valid:
+        report.add_issue(
+            "bg_trinkets.invalid_names_or_stats",
+            f"bg trinkets invalid names/stats ({len(valid)}/{len(trinkets)}; minimum {minimum_valid})",
+            field="name,pick_rate",
+        )
+    report.score = round(
+        (min(len(trinkets) / 8.0, 1.0) + min(len(valid) / max(minimum_valid, 1), 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_bg_minions(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    minions = [row for row in (structured.get("minions") or []) if isinstance(row, dict)]
+    with_stats = sum(
+        1
+        for row in minions
+        if row.get("impact") is not None and row.get("win_share") and row.get("popularity")
+    )
+    report.metrics.update({"minions": len(minions), "minions_with_stats": with_stats})
+    if len(minions) < 50:
+        report.add_issue(
+            "bg_minions.too_few_rows",
+            f"bg minions too few ({len(minions)} < 50)",
+            field="minions",
+        )
+    if with_stats < 40:
+        report.add_issue(
+            "bg_minions.missing_stats",
+            f"bg minions missing stats ({with_stats}/{len(minions)}; minimum 40)",
+            field="impact,win_share,popularity",
+        )
+    report.score = round(
+        (min(len(minions) / 50.0, 1.0) + min(with_stats / 40.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_bg_compositions(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    compositions = [
+        row for row in (structured.get("compositions") or []) if isinstance(row, dict)
+    ]
+    with_stats = sum(
+        1
+        for row in compositions
+        if row.get("first_place")
+        and row.get("avg_placement") is not None
+        and row.get("popularity")
+    )
+    report.metrics.update(
+        {"compositions": len(compositions), "compositions_with_stats": with_stats}
+    )
+    if len(compositions) < 5:
+        report.add_issue(
+            "bg_compositions.too_few_rows",
+            f"bg compositions too few ({len(compositions)} < 5)",
+            field="compositions",
+        )
+    if with_stats < 5:
+        report.add_issue(
+            "bg_compositions.missing_stats",
+            f"bg compositions missing stats ({with_stats}/{len(compositions)}; minimum 5)",
+            field="first_place,avg_placement,popularity",
+        )
+    report.score = round(
+        (min(len(compositions) / 5.0, 1.0) + min(with_stats / 5.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    cards = [row for row in (structured.get("cards") or []) if isinstance(row, dict)]
+    default_min = 20 if "legendary" in source_id else 100
+    minimum_cards = int(threshold_for(source_id, "arena_card_tiers_min", default_min))
+    has_tier_labels = "firestone" in source_id or any(
+        row.get("tier")
+        or row.get("win_rate") is not None
+        or row.get("deck_winrate")
+        for row in cards[:50]
+    )
+    report.metrics.update(
+        {
+            "cards": len(cards),
+            "minimum_cards": minimum_cards,
+            "has_tier_labels": has_tier_labels,
+        }
+    )
+    if len(cards) < minimum_cards:
+        report.add_issue(
+            "arena_card_tiers.too_few_cards",
+            f"arena card tiers too few ({len(cards)} < {minimum_cards})",
+            field="cards",
+        )
+    if not has_tier_labels:
+        report.add_issue(
+            "arena_card_tiers.missing_tier_labels",
+            "arena card tiers missing tier labels",
+            field="tier,win_rate,deck_winrate",
+        )
+    report.score = round(
+        (min(len(cards) / max(minimum_cards, 1), 1.0) + float(has_tier_labels)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_heartharena_tierlist(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    total_cards = int(structured.get("total_cards") or 0)
+    with_tier = sum(
+        1
+        for class_row in classes
+        for card in (class_row.get("cards") or [])
+        if isinstance(card, dict) and card.get("tier_id")
+    )
+    report.metrics.update(
+        {"classes": len(classes), "total_cards": total_cards, "cards_with_tier_id": with_tier}
+    )
+    if len(classes) < 5:
+        report.add_issue(
+            "heartharena_tierlist.too_few_classes",
+            f"heartharena classes too few ({len(classes)} < 5)",
+            field="classes",
+        )
+    if total_cards < 300:
+        report.add_issue(
+            "heartharena_tierlist.too_few_cards",
+            f"heartharena cards too few ({total_cards} < 300)",
+            field="total_cards",
+        )
+    if with_tier < 200:
+        report.add_issue(
+            "heartharena_tierlist.missing_tier_ids",
+            f"heartharena cards missing tier_id ({with_tier} < 200)",
+            field="tier_id",
+        )
+    report.score = round(
+        (
+            min(len(classes) / 5.0, 1.0)
+            + min(total_cards / 300.0, 1.0)
+            + min(with_tier / 200.0, 1.0)
+        )
+        / 3,
+        4,
+    )
+    return report
+
+
+def _validate_card_stats(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    cards = [row for row in (structured.get("cards") or []) if isinstance(row, dict)]
+    with_metrics = sum(
+        1 for row in cards if row.get("deck_winrate") or row.get("deck_popularity")
+    )
+    blocked = bool(structured.get("blocked"))
+    report.metrics.update(
+        {"cards": len(cards), "cards_with_metrics": with_metrics, "blocked": blocked}
+    )
+    if blocked and len(cards) < 10:
+        report.add_issue(
+            "card_stats.blocked_or_empty",
+            "card stats blocked or empty",
+            field="blocked",
+        )
+    if len(cards) < 30:
+        report.add_issue(
+            "card_stats.too_few_cards",
+            f"card stats too few ({len(cards)} < 30)",
+            field="cards",
+        )
+    if with_metrics < 20:
+        report.add_issue(
+            "card_stats.missing_metrics",
+            f"card stats missing metrics ({with_metrics}/{len(cards)}; minimum 20)",
+            field="deck_winrate,deck_popularity",
+        )
+    report.score = round(
+        (
+            float(not blocked or len(cards) >= 10)
+            + min(len(cards) / 30.0, 1.0)
+            + min(with_metrics / 20.0, 1.0)
+        )
+        / 3,
+        4,
+    )
+    return report
+
+
+def _validate_hsreplay_meta_archetypes(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    archetypes = [
+        archetype
+        for class_row in classes
+        for archetype in (class_row.get("archetypes") or [])
+        if isinstance(archetype, dict)
+    ]
+    with_metrics = sum(
+        1
+        for archetype in archetypes
+        if archetype.get("winrate")
+        and archetype.get("popularity")
+        and archetype.get("games")
+    )
+    report.metrics.update(
+        {
+            "classes": len(classes),
+            "archetypes": len(archetypes),
+            "archetypes_with_metrics": with_metrics,
+        }
+    )
+    if len(classes) < 8:
+        report.add_issue(
+            "hsreplay_meta_archetypes.too_few_classes",
+            f"meta archetypes too few classes ({len(classes)} < 8)",
+            field="classes",
+        )
+    if len(archetypes) < 20:
+        report.add_issue(
+            "hsreplay_meta_archetypes.too_few_rows",
+            f"meta archetypes too few rows ({len(archetypes)} < 20)",
+            field="archetypes",
+        )
+    if with_metrics < 20:
+        report.add_issue(
+            "hsreplay_meta_archetypes.missing_metrics",
+            f"meta archetypes missing metrics ({with_metrics}/{len(archetypes)}; minimum 20)",
+            field="winrate,popularity,games",
+        )
+    report.score = round(
+        (
+            min(len(classes) / 8.0, 1.0)
+            + min(len(archetypes) / 20.0, 1.0)
+            + min(with_metrics / 20.0, 1.0)
+        )
+        / 3,
+        4,
+    )
+    return report
+
+
+def _validate_hsguru_meta(source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    strategies = [
+        row for row in (structured.get("strategies") or []) if isinstance(row, dict)
+    ]
+    minimum_rows = int(threshold_for(source_id, "meta_table_rows_min", 5))
+    report.metrics.update({"strategies": len(strategies), "minimum_rows": minimum_rows})
+    if len(strategies) < minimum_rows:
+        report.add_issue(
+            "hsguru_meta.too_few_rows",
+            f"HSGuru meta too few rows ({len(strategies)} < {minimum_rows})",
+            field="strategies",
+        )
+    report.score = round(min(len(strategies) / max(minimum_rows, 1), 1.0), 4)
+    return report
+
+
+def _validate_hsguru_streamer_decks(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    rows = [row for row in (structured.get("rows") or []) if isinstance(row, dict)]
+    deck_codes = sum(1 for row in rows if row.get("deck_code"))
+    report.metrics.update({"rows": len(rows), "deck_codes": deck_codes})
+    if deck_codes < 2 and len(rows) < 3:
+        report.add_issue(
+            "hsguru_streamer_decks.missing_codes_or_rows",
+            f"HSGuru streamer decks missing codes/rows ({deck_codes} codes, {len(rows)} rows)",
+            field="deck_code,rows",
+        )
+    report.score = round(max(min(deck_codes / 2.0, 1.0), min(len(rows) / 3.0, 1.0)), 4)
+    return report
+
+
+def _validate_hsguru_matchups(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    matchups = [
+        row for row in (structured.get("matchups") or []) if isinstance(row, dict)
+    ]
+    with_winrate = sum(1 for row in matchups if row.get("winrate"))
+    report.metrics.update({"matchups": len(matchups), "matchups_with_winrate": with_winrate})
+    if len(matchups) < 3:
+        report.add_issue(
+            "hsguru_matchups.too_few_rows",
+            f"HSGuru matchups too few rows ({len(matchups)} < 3)",
+            field="matchups",
+        )
+    if with_winrate < 1:
+        report.add_issue(
+            "hsguru_matchups.missing_winrates",
+            "HSGuru matchups content not detected",
+            field="winrate",
+        )
+    report.score = round(
+        (min(len(matchups) / 3.0, 1.0) + min(with_winrate, 1)) / 2,
+        4,
+    )
+    return report
+
+
+_VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
+    "vicious_live": _validate_vicious_live,
+    "vicious_syndicate_radars": _validate_vicious_radars,
+    "arena_class_matrix": _validate_arena_class_matrix,
+    "arena_class_pages": _validate_arena_class_pages,
+    "arena_winning_decks": _validate_arena_winning_decks,
+    "arena_legendary_groups": _validate_arena_legendary_groups,
+    "bg_comps": _validate_bg_comps,
+    "bg_card_stats": _validate_bg_card_stats,
+    "bg_trinkets": _validate_bg_trinkets,
+    "bg_minions": _validate_bg_minions,
+    "bg_compositions": _validate_bg_compositions,
+    "arena_card_tiers": _validate_arena_card_tiers,
+    "heartharena_tierlist": _validate_heartharena_tierlist,
+    "card_stats": _validate_card_stats,
+    "hsreplay_meta_archetypes": _validate_hsreplay_meta_archetypes,
+    "meta": _validate_hsguru_meta,
+    "streamer_decks": _validate_hsguru_streamer_decks,
+    "matchups": _validate_hsguru_matchups,
 }
 
 
@@ -183,7 +835,7 @@ def validate_structured(source_id: str, structured: dict[str, Any]) -> Validatio
     validator = _VALIDATORS.get(str(structured.get("type") or ""))
     if validator is None:
         return ValidationReport(metrics={"source_id": source_id, "structured_type": structured.get("type")})
-    report = validator(structured)
+    report = validator(source_id, structured)
     report.metrics["source_id"] = source_id
     report.metrics["structured_type"] = structured.get("type")
     return report

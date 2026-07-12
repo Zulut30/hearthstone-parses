@@ -22,10 +22,16 @@ echo "Data dir: $HS_API_DATA_DIR"
 echo
 
 echo "=== Unit tests ==="
-if "$VENV" -m unittest discover -s tests -p 'test_*.py' -q 2>/dev/null; then
+if "$VENV" -m pytest -q; then
   echo "tests: OK"
 else
-  echo "tests: FAILED or skipped (install httpx in venv)"
+  status=$?
+  if [[ "$status" -eq 5 ]]; then
+    echo "tests: FAILED (no tests collected)"
+  else
+    echo "tests: FAILED (pytest exit $status)"
+  fi
+  exit "$status"
 fi
 echo
 

@@ -5,12 +5,41 @@ import unittest
 from app.api_only_sources import blocks_browser_fallback
 from app.dataset_regression import check_dataset_regression
 from app.hsreplay_client import _channel_urls
-from app.scrapers.quality import quality_metrics, validate_parsed_data
+from app.scrapers.quality import looks_like_real_page, quality_metrics, validate_parsed_data
 from app.source_contracts import contract_quality_report, get_contract
 from app.sources import SOURCE_BY_ID
 
 
 class SourceContractsTest(unittest.TestCase):
+    def test_page_size_thresholds_come_from_source_contracts(self) -> None:
+        meta = SOURCE_BY_ID["hsguru_meta_standard_legend"]
+        streamer = SOURCE_BY_ID["hsguru_streamer_decks_legend_1000"]
+        meta_contract = get_contract(meta.id)
+        streamer_contract = get_contract(streamer.id)
+
+        self.assertEqual(meta_contract.min_html_bytes, 25_000)  # type: ignore[union-attr]
+        self.assertEqual(streamer_contract.min_html_bytes, 8_000)  # type: ignore[union-attr]
+        self.assertFalse(looks_like_real_page("hsguru.com".ljust(24_999, "x"), meta))
+        self.assertTrue(looks_like_real_page("hsguru.com".ljust(25_000, "x"), meta))
+        self.assertFalse(looks_like_real_page("hsguru.com".ljust(7_999, "x"), streamer))
+        self.assertTrue(looks_like_real_page("hsguru.com".ljust(8_000, "x"), streamer))
+
+    def test_page_size_threshold_counts_utf8_bytes(self) -> None:
+        meta = SOURCE_BY_ID["hsguru_meta_standard_legend"]
+        multibyte_page = "hsguru.com" + "я" * 12_495
+
+        self.assertLess(len(multibyte_page), 25_000)
+        self.assertEqual(len(multibyte_page.encode("utf-8")), 25_000)
+        self.assertTrue(looks_like_real_page(multibyte_page, meta))
+
+    def test_vicious_page_without_structured_data_is_rejected(self) -> None:
+        source = SOURCE_BY_ID["vicious_syndicate_live_beta"]
+
+        ok, reason = validate_parsed_data(source, {"title": "Data Reaper Live"})
+
+        self.assertFalse(ok)
+        self.assertIn("structured data missing", reason)
+
     def test_hsguru_streamer_decks_keeps_public_source_identity(self) -> None:
         source = SOURCE_BY_ID["hsguru_streamer_decks_legend_1000"]
 
@@ -180,6 +209,27 @@ class SourceContractsTest(unittest.TestCase):
 
         self.assertFalse(report["ok"])
         self.assertIn("too few rows", "; ".join(report["warnings"]))
+
+    def test_contract_backed_structured_source_needs_no_duplicate_site_branch(self) -> None:
+        source = SOURCE_BY_ID["metastats_decks"]
+        parsed = {
+            "title": "MetaStats decks",
+            "structured": {
+                "type": "metastats_decks",
+                "decks": [
+                    {
+                        "archetype_name": f"Deck {idx}",
+                        "win_rate": "50%",
+                        "games": 100,
+                    }
+                    for idx in range(40)
+                ],
+            },
+        }
+
+        ok, reason = validate_parsed_data(source, parsed)
+
+        self.assertTrue(ok, reason)
 
     def test_hsguru_meta_contract_rejects_tiny_hydration(self) -> None:
         report = contract_quality_report(

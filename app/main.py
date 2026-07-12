@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import secrets
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -10,12 +12,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import api_key, cors_allowed_origins
+from .config import api_key, cors_allowed_origins, python_environment
 from .demo import build_demo_view, build_overview
 from .fetcher import refresh_sources
 from .source_state import SourceState
 from .sources import SOURCES, SOURCE_BY_ID
 from .storage import load_dataset, load_status, root_dir, save_dataset, save_status
+from .routers.constructed import router as constructed_v1_router
+from .routers.bg import router as bg_v1_router
+from .routers.arena import router as arena_v1_router
+from .routers.system import router as system_v1_router
+from .public_cache import PublicCacheMiddleware
 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -23,6 +30,10 @@ ACTIVE_TRINKET_SOURCE_IDS = {
     "hsreplay_battlegrounds_trinkets_lesser",
     "hsreplay_battlegrounds_trinkets_greater",
 }
+_HEALTH_CACHE_SECONDS = 15.0
+_health_cache_lock = threading.Lock()
+_health_cache_at = 0.0
+_health_cache_payload: dict[str, Any] | None = None
 
 app = FastAPI(
     title="Hearthstone Data API",
@@ -37,6 +48,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Accept", "Content-Type", "X-API-Key"],
 )
+app.add_middleware(PublicCacheMiddleware)
+app.include_router(constructed_v1_router)
+app.include_router(bg_v1_router)
+app.include_router(arena_v1_router)
+app.include_router(system_v1_router)
 
 
 @app.middleware("http")
@@ -143,7 +159,7 @@ def ops_run(run_id: str) -> dict:
 
 @app.get("/ops/health", dependencies=[Depends(require_admin)])
 def ops_health() -> dict:
-    return build_health_diagnostics()
+    return cached_health_diagnostics()
 
 
 @app.get("/demo/overview")
@@ -173,6 +189,49 @@ def source_payload(source_id: str) -> dict:
         "status": status,
         "has_dataset": dataset is not None,
         "dataset_fetched_at": dataset.get("fetched_at") if dataset else None,
+        "semantic_quality": _semantic_dataset_quality(source_id, dataset),
+    }
+
+
+def _semantic_dataset_quality(
+    source_id: str,
+    dataset: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    structured = (((dataset or {}).get("data") or {}).get("structured") or {})
+    if not structured:
+        return None
+    from .source_contracts import contract_quality_report
+    from .source_validators import validate_structured
+
+    semantic_report = validate_structured(source_id, structured)
+    contract_report = contract_quality_report(source_id, structured)
+    semantic_issues = [
+        {
+            "code": issue.code,
+            "message": issue.message,
+            "field": issue.field,
+            "severity": issue.severity,
+        }
+        for issue in semantic_report.issues
+    ]
+    contract_issues = [
+        {
+            "code": "source_contract.failed",
+            "message": warning,
+            "field": None,
+            "severity": "error",
+        }
+        for warning in contract_report.get("warnings") or []
+    ]
+    score_candidates = [semantic_report.score]
+    if isinstance(contract_report.get("quality_score"), (int, float)):
+        score_candidates.append(float(contract_report["quality_score"]))
+    return {
+        "ok": semantic_report.ok and bool(contract_report.get("ok")),
+        "score": min(score_candidates),
+        "issues": [*semantic_issues, *contract_issues],
+        "metrics": semantic_report.metrics,
+        "contract": contract_report,
     }
 
 
@@ -303,6 +362,8 @@ def build_health_diagnostics() -> dict:
     cached_sources: list[str] = []
     cached_after_failure_sources: list[str] = []
     hard_failed_sources: list[str] = []
+    semantic_failed_sources: list[str] = []
+    semantic_failures: list[dict[str, Any]] = []
     for source, status in zip(SOURCES, statuses, strict=True):
         state = status["state"] if status else SourceState.NEVER_FETCHED
         states[state] = states.get(state, 0) + 1
@@ -312,12 +373,23 @@ def build_health_diagnostics() -> dict:
                 cached_after_failure_sources.append(source.id)
         if state != SourceState.OK:
             hard_failed_sources.append(source.id)
+        semantic_quality = _semantic_dataset_quality(source.id, load_dataset(source.id))
+        if semantic_quality and not semantic_quality["ok"]:
+            semantic_failed_sources.append(source.id)
+            semantic_failures.append(
+                {
+                    "source_id": source.id,
+                    "score": semantic_quality["score"],
+                    "issues": semantic_quality["issues"],
+                    "metrics": semantic_quality["metrics"],
+                }
+            )
 
     from .stale_monitor import find_stale_sources
 
     stale_sources = find_stale_sources(include_ok=True)
     stale_ids = [str(item["source_id"]) for item in stale_sources]
-    serving_ok = not hard_failed_sources
+    serving_ok = not hard_failed_sources and not semantic_failed_sources
     freshness_ok = not stale_ids and not cached_sources
     return {
         "ok": serving_ok,
@@ -328,6 +400,8 @@ def build_health_diagnostics() -> dict:
         "sources": len(SOURCES),
         "states": states,
         "hard_failed_sources": hard_failed_sources,
+        "semantic_failed_sources": semantic_failed_sources,
+        "semantic_failures": semantic_failures,
         "cached_sources": cached_sources,
         "cached_after_failure_sources": cached_after_failure_sources,
         "stale_sources": stale_ids,
@@ -335,6 +409,21 @@ def build_health_diagnostics() -> dict:
         "cached_count": len(cached_sources),
         "cached_after_failure_count": len(cached_after_failure_sources),
     }
+
+
+def cached_health_diagnostics() -> dict:
+    """Bound repeated health polling while keeping tests and CLI checks exact."""
+    global _health_cache_at, _health_cache_payload
+    if python_environment() == "test":
+        return build_health_diagnostics()
+    now = time.monotonic()
+    with _health_cache_lock:
+        if _health_cache_payload is not None and now - _health_cache_at < _HEALTH_CACHE_SECONDS:
+            return _health_cache_payload
+        payload = build_health_diagnostics()
+        _health_cache_payload = payload
+        _health_cache_at = now
+        return payload
 
 
 @app.get("/health/premium", dependencies=[Depends(require_admin)])

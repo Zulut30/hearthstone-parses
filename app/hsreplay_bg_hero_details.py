@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+import math
 from typing import Any
 from urllib.parse import urlencode
 
@@ -448,8 +449,25 @@ async def refresh_bg_hero_details(
             "composition_names": len(names),
         },
     }
+    solo_count = len(solo_index.get("heroes") or [])
+    duos_count = len(duos_index.get("heroes") or [])
+    requested_details = len(index_rows)
+    detail_coverage = len(details) / max(requested_details, 1)
+    quality_errors: list[str] = []
+    if limit is not None:
+        quality_errors.append("limited refresh is diagnostic and cannot replace the production snapshot")
+    if solo_count < 30:
+        quality_errors.append(f"solo hero index too small ({solo_count} < 30)")
+    if duos_count < 20:
+        quality_errors.append(f"duos hero index too small ({duos_count} < 20)")
+    minimum_details = max(20, math.ceil(requested_details * 0.70))
+    if len(details) < minimum_details:
+        quality_errors.append(
+            f"hero detail coverage too low ({len(details)}/{requested_details}; minimum {minimum_details})"
+        )
+    quality_ok = not quality_errors
     dataset = {
-        "state": SourceState.OK if details else SourceState.PARTIAL,
+        "state": SourceState.OK,
         "fetched_at": fetched_at,
         "http_status": 200,
         "final_url": HEROES_API,
@@ -457,7 +475,9 @@ async def refresh_bg_hero_details(
         "backend": "hsreplay_json_api",
         "data": {"structured": payload},
     }
-    save_dataset(SOURCE_ID, dataset)
+    cached_dataset = load_dataset(SOURCE_ID)
+    if quality_ok:
+        save_dataset(SOURCE_ID, dataset)
     save_status(
         SOURCE_ID,
         {
@@ -465,22 +485,35 @@ async def refresh_bg_hero_details(
             "site": "hsreplay",
             "category": "battlegrounds",
             "url": HEROES_API,
-            "state": dataset["state"],
+            "state": SourceState.OK if quality_ok else SourceState.PARTIAL,
             "fetched_at": fetched_at,
             "http_status": 200,
             "backend": "hsreplay_json_api",
-            "detail": f"BG hero details: {len(details)}/{len(heroes)} solo heroes, {len(duos_index.get('heroes') or [])} duos heroes.",
+            "detail": (
+                f"BG hero details: {len(details)}/{requested_details} requested, "
+                f"{solo_count} solo heroes, {duos_count} duos heroes."
+                + (f" Quality gate: {'; '.join(quality_errors)}" if quality_errors else "")
+            ),
             "errors": errors[:10],
+            "quality_errors": quality_errors,
+            "detail_coverage": round(detail_coverage, 4),
+            "serving_cached_dataset": bool(cached_dataset) and not quality_ok,
+            "last_refresh_state": SourceState.OK if quality_ok else SourceState.PARTIAL,
+            "last_refresh_at": fetched_at,
         },
     )
     return {
-        "ok": bool(details),
+        "ok": quality_ok,
+        "published": quality_ok,
+        "serving_cached_dataset": bool(cached_dataset) and not quality_ok,
         "source_id": SOURCE_ID,
         "fetched_at": fetched_at,
         "heroes": len(heroes),
         "details": len(details),
         "duos_heroes": len(duos_index.get("heroes") or []),
         "errors": errors,
+        "quality_errors": quality_errors,
+        "detail_coverage": round(detail_coverage, 4),
     }
 
 

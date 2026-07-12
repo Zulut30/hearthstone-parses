@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from app import main
 
@@ -33,7 +33,9 @@ class HealthEndpointTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, patch.object(main, "SOURCES", [source]), patch.object(
             main, "load_status", return_value=status
-        ), patch.object(main, "root_dir", return_value=Path(tmp)), patch.object(
+        ), patch.object(main, "load_dataset", return_value=None), patch.object(
+            main, "root_dir", return_value=Path(tmp)
+        ), patch.object(
             main, "api_key", return_value="secret"
         ), patch(
             "app.stale_monitor.find_stale_sources", return_value=stale
@@ -50,6 +52,91 @@ class HealthEndpointTest(unittest.TestCase):
         self.assertEqual(payload["cached_after_failure_sources"], ["src1"])
         self.assertEqual(payload["cached_after_failure_count"], 1)
         self.assertEqual(payload["stale_sources"], ["src1"])
+
+    def test_ops_health_detects_semantically_invalid_cached_dataset(self) -> None:
+        source = type("SourceStub", (), {"id": "vicious_syndicate_live_beta"})()
+        status = {"source_id": source.id, "state": "ok", "fetched_at": "2026-07-12T00:00:00Z"}
+        placeholders = [{"deck": f"Other Class{idx}"} for idx in range(11)]
+        dataset = {
+            "data": {
+                "structured": {
+                    "type": "vicious_live",
+                    "deck_distribution": placeholders,
+                    "tier_list": [{"rank_bracket": "All", "decks": placeholders}],
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(main, "SOURCES", [source]), patch.object(
+            main, "load_status", return_value=status
+        ), patch.object(main, "load_dataset", return_value=dataset), patch.object(
+            main, "root_dir", return_value=Path(tmp)
+        ), patch.object(main, "api_key", return_value="secret"), patch(
+            "app.stale_monitor.find_stale_sources", return_value=[]
+        ):
+            response = TestClient(main.app).get("/ops/health", headers={"X-API-Key": "secret"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["serving_ok"])
+        self.assertTrue(payload["degraded"])
+        self.assertEqual(payload["semantic_failed_sources"], [source.id])
+        self.assertIn(
+            "vicious_live.too_few_named_archetypes",
+            {
+                issue["code"]
+                for issue in payload["semantic_failures"][0]["issues"]
+            },
+        )
+
+    def test_cached_dataset_quality_includes_contract_failures(self) -> None:
+        dataset = {
+            "data": {
+                "structured": {
+                    "type": "metastats_decks",
+                    "decks": [
+                        {
+                            "archetype_name": "Only deck",
+                            "win_rate": "50%",
+                            "games": 100,
+                        }
+                    ],
+                }
+            }
+        }
+
+        quality = main._semantic_dataset_quality("metastats_decks", dataset)
+
+        self.assertIsNotNone(quality)
+        self.assertFalse(quality["ok"])
+        self.assertFalse(quality["contract"]["ok"])
+        self.assertIn(
+            "source_contract.failed",
+            {issue["code"] for issue in quality["issues"]},
+        )
+
+    def test_health_polling_reuses_short_lived_diagnostics(self) -> None:
+        original_payload = main._health_cache_payload
+        original_at = main._health_cache_at
+        main._health_cache_payload = None
+        main._health_cache_at = 0.0
+        try:
+            with patch.object(main, "python_environment", return_value="production"), patch.object(
+                main, "time"
+            ) as clock, patch.object(
+                main, "build_health_diagnostics", return_value={"ok": True}
+            ) as build:
+                clock.monotonic.side_effect = [100.0, 105.0]
+
+                first = main.cached_health_diagnostics()
+                second = main.cached_health_diagnostics()
+
+            self.assertIs(first, second)
+            build.assert_called_once_with()
+        finally:
+            main._health_cache_payload = original_payload
+            main._health_cache_at = original_at
 
 
 if __name__ == "__main__":

@@ -44,8 +44,8 @@ class SourceRegistryDefaultsTest(unittest.TestCase):
     def test_pipeline_entries_registered_with_cadence(self) -> None:
         hero_details = SOURCE_BY_ID["hsreplay_battlegrounds_hero_details"]
         self.assertEqual(hero_details.kind, "pipeline")
-        # Weekly timer (Mon 04:35): 168h period + 24h slack.
-        self.assertEqual(hero_details.stale_hours, 192)
+        # Mon/Thu timer: 96h maximum gap + 24h slack.
+        self.assertEqual(hero_details.stale_hours, 120)
         self.assertEqual(hero_details.site, "hsreplay")
         self.assertEqual(hero_details.category, "battlegrounds")
         self.assertEqual(hero_details.url, "https://hsreplay.net/battlegrounds/heroes/")
@@ -75,7 +75,7 @@ class PerSourceStaleHoursTest(unittest.TestCase):
     """find_stale_sources uses source.stale_hours over the global threshold."""
 
     def _run(self, age_hours: float) -> list[dict]:
-        source = SOURCE_BY_ID["hsreplay_battlegrounds_hero_details"]  # stale_hours=192
+        source = SOURCE_BY_ID["hsreplay_battlegrounds_hero_details"]  # stale_hours=120
         fetched_at = _iso_hours_ago(age_hours)
         status = {
             "source_id": source.id,
@@ -94,11 +94,11 @@ class PerSourceStaleHoursTest(unittest.TestCase):
             return find_stale_sources(include_ok=True)
 
     def test_age_100h_below_pipeline_cadence_not_stale(self) -> None:
-        # Global threshold is 12h; the per-source 192h wins.
+        # Global threshold is 12h; the per-source 120h wins.
         self.assertEqual(self._run(100), [])
 
-    def test_age_200h_above_pipeline_cadence_stale(self) -> None:
-        found = self._run(200)
+    def test_age_121h_above_pipeline_cadence_stale(self) -> None:
+        found = self._run(121)
         self.assertEqual(
             [item["source_id"] for item in found],
             ["hsreplay_battlegrounds_hero_details"],

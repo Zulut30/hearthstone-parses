@@ -1,0 +1,11 @@
+{
+  "lines": [
+    "Tier", "Hero", "Pick Rate", "Placement Distribution",
+    "A.F. Kay", "Your first two turns are skipped.", "8.4%",
+    "Ragnaros the Firelord", "After you kill 25 enemy minions, get Sulfuras.", "6.2%"
+  ],
+  "expected": [
+    {"hero": "A.F. Kay", "description": "Your first two turns are skipped.", "pick_rate": "8.4%"},
+    {"hero": "Ragnaros the Firelord", "description": "After you kill 25 enemy minions, get Sulfuras.", "pick_rate": "6.2%"}
+  ]
+}

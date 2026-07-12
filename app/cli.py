@@ -92,6 +92,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "firecrawl-map-hsreplay",
         help="Run Firecrawl /v2/map for hsreplay.net and rebuild the derived HSReplay index.",
     )
+    sub.add_parser(
+        "rebuild-hsreplay-index",
+        help="Rebuild the derived HSReplay index from current cached datasets without Firecrawl credits.",
+    )
     archetypes = sub.add_parser(
         "refresh-hsreplay-archetypes",
         help="Refresh the local SQLite database with HSReplay Standard archetype snapshots.",
@@ -125,6 +129,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Import Playwright storage_state JSON (export from logged-in browser).",
     )
     imp.add_argument("path", type=Path, help="Path to storage_state JSON file.")
+    vicious_imp = sub.add_parser(
+        "vicious-import-storage",
+        help="Import Vicious Syndicate Playwright storage_state or Cookie-Editor JSON.",
+    )
+    vicious_imp.add_argument("path", type=Path, help="Path to exported cookie JSON file.")
     enrich = sub.add_parser("enrich-links", help="Rebuild structured data from cached links (no refetch).")
     enrich.add_argument("--source", action="append", default=[], help="Source id to enrich.")
     enrich.add_argument("--all-hsreplay", action="store_true", help="All HSReplay sources.")
@@ -308,6 +317,14 @@ def main(argv: list[str] | None = None) -> int:
         result = refresh_hsreplay_map_and_index()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
+    if args.command == "rebuild-hsreplay-index":
+        from .firecrawl_map import build_hsreplay_index
+        from .fetcher import RefreshLock
+
+        with RefreshLock():
+            result = build_hsreplay_index()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
     if args.command == "refresh-hsreplay-archetypes":
         from .hsreplay_archetypes_db import (
             export_latest_archetypes_json,
@@ -379,6 +396,12 @@ def main(argv: list[str] | None = None) -> int:
         from .hsreplay_auth import import_storage_state
 
         dest = import_storage_state(args.path)
+        print(json.dumps({"ok": True, "storage": str(dest)}, indent=2))
+        return 0
+    if args.command == "vicious-import-storage":
+        from .vicious_syndicate_auth import import_vicious_syndicate_storage
+
+        dest = import_vicious_syndicate_storage(args.path)
         print(json.dumps({"ok": True, "storage": str(dest)}, indent=2))
         return 0
     if args.command == "telegram-setup":

@@ -1,8 +1,8 @@
 [Unit]
-Description=Refresh HSReplay Battlegrounds hero detail cache weekly
+Description=Refresh HSReplay Battlegrounds hero detail cache twice weekly
 
 [Timer]
-OnCalendar=Mon *-*-* 04:35:00 Europe/Warsaw
+OnCalendar=Mon,Thu *-*-* 04:35:00 Europe/Warsaw
 AccuracySec=10min
 Persistent=true
 

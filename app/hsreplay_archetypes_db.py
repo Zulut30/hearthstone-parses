@@ -824,15 +824,20 @@ def _row_dict(row: Any) -> dict[str, Any]:
     return dict(row) if row is not None else {}
 
 
-def _latest_snapshot_ids(rank_range: str, game_type: str) -> str:
+def _current_snapshot_ids() -> str:
     return """
-        SELECT MAX(s.id) AS id
-        FROM archetype_snapshots s
-        JOIN archetype_refresh_runs r ON r.id = s.run_id
-        WHERE r.state IN ('ok', 'partial')
-          AND s.rank_range = ?
-          AND s.game_type = ?
-        GROUP BY s.archetype_id
+        SELECT current_s.id
+        FROM archetype_snapshots current_s
+        WHERE current_s.run_id = (
+            SELECT r.id
+            FROM archetype_refresh_runs r
+            WHERE r.source = ?
+              AND r.state = 'ok'
+              AND r.game_type = ?
+              AND r.rank_range = ?
+            ORDER BY r.completed_at DESC, r.id DESC
+            LIMIT 1
+        )
     """
 
 
@@ -848,8 +853,8 @@ def list_archetype_snapshots(
     init_db()
     conn = get_db_connection()
     try:
-        where = ["s.id IN (" + _latest_snapshot_ids(rank_range, game_type) + ")"]
-        params: list[Any] = [rank_range, game_type]
+        where = ["s.id IN (" + _current_snapshot_ids() + ")"]
+        params: list[Any] = [SOURCE, game_type, rank_range]
         if class_name:
             where.append("a.player_class = ?")
             params.append(class_name)
@@ -865,7 +870,7 @@ def list_archetype_snapshots(
         rows = conn.execute(
             """
             SELECT
-                s.id AS snapshot_id, s.archetype_id, a.name, a.slug, a.player_class,
+                s.id AS snapshot_id, s.run_id, s.archetype_id, a.name, a.slug, a.player_class,
                 a.class_name, a.url, s.fetched_at, s.as_of_popularity,
                 s.total_games, s.win_rate, s.pct_of_class, s.pct_of_total,
                 s.rank_range, s.game_type, s.region
@@ -883,19 +888,21 @@ def get_latest_archetype_snapshot(archetype_id: int, *, rank_range: str = "LEGEN
     init_db()
     conn = get_db_connection()
     try:
-        row = conn.execute(
+        query = (
             """
             SELECT
                 s.*, a.name, a.slug, a.player_class, a.class_name, a.url
             FROM archetype_snapshots s
             JOIN hsreplay_archetypes a ON a.archetype_id = s.archetype_id
-            JOIN archetype_refresh_runs r ON r.id = s.run_id
-            WHERE s.archetype_id = ? AND s.rank_range = ? AND s.game_type = ?
-              AND r.state IN ('ok', 'partial')
-            ORDER BY s.id DESC
-            LIMIT 1
-            """,
-            (archetype_id, rank_range, game_type),
+            WHERE s.archetype_id = ?
+              AND s.id IN (
+            """
+            + _current_snapshot_ids()
+            + ")"
+        )
+        row = conn.execute(
+            query,
+            (archetype_id, SOURCE, game_type, rank_range),
         ).fetchone()
         return _row_dict(row) if row else None
     finally:

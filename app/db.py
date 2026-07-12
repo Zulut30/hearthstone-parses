@@ -340,6 +340,10 @@ def init_db() -> None:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_format_updated ON decks(format, updated_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_card_pop_history ON card_popularity_history(source_id, card_name, recorded_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_runs_latest ON archetype_refresh_runs(source, state, completed_at);")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_archetype_runs_current "
+                "ON archetype_refresh_runs(source, state, game_type, rank_range, completed_at, id);"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archetypes_class ON hsreplay_archetypes(player_class, updated_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_snapshots_latest ON archetype_snapshots(archetype_id, rank_range, game_type, fetched_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_archetype_snapshots_run ON archetype_snapshots(run_id);")
