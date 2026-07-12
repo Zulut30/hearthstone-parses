@@ -163,16 +163,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return True, "ok"
 
     if source.site == "vicious-syndicate":
-        structured = parsed.get("structured") or {}
-        if structured.get("type") == "vicious_live":
-            class_distribution = structured.get("class_distribution") or []
-            tier_list = structured.get("tier_list") or []
-            tier_decks = sum(len(row.get("decks") or []) for row in tier_list)
-            if len(class_distribution) < 8:
-                return False, f"vicious live too few classes ({len(class_distribution)})"
-            if len(tier_list) < 3 or tier_decks < 20:
-                return False, f"vicious live too few tier decks ({tier_decks})"
-            return True, "ok"
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):

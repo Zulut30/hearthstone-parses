@@ -82,9 +82,12 @@ class HealthEndpointTest(unittest.TestCase):
         self.assertFalse(payload["serving_ok"])
         self.assertTrue(payload["degraded"])
         self.assertEqual(payload["semantic_failed_sources"], [source.id])
-        self.assertEqual(
-            payload["semantic_failures"][0]["issues"][0]["code"],
+        self.assertIn(
             "vicious_live.too_few_named_archetypes",
+            {
+                issue["code"]
+                for issue in payload["semantic_failures"][0]["issues"]
+            },
         )
 
 

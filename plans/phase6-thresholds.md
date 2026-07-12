@@ -15,7 +15,7 @@ and the replacement has a focused regression test.
 | decks ≥5 | MetaStats decks | `SourceContract` (current minimum 40) | old weaker branch removed; tested by contract suite |
 | matchups ≥ configured 10 | MetaStats matchups | `SourceContract` (current minimum 50) | old weaker branch removed; tested by contract suite |
 | decks ≥5 | Hearthstone Decks | `SourceContract` (current minimum 40) | old weaker branch removed; tested by contract suite |
-| classes ≥8, tier brackets ≥3, tier rows ≥20 | Vicious Live | `source_validators` + contract | pending |
+| classes ≥8, tier brackets ≥3, tier rows ≥20 | Vicious Live | `source_validators` + contract | transferred + tested; old branch removed |
 | radars ≥5 | Vicious radars | `SourceContract` | old branch removed; tested |
 | groups ≥10 and at least one `key_card` | Arena legendary groups | contract + type validator | transferred + tested; old branch removed |
 | comps ≥3 and ≥max(3, half) with cards | BG comps | type validator | pending |

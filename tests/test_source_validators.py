@@ -124,12 +124,14 @@ class SourceValidatorsTest(unittest.TestCase):
         ]
         structured = {
             "type": "vicious_live",
+            "class_distribution": [{"class": f"Class {idx}"} for idx in range(8)],
             "deck_distribution": [{"deck": name} for name in deck_names],
             "tier_list": [
                 {
-                    "rank_bracket": "All ranks",
+                    "rank_bracket": bracket,
                     "decks": [{"deck": name, "winrate": "50.00%"} for name in deck_names],
                 }
+                for bracket in ("All ranks", "Legend", "Diamond 1-4", "Diamond 5-10")
             ],
         }
 
@@ -137,6 +139,26 @@ class SourceValidatorsTest(unittest.TestCase):
 
         self.assertTrue(report.ok)
         self.assertEqual(report.metrics["named_archetypes"], 5)
+
+    def test_vicious_live_rejects_sparse_structural_payload(self) -> None:
+        structured = {
+            "type": "vicious_live",
+            "class_distribution": [{"class": "Mage"}],
+            "deck_distribution": [{"deck": "Spell Mage"}],
+            "tier_list": [
+                {
+                    "rank_bracket": "All ranks",
+                    "decks": [{"deck": "Spell Mage", "winrate": "50%"}],
+                }
+            ],
+        }
+
+        report = validate_structured("vicious_syndicate_live_beta", structured)
+
+        self.assertFalse(report.ok)
+        codes = {issue.code for issue in report.issues}
+        self.assertIn("vicious_live.too_few_classes", codes)
+        self.assertIn("vicious_live.too_few_tier_decks", codes)
 
     def test_vicious_radars_reject_stale_issue_despite_fresh_fetch(self) -> None:
         structured = {

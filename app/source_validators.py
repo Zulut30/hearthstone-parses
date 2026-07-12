@@ -177,6 +177,13 @@ def _validate_bg_heroes(structured: dict[str, Any]) -> ValidationReport:
 
 def _validate_vicious_live(structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
+    class_distribution = [
+        row for row in (structured.get("class_distribution") or []) if isinstance(row, dict)
+    ]
+    tier_list = [
+        row for row in (structured.get("tier_list") or []) if isinstance(row, dict)
+    ]
+    tier_deck_count = sum(len(row.get("decks") or []) for row in tier_list)
     distribution_names = {
         str(row.get("deck") or "").strip()
         for row in (structured.get("deck_distribution") or [])
@@ -203,9 +210,24 @@ def _validate_vicious_live(structured: dict[str, Any]) -> ValidationReport:
             "named_archetypes": len(named_archetypes),
             "placeholder_decks": len(placeholder_names),
             "placeholder_ratio": round(placeholder_ratio, 4),
+            "classes": len(class_distribution),
+            "tier_brackets": len(tier_list),
+            "tier_decks": tier_deck_count,
         }
     )
 
+    if len(class_distribution) < 8:
+        report.add_issue(
+            "vicious_live.too_few_classes",
+            f"vicious live too few classes ({len(class_distribution)} < 8)",
+            field="class_distribution",
+        )
+    if len(tier_list) < 3 or tier_deck_count < 20:
+        report.add_issue(
+            "vicious_live.too_few_tier_decks",
+            f"vicious live tier data too small ({len(tier_list)} brackets, {tier_deck_count} decks)",
+            field="tier_list",
+        )
     if len(named_archetypes) < 3:
         report.add_issue(
             "vicious_live.too_few_named_archetypes",
@@ -219,7 +241,15 @@ def _validate_vicious_live(structured: dict[str, Any]) -> ValidationReport:
             field="deck",
         )
     report.score = round(
-        min(len(named_archetypes) / 8.0, 1.0) * (1.0 - placeholder_ratio),
+        sum(
+            (
+                min(len(class_distribution) / 8.0, 1.0),
+                min(len(tier_list) / 3.0, 1.0),
+                min(tier_deck_count / 20.0, 1.0),
+                min(len(named_archetypes) / 8.0, 1.0) * (1.0 - placeholder_ratio),
+            )
+        )
+        / 4,
         4,
     )
     return report
