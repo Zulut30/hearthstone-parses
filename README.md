@@ -27,7 +27,13 @@ https://github.com/Zulut30/hearthstone-parses
 
 ## Подробный каталог источников
 
-Ниже перечислены все production-источники из `app/sources.py`. Каждый dataset доступен через:
+В реестре **46 источников: 44 scrape + 2 dedicated pipeline**. Авторитетная таблица генерируется напрямую из `app.sources.SOURCES`: [docs/SOURCES.md](docs/SOURCES.md). Проверка синхронизации входит в pytest; обновление после изменения реестра:
+
+```bash
+python scripts/generate-source-catalog.py
+```
+
+Каждый dataset доступен через:
 
 ```text
 GET /datasets/{source_id}
@@ -126,7 +132,7 @@ MetaStats - альтернативный public источник ranked коло
 
 ### Общие гарантии качества данных
 
-- Каждый source получает status: `ok`, `quality_error`, `fetch_error`, `partial` или `ok_cached`.
+- Каждый source получает state из `SourceState`: `ok`, `partial`, `fetch_error`, `http_error`, `blocked_by_protection`, `proxy_required`, `quality_error`, `never_fetched`. `ok_cached` используется только как вычисляемый `effective_state`, не как сохранённый source state.
 - `source_contracts.py` задаёт минимальные строки, обязательные поля, допустимый fallback и regression thresholds для критичных источников.
 - `dataset_regression.py` не даёт перезаписать хороший dataset резко уменьшившимся или неполным payload.
 - Для premium/anti-bot источников parser сохраняет последний хороший dataset, если live refresh временно упал.
