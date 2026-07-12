@@ -13,8 +13,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 # Give every pytest session an isolated data root up front so tests never read or
 # write production parser state from /var/lib/hs-data-api.
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix="hs-data-api-tests-")
-os.environ.setdefault("HS_API_DATA_DIR", _TEST_DATA_DIR)
-os.environ.setdefault("PYTHON_ENV", "test")
+os.environ["HS_API_DATA_DIR"] = _TEST_DATA_DIR
+os.environ["PYTHON_ENV"] = "test"
 
 
 def pytest_sessionfinish(session, exitstatus) -> None:  # type: ignore[no-untyped-def]

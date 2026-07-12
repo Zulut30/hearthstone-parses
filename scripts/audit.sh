@@ -25,7 +25,13 @@ echo "=== Unit tests ==="
 if "$VENV" -m pytest -q; then
   echo "tests: OK"
 else
-  echo "tests: FAILED or skipped (install requirements.txt and pytest in venv)"
+  status=$?
+  if [[ "$status" -eq 5 ]]; then
+    echo "tests: FAILED (no tests collected)"
+  else
+    echo "tests: FAILED (pytest exit $status)"
+  fi
+  exit "$status"
 fi
 echo
 

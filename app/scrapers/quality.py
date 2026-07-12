@@ -35,7 +35,7 @@ def looks_like_real_page(html: str, source: Source) -> bool:
         return False
     contract = get_contract(source.id)
     min_html_bytes = contract.min_html_bytes if contract else 2_000
-    if len(html) < min_html_bytes:
+    if len(html.encode("utf-8")) < min_html_bytes:
         return False
     if source.site == "hsreplay":
         return bool(
@@ -188,6 +188,8 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return True, "ok"
 
     if source.site == "vicious-syndicate":
+        if not structured:
+            return False, "vicious-syndicate structured data missing"
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):

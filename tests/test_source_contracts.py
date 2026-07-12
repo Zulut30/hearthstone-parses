@@ -24,6 +24,22 @@ class SourceContractsTest(unittest.TestCase):
         self.assertFalse(looks_like_real_page("hsguru.com".ljust(7_999, "x"), streamer))
         self.assertTrue(looks_like_real_page("hsguru.com".ljust(8_000, "x"), streamer))
 
+    def test_page_size_threshold_counts_utf8_bytes(self) -> None:
+        meta = SOURCE_BY_ID["hsguru_meta_standard_legend"]
+        multibyte_page = "hsguru.com" + "я" * 12_495
+
+        self.assertLess(len(multibyte_page), 25_000)
+        self.assertEqual(len(multibyte_page.encode("utf-8")), 25_000)
+        self.assertTrue(looks_like_real_page(multibyte_page, meta))
+
+    def test_vicious_page_without_structured_data_is_rejected(self) -> None:
+        source = SOURCE_BY_ID["vicious_syndicate_live_beta"]
+
+        ok, reason = validate_parsed_data(source, {"title": "Data Reaper Live"})
+
+        self.assertFalse(ok)
+        self.assertIn("structured data missing", reason)
+
     def test_hsguru_streamer_decks_keeps_public_source_identity(self) -> None:
         source = SOURCE_BY_ID["hsguru_streamer_decks_legend_1000"]
 
