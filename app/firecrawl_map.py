@@ -235,6 +235,10 @@ def build_hsreplay_index() -> dict[str, Any]:
             )
 
     map_payload = load_hsreplay_map() or {}
+    standard_minions = _unique_by(standard_minions, ("dbfId", "name"))
+    battlegrounds_minions = _unique_by(battlegrounds_minions, ("dbfId", "name"))
+    battlegrounds_heroes = _unique_by(battlegrounds_heroes, ("dbfId", "hero"))
+    standard_archetypes = _unique_by(standard_archetypes, ("archetype_id", "archetype"))
     result = {
         "ok": True,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -252,10 +256,10 @@ def build_hsreplay_index() -> dict[str, Any]:
             "battlegrounds_heroes": len(battlegrounds_heroes),
             "standard_unique_archetypes": len(standard_archetypes),
         },
-        "standard_minions": _unique_by(standard_minions, ("dbfId", "name")),
-        "battlegrounds_minions": _unique_by(battlegrounds_minions, ("dbfId", "name")),
-        "battlegrounds_heroes": _unique_by(battlegrounds_heroes, ("dbfId", "hero")),
-        "standard_unique_archetypes": _unique_by(standard_archetypes, ("archetype_id", "archetype")),
+        "standard_minions": standard_minions,
+        "battlegrounds_minions": battlegrounds_minions,
+        "battlegrounds_heroes": battlegrounds_heroes,
+        "standard_unique_archetypes": standard_archetypes,
     }
     quality_errors = [
         f"{name} too small ({int(result['counts'].get(name) or 0)} < {minimum})"

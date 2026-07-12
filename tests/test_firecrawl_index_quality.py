@@ -81,3 +81,19 @@ def test_derived_index_preserves_previous_file_when_one_input_collapses() -> Non
         build_hsreplay_index()
 
     write_json.assert_not_called()
+
+
+def test_derived_index_quality_counts_unique_entities_not_duplicate_rows() -> None:
+    datasets = _datasets()
+    duplicate = datasets["hsreplay_battlegrounds_minions"]["minions"][0]
+    datasets["hsreplay_battlegrounds_minions"] = {"minions": [duplicate] * 200}
+
+    with (
+        patch("app.firecrawl_map._structured", side_effect=lambda source_id: datasets[source_id]),
+        patch("app.firecrawl_map.load_hsreplay_map", return_value={"fetched_at": "now", "url_count": 3000}),
+        patch("app.firecrawl_map._write_json") as write_json,
+        pytest.raises(RuntimeError, match=r"battlegrounds_minions too small \(1 < 150\)"),
+    ):
+        build_hsreplay_index()
+
+    write_json.assert_not_called()
