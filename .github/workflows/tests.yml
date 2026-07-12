@@ -21,3 +21,11 @@ jobs:
           cache: pip
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: docker build --no-cache --tag hs-data-api:ci .
