@@ -30,13 +30,15 @@ _cache_en: dict[str, Any] | None = None
 _cache_ru: dict[str, Any] | None = None
 _by_dbf: dict[int, dict[str, Any]] | None = None
 _by_id: dict[str, dict[str, Any]] | None = None
+_by_id_ru: dict[str, dict[str, Any]] | None = None
 _by_name_en: dict[str, dict[str, Any]] | None = None
 _by_name_ru: dict[str, dict[str, Any]] | None = None
 
 
 def _invalidate_indexes(locale: str) -> None:
-    global _by_dbf, _by_id, _by_name_en, _by_name_ru
+    global _by_dbf, _by_id, _by_id_ru, _by_name_en, _by_name_ru
     if locale == "ruRU":
+        _by_id_ru = None
         _by_name_ru = None
         return
     _by_dbf = None
@@ -142,28 +144,27 @@ def _load_raw_cards(locale: str = "enUS") -> list[dict[str, Any]]:
         return cards
 
 
-def cards_by_id() -> dict[str, dict[str, Any]]:
-    global _by_id
-    cards = _load_raw_cards()
-    if _by_id is None:
-        _by_id = {}
+def cards_by_id(locale: str = "enUS") -> dict[str, dict[str, Any]]:
+    global _by_id, _by_id_ru
+    cards = _load_raw_cards(locale)
+    target = _by_id_ru if locale == "ruRU" else _by_id
+    if target is None:
+        target = {}
         for card in cards:
             card_id = card.get("id")
             if card_id:
-                _by_id[str(card_id)] = card
-    return _by_id
+                target[str(card_id)] = card
+        if locale == "ruRU":
+            _by_id_ru = target
+        else:
+            _by_id = target
+    return target
 
 
 def card_from_id(card_id: str, *, locale: str = "ruRU") -> dict[str, Any]:
-    card = cards_by_id().get(card_id)
-    if not card and locale == "ruRU":
-        card = cards_by_id().get(card_id)
-    meta = card_label(card)
-    if locale == "ruRU" and card:
-        ru = cards_by_name("ruRU").get((card.get("name") or "").lower())
-        if ru and ru.get("name"):
-            meta["name"] = ru["name"]
-    return meta
+    localized = cards_by_id(locale).get(card_id)
+    card = localized or cards_by_id("enUS").get(card_id)
+    return card_label(card)
 
 
 def cards_by_dbfid() -> dict[int, dict[str, Any]]:

@@ -14,7 +14,7 @@ def reset_cards_index(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cards_index, "CACHE_PATH_EN", tmp_path / "cards.enUS.json")
     monkeypatch.setattr(cards_index, "CACHE_PATH_RU", tmp_path / "cards.ruRU.json")
     monkeypatch.setattr(cards_index, "MIN_CARD_COUNT", 1)
-    for name in ("_cache_en", "_cache_ru", "_by_dbf", "_by_id", "_by_name_en", "_by_name_ru"):
+    for name in ("_cache_en", "_cache_ru", "_by_dbf", "_by_id", "_by_id_ru", "_by_name_en", "_by_name_ru"):
         monkeypatch.setattr(cards_index, name, None)
 
 
@@ -64,3 +64,19 @@ def test_truncated_refresh_does_not_replace_complete_cache(monkeypatch: pytest.M
     assert len(cards_index.cards_by_id()) == 10
     persisted = json.loads(cards_index.CACHE_PATH_EN.read_text(encoding="utf-8"))
     assert len(persisted["cards"]) == 10
+
+
+def test_card_from_id_uses_locale_id_instead_of_translated_name_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    english = [{"id": "CARD_1", "dbfId": 1, "name": "Arcane Test"}]
+    russian = [{"id": "CARD_1", "dbfId": 1, "name": "Тайное испытание"}]
+    monkeypatch.setattr(
+        cards_index.httpx,
+        "get",
+        Mock(side_effect=[_response(russian), _response(english)]),
+    )
+
+    localized = cards_index.card_from_id("CARD_1", locale="ruRU")
+
+    assert localized["name"] == "Тайное испытание"
