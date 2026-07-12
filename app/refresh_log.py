@@ -3,7 +3,6 @@ from __future__ import annotations
 import gzip
 import json
 import logging
-import os
 import shutil
 import subprocess
 import threading
@@ -17,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
-from .config import log_rotate_max_age_days, log_rotate_max_bytes, stale_dataset_hours
+from .config import build_id, log_rotate_max_age_days, log_rotate_max_bytes, stale_dataset_hours
 from .hsreplay_auth_status import hsreplay_auth_status
 from .source_state import ERROR_STATES, WARN_STATES, SourceState
 from .storage import load_dataset, load_status, root_dir
@@ -166,7 +165,7 @@ def runtime_version_info() -> dict[str, Any]:
     app_root = Path(__file__).resolve().parents[1]
     info: dict[str, Any] = {
         "app": app_root.name,
-        "build_id": os.environ.get("HS_BUILD_ID") or None,
+        "build_id": build_id(),
         "git_commit": None,
     }
     try:

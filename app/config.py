@@ -12,6 +12,41 @@ DEFAULT_HSREPLAY_JSON_CHANNELS = "curl_cffi,flaresolverr"
 DEFAULT_HSREPLAY_MARKDOWN_CHANNELS = "flaresolverr,curl_cffi"
 
 
+def runtime_display() -> str | None:
+    value = os.environ.get("DISPLAY", "").strip()
+    return value or None
+
+
+def cloakbrowser_display() -> str:
+    return os.environ.get("HS_CLOAKBROWSER_DISPLAY", ":99").strip() or ":99"
+
+
+def firecrawl_map_hsreplay_url() -> str:
+    return os.environ.get("HS_FIRECRAWL_MAP_HSREPLAY_URL", "https://hsreplay.net").strip()
+
+
+def firecrawl_map_hsreplay_limit(default: int = 5000) -> int:
+    return max(1, int(os.environ.get("HS_FIRECRAWL_MAP_HSREPLAY_LIMIT", str(default))))
+
+
+def build_id() -> str | None:
+    value = os.environ.get("HS_BUILD_ID", "").strip()
+    return value or None
+
+
+def json_backup_keep_per_file() -> int:
+    return max(0, int(os.environ.get("HS_JSON_BACKUP_KEEP_PER_FILE", "5")))
+
+
+def pytest_current_test() -> str | None:
+    value = os.environ.get("PYTEST_CURRENT_TEST", "").strip()
+    return value or None
+
+
+def python_environment() -> str:
+    return os.environ.get("PYTHON_ENV", "").strip().lower()
+
+
 def data_dir() -> Path:
     return Path(os.environ.get("HS_API_DATA_DIR", DEFAULT_DATA_DIR))
 

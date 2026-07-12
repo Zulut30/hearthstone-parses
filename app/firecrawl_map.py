@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
-import os
 from pathlib import Path
 from typing import Any
 from urllib import request
 
-from .config import data_dir, firecrawl_api_key, firecrawl_timeout_ms
+from .config import (
+    data_dir,
+    firecrawl_api_key,
+    firecrawl_map_hsreplay_limit,
+    firecrawl_map_hsreplay_url,
+    firecrawl_timeout_ms,
+)
 from .storage import load_dataset
 
 
@@ -113,8 +118,8 @@ def fetch_hsreplay_firecrawl_map() -> dict[str, Any]:
         raise RuntimeError("FIRECRAWL_API_KEY is not configured")
 
     payload = {
-        "url": os.environ.get("HS_FIRECRAWL_MAP_HSREPLAY_URL", "https://hsreplay.net"),
-        "limit": int(os.environ.get("HS_FIRECRAWL_MAP_HSREPLAY_LIMIT", str(HSREPLAY_MAP_LIMIT))),
+        "url": firecrawl_map_hsreplay_url(),
+        "limit": firecrawl_map_hsreplay_limit(HSREPLAY_MAP_LIMIT),
         "includeSubdomains": False,
         "sitemap": "include",
     }
