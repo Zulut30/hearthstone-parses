@@ -22,8 +22,8 @@ and the replacement has a focused regression test.
 | cards ≥50 and ≥40 with placement stats | BG card stats | type validator | pending |
 | trinkets ≥8 and ≥max(6, half) valid | BG trinkets | type validator | pending |
 | decks ≥1 and at least one `final_deck` | Arena winning decks | contract + type validator | pending |
-| classes ≥8 | Arena class matrix | `SourceContract` | old branch removed; tested |
-| classes ≥10 and ≥10 with stats | Arena class pages | contract + type validator | pending |
+| classes ≥8 | Arena class matrix | contract + type validator | transferred + tested; old branch removed |
+| classes ≥10 and ≥10 with stats | Arena class pages | contract + type validator | transferred + tested; old branch removed |
 | heroes ≥30, names ≥20, stats ≥20 | BG heroes | `source_validators` + contract | transferred + tested; old branch removed |
 | minions ≥50 and ≥40 with stats | BG minions | contract + type validator | pending |
 | compositions ≥5 and ≥5 with stats | BG compositions | contract + type validator | pending |

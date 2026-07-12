@@ -228,14 +228,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             if not any((d.get("final_deck") or []) for d in decks):
                 return False, "arena winning decks missing final_deck"
             return True, "ok"
-        if structured.get("type") == "arena_class_pages":
-            classes = structured.get("classes") or []
-            if len(classes) < 10:
-                return False, f"arena class pages too few ({len(classes)})"
-            with_stats = sum(1 for row in classes if row.get("win_rate") is not None and row.get("pick_rate") is not None)
-            if with_stats < 10:
-                return False, f"arena class pages missing stats ({with_stats}/{len(classes)})"
-            return True, "ok"
         if structured.get("type") == "bg_minions":
             minions = structured.get("minions") or []
             if len(minions) < 50:

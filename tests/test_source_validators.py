@@ -177,6 +177,42 @@ class SourceValidatorsTest(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(report.score, 1.0)
 
+    def test_arena_class_matrix_requires_all_playable_classes(self) -> None:
+        report = validate_structured(
+            "hsreplay_arena",
+            {"type": "arena_class_matrix", "classes": [{"class": idx} for idx in range(7)]},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "arena_class_matrix.too_few_classes",
+            {issue.code for issue in report.issues},
+        )
+
+    def test_arena_class_pages_require_stats_for_ten_classes(self) -> None:
+        good = {
+            "type": "arena_class_pages",
+            "classes": [
+                {"class": idx, "win_rate": "50%", "pick_rate": "10%"}
+                for idx in range(10)
+            ],
+        }
+        bad = {
+            **good,
+            "classes": [
+                {
+                    **row,
+                    **({"pick_rate": None} if idx == 0 else {}),
+                }
+                for idx, row in enumerate(good["classes"])
+            ],
+        }
+
+        self.assertTrue(validate_structured("hsreplay_arena_class_pages_firecrawl", good).ok)
+        report = validate_structured("hsreplay_arena_class_pages_firecrawl", bad)
+        self.assertFalse(report.ok)
+        self.assertIn("arena_class_pages.missing_stats", {issue.code for issue in report.issues})
+
 
 if __name__ == "__main__":
     unittest.main()

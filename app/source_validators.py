@@ -279,10 +279,54 @@ def _validate_vicious_radars(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
+def _validate_arena_class_matrix(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    report.metrics["classes"] = len(classes)
+    if len(classes) < 8:
+        report.add_issue(
+            "arena_class_matrix.too_few_classes",
+            f"arena class stats too few ({len(classes)} < 8)",
+            field="classes",
+        )
+    report.score = round(min(len(classes) / 8.0, 1.0), 4)
+    return report
+
+
+def _validate_arena_class_pages(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    with_stats = sum(
+        1
+        for row in classes
+        if row.get("win_rate") is not None and row.get("pick_rate") is not None
+    )
+    report.metrics.update({"classes": len(classes), "classes_with_stats": with_stats})
+    if len(classes) < 10:
+        report.add_issue(
+            "arena_class_pages.too_few_classes",
+            f"arena class pages too few ({len(classes)} < 10)",
+            field="classes",
+        )
+    if with_stats < 10:
+        report.add_issue(
+            "arena_class_pages.missing_stats",
+            f"arena class pages missing stats ({with_stats}/{len(classes)}; minimum 10)",
+            field="win_rate,pick_rate",
+        )
+    report.score = round(
+        (min(len(classes) / 10.0, 1.0) + min(with_stats / 10.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
     "vicious_syndicate_radars": _validate_vicious_radars,
+    "arena_class_matrix": _validate_arena_class_matrix,
+    "arena_class_pages": _validate_arena_class_pages,
 }
 
 
