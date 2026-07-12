@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import logging
 import random
@@ -49,6 +50,40 @@ CLASS_SLUGS = {
     "Warlock": "warlock-decks",
     "Warrior": "warrior-decks",
 }
+REPORT_INDEX_URL = "https://www.vicioussyndicate.com/tag/data-reaper-report/"
+
+
+def parse_latest_report_metadata(html: str) -> dict[str, str]:
+    soup = BeautifulSoup(html, "lxml")
+    reports: list[dict[str, str | int]] = []
+    for article in soup.select("article"):
+        link = article.find("a", href=re.compile(r"/vs-data-reaper-report-(\d+)/?"))
+        if not link:
+            continue
+        match = re.search(r"/vs-data-reaper-report-(\d+)/?", str(link.get("href") or ""))
+        if not match:
+            continue
+        date_node = article.select_one(".entry-meta-date")
+        published_at = ""
+        if date_node:
+            try:
+                published_at = datetime.strptime(
+                    date_node.get_text(" ", strip=True), "%B %d, %Y"
+                ).date().isoformat()
+            except ValueError:
+                published_at = ""
+        issue = int(match.group(1))
+        reports.append(
+            {
+                "latest_report_issue": issue,
+                "latest_report_url": normalize_radar_url(str(link.get("href") or "")),
+                "latest_report_published_at": published_at,
+            }
+        )
+    if not reports:
+        raise RuntimeError("Vicious Syndicate report index contained no Data Reaper reports")
+    latest = max(reports, key=lambda item: int(item["latest_report_issue"]))
+    return {key: str(value) for key, value in latest.items()}
 
 
 def looks_like_vicious_deck_library(html: str) -> bool:
@@ -405,9 +440,16 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
     semaphore = asyncio.Semaphore(3)
 
     async with httpx.AsyncClient(**httpx_client_kwargs(source.id)) as client:
+        report_index_task = asyncio.create_task(
+            fetch_with_retry(client, REPORT_INDEX_URL, semaphore, source_id=source.id)
+        )
         # Step 1: Discover class indexes & potential archetype pages
         discovery_tasks = [discover_class_radars(client, cls_name, semaphore) for cls_name in CLASSES]
         discovery_results = await asyncio.gather(*discovery_tasks)
+        report_index_response = await report_index_task
+        if report_index_response is None:
+            raise RuntimeError("Could not fetch Vicious Syndicate report index")
+        latest_report = parse_latest_report_metadata(report_index_response.text)
 
         all_items = []
         for res_list in discovery_results:
@@ -507,6 +549,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
     return {
         "type": "vicious_syndicate_radars",
         "issue": issue,
+        **latest_report,
         "classes_summary": list(classes_summary.values()),
         "radars": radars,
         "total_radars": len(radars),

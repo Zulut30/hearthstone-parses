@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 import re
 from typing import Any, Callable
 
@@ -224,9 +225,64 @@ def _validate_vicious_live(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
+def _validate_vicious_radars(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    issue_raw = str(structured.get("issue") or "")
+    latest_issue_raw = str(structured.get("latest_report_issue") or "")
+    issue = int(issue_raw) if issue_raw.isdigit() else None
+    latest_issue = int(latest_issue_raw) if latest_issue_raw.isdigit() else None
+    published_raw = str(structured.get("latest_report_published_at") or "")
+    content_age_days: int | None = None
+    try:
+        published_at = datetime.fromisoformat(published_raw)
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=UTC)
+        content_age_days = max(0, (datetime.now(UTC) - published_at).days)
+    except ValueError:
+        pass
+    report.metrics.update(
+        {
+            "radar_issue": issue,
+            "latest_report_issue": latest_issue,
+            "latest_report_published_at": published_raw or None,
+            "content_age_days": content_age_days,
+        }
+    )
+
+    if issue is None or latest_issue is None:
+        report.add_issue(
+            "vicious_radars.missing_issue_freshness",
+            "vicious radars missing active/latest report issue metadata",
+            field="issue",
+        )
+    elif issue < latest_issue:
+        report.add_issue(
+            "vicious_radars.outdated_issue",
+            f"vicious radar issue is outdated ({issue} < {latest_issue})",
+            field="issue",
+        )
+    if content_age_days is None:
+        report.add_issue(
+            "vicious_radars.missing_published_at",
+            "vicious latest report publication date is missing or invalid",
+            field="latest_report_published_at",
+        )
+    elif content_age_days > 21:
+        report.add_issue(
+            "vicious_radars.stale_content",
+            f"vicious latest report content is stale ({content_age_days} days > 21)",
+            field="latest_report_published_at",
+        )
+    issue_score = 1.0 if issue is not None and issue == latest_issue else 0.0
+    age_score = 1.0 if content_age_days is not None and content_age_days <= 21 else 0.0
+    report.score = (issue_score + age_score) / 2
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
+    "vicious_syndicate_radars": _validate_vicious_radars,
 }
 
 

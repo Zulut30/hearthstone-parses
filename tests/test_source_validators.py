@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 import unittest
 
 from app.scrapers.quality import validate_parsed_data
@@ -136,6 +137,45 @@ class SourceValidatorsTest(unittest.TestCase):
 
         self.assertTrue(report.ok)
         self.assertEqual(report.metrics["named_archetypes"], 5)
+
+    def test_vicious_radars_reject_stale_issue_despite_fresh_fetch(self) -> None:
+        structured = {
+            "type": "vicious_syndicate_radars",
+            "issue": "349",
+            "latest_report_issue": "352",
+            "latest_report_published_at": (datetime.now(UTC) - timedelta(days=10)).date().isoformat(),
+        }
+
+        report = validate_structured("vicious_syndicate_radars", structured)
+
+        self.assertFalse(report.ok)
+        self.assertIn("vicious_radars.outdated_issue", {issue.code for issue in report.issues})
+
+    def test_vicious_radars_reject_old_content_even_when_issue_matches(self) -> None:
+        structured = {
+            "type": "vicious_syndicate_radars",
+            "issue": "352",
+            "latest_report_issue": "352",
+            "latest_report_published_at": (datetime.now(UTC) - timedelta(days=30)).date().isoformat(),
+        }
+
+        report = validate_structured("vicious_syndicate_radars", structured)
+
+        self.assertFalse(report.ok)
+        self.assertIn("vicious_radars.stale_content", {issue.code for issue in report.issues})
+
+    def test_vicious_radars_accept_current_recent_report(self) -> None:
+        structured = {
+            "type": "vicious_syndicate_radars",
+            "issue": "353",
+            "latest_report_issue": "353",
+            "latest_report_published_at": (datetime.now(UTC) - timedelta(days=2)).date().isoformat(),
+        }
+
+        report = validate_structured("vicious_syndicate_radars", structured)
+
+        self.assertTrue(report.ok)
+        self.assertEqual(report.score, 1.0)
 
 
 if __name__ == "__main__":
