@@ -104,9 +104,9 @@ def datasets() -> Envelope[list[DatasetSummary]]:
 
 @router.get("/health", response_model=Envelope[dict[str, Any]])
 def health() -> Envelope[dict[str, Any]]:
-    from ..main import build_health_diagnostics
+    from ..main import cached_health_diagnostics
 
-    diagnostics = build_health_diagnostics()
+    diagnostics = cached_health_diagnostics()
     fetched_at = freshest_timestamp(
         [
             {"fetched_at": (load_dataset(source.id) or {}).get("fetched_at")}

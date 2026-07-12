@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import secrets
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -10,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import api_key, cors_allowed_origins
+from .config import api_key, cors_allowed_origins, python_environment
 from .demo import build_demo_view, build_overview
 from .fetcher import refresh_sources
 from .source_state import SourceState
@@ -28,6 +30,10 @@ ACTIVE_TRINKET_SOURCE_IDS = {
     "hsreplay_battlegrounds_trinkets_lesser",
     "hsreplay_battlegrounds_trinkets_greater",
 }
+_HEALTH_CACHE_SECONDS = 15.0
+_health_cache_lock = threading.Lock()
+_health_cache_at = 0.0
+_health_cache_payload: dict[str, Any] | None = None
 
 app = FastAPI(
     title="Hearthstone Data API",
@@ -153,7 +159,7 @@ def ops_run(run_id: str) -> dict:
 
 @app.get("/ops/health", dependencies=[Depends(require_admin)])
 def ops_health() -> dict:
-    return build_health_diagnostics()
+    return cached_health_diagnostics()
 
 
 @app.get("/demo/overview")
@@ -403,6 +409,21 @@ def build_health_diagnostics() -> dict:
         "cached_count": len(cached_sources),
         "cached_after_failure_count": len(cached_after_failure_sources),
     }
+
+
+def cached_health_diagnostics() -> dict:
+    """Bound repeated health polling while keeping tests and CLI checks exact."""
+    global _health_cache_at, _health_cache_payload
+    if python_environment() == "test":
+        return build_health_diagnostics()
+    now = time.monotonic()
+    with _health_cache_lock:
+        if _health_cache_payload is not None and now - _health_cache_at < _HEALTH_CACHE_SECONDS:
+            return _health_cache_payload
+        payload = build_health_diagnostics()
+        _health_cache_payload = payload
+        _health_cache_at = now
+        return payload
 
 
 @app.get("/health/premium", dependencies=[Depends(require_admin)])

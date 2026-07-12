@@ -429,12 +429,12 @@ def headings(markup: str) -> list[dict[str, str]]:
     return parser.sections
 
 
-def build_wiki_patch(
+def _base_wiki_fields(
     version: str,
     *,
     wiki_rank: int,
-    hs_version: str | None = None,
-    official: dict[str, str] | None = None,
+    hs_version: str | None,
+    official: dict[str, str] | None,
 ) -> dict:
     return {
         "version": version,
@@ -444,6 +444,23 @@ def build_wiki_patch(
         "wiki_url": f"https://hearthstone.wiki.gg/wiki/Patch_{version}",
         "hs_manacost_version": hs_version,
         **(official or {}),
+    }
+
+
+def build_wiki_patch(
+    version: str,
+    *,
+    wiki_rank: int,
+    hs_version: str | None = None,
+    official: dict[str, str] | None = None,
+) -> dict:
+    return {
+        **_base_wiki_fields(
+            version,
+            wiki_rank=wiki_rank,
+            hs_version=hs_version,
+            official=official,
+        ),
         "match_state": "missing_manacost",
         "fetched_at": datetime.now(UTC).isoformat(),
     }
@@ -466,13 +483,12 @@ def build_patch(
     content_text = strip_html(content_html)
     summary = excerpt or "\n".join(content_text.splitlines()[:2])[:500]
     return {
-        "version": version,
-        "display_version": version,
-        "wiki_rank": wiki_rank,
-        "wiki_title": f"Patch {version}",
-        "wiki_url": f"https://hearthstone.wiki.gg/wiki/Patch_{version}",
-        "hs_manacost_version": hs_version,
-        **(official or {}),
+        **_base_wiki_fields(
+            version,
+            wiki_rank=wiki_rank,
+            hs_version=hs_version,
+            official=official,
+        ),
         "title": title,
         "slug": slug,
         "source_url": post.get("link") or source_url,

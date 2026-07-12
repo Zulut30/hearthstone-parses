@@ -50,12 +50,19 @@ def test_quality_module_has_no_per_structured_type_dispatch() -> None:
 
 
 def test_browser_rotators_cannot_bypass_publish_gate() -> None:
-    for relative_path in ("app/rotator.py", "app/scrapers/rotator.py"):
-        tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
-        calls = {
-            node.func.id
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        assert "validate_candidate_for_publish" in calls
-        assert "validate_parsed_data" not in calls
+    tree = ast.parse((ROOT / "app/scrapers/rotator.py").read_text(encoding="utf-8"))
+    calls = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "validate_candidate_for_publish" in calls
+    assert "validate_parsed_data" not in calls
+
+
+def test_legacy_rotator_reexports_canonical_implementation() -> None:
+    from app import rotator as legacy
+    from app.scrapers import rotator as canonical
+
+    assert legacy.fetch_html is canonical.fetch_html
+    assert legacy.reset_backend_circuits is canonical.reset_backend_circuits
