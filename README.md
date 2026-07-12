@@ -29,6 +29,9 @@ https://github.com/Zulut30/hearthstone-parses
 
 В реестре **46 источников: 44 scrape + 2 dedicated pipeline**. Авторитетная таблица генерируется напрямую из `app.sources.SOURCES`: [docs/SOURCES.md](docs/SOURCES.md). Проверка синхронизации входит в pytest; обновление после изменения реестра:
 
+Пользовательский каталог «какие данные можно получить, какие поля возвращаются
+и какой endpoint выбрать»: **[docs/DATA_CATALOG.md](docs/DATA_CATALOG.md)**.
+
 ```bash
 python scripts/generate-source-catalog.py
 ```
