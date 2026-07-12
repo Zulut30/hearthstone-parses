@@ -1,0 +1,34 @@
+# Phase 11 verification — 2026-07-12
+
+## Completed on the stabilization branch
+
+- `python -m pytest -q`: **276 passed**, 4 subtests passed, 0 failed.
+- `python -m compileall -q app`: passed.
+- `python scripts/generate-source-catalog.py --check`: passed; 46 sources (44 scrape + 2 pipeline).
+- `docker compose config --quiet` with a temporary non-secret env file: passed.
+- Anti-pattern checks: no `os.environ.get` outside `app/config.py`; no duplicate `_parse_percent_value` / `_is_percent` helpers.
+- Real Uvicorn smoke on isolated storage: `/health` 200, `/openapi.json` 200 with all eight v1 routes, `/v1/system/sources` returned 46 rows, conditional request returned 304 with an empty body.
+- GitHub review threads: all resolved; PR is mergeable. GitHub pytest must be green on the final SHA before merge.
+
+## Current production baseline (before merge/deploy)
+
+Read-only audit of `https://api.hs-manacost.ru`:
+
+- `/health`: healthy.
+- `/datasets`: 46/46 have a dataset and status `ok`.
+- Local contract + semantic replay over every public dataset: 44 pass both layers.
+- `vicious_syndicate_radars`: contract passes, semantic validation rejects missing latest-report issue/date metadata.
+- `vicious_syndicate_live_beta`: contract passes, semantic validation rejects 11/11 placeholder `Other <Class>` decks and zero named archetypes.
+- `hsreplay_battlegrounds_hero_details`: approximately 251 hours old versus its 192-hour source limit.
+- `/v1/system/sources`: 404, expected because this branch has not been deployed.
+
+The three production data findings are exactly the kind of silent-success/staleness that the new health and publish gates surface; they require refresh after deployment, not weakening validators.
+
+## External steps still required
+
+1. Human review and merge PR #2.
+2. Clean Docker build. This workspace cannot access `/var/run/docker.sock` because user `debian` is not in group `docker`; Podman/Buildah are unavailable.
+3. Deploy the merged commit from `/srv/hs-data-api` using the documented fast-forward-only procedure.
+4. Refresh `vicious_syndicate_radars`, `vicious_syndicate_live_beta`, and `hsreplay_battlegrounds_hero_details`; do not publish candidates that fail the new gates.
+5. Run production smoke for health, all legacy Deckview paths, all v1 routes, ETag/304, UI/docs, and `freshness-check --since-hours 48`.
+6. Observe every Docker timer for 24 hours and confirm no new contract, semantic, freshness, or systemd failures.
