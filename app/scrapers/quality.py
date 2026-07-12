@@ -166,21 +166,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "bg_trinkets":
-            trinkets = structured.get("trinkets") or []
-            if len(trinkets) < 8:
-                return False, f"bg trinkets too few ({len(trinkets)})"
-            valid = [
-                t
-                for t in trinkets
-                if t.get("pick_rate")
-                and t.get("name")
-                and len(str(t["name"])) >= 4
-                and str(t["name"])[0].isalnum()
-            ]
-            if len(valid) < max(6, len(trinkets) // 2):
-                return False, f"bg trinkets invalid names/stats ({len(valid)}/{len(trinkets)})"
-            return True, "ok"
         if structured.get("type") == "bg_minions":
             minions = structured.get("minions") or []
             if len(minions) < 50:

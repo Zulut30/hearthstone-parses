@@ -310,6 +310,30 @@ class SourceValidatorsTest(unittest.TestCase):
             ).ok
         )
 
+    def test_bg_trinkets_reject_placeholder_names(self) -> None:
+        trinkets = [
+            {"name": "—" if idx < 3 else f"Trinket {idx}", "pick_rate": "5%"}
+            for idx in range(8)
+        ]
+        report = validate_structured(
+            "hsreplay_battlegrounds_trinkets_lesser",
+            {"type": "bg_trinkets", "trinkets": trinkets},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "bg_trinkets.invalid_names_or_stats",
+            {issue.code for issue in report.issues},
+        )
+        for idx in range(3):
+            trinkets[idx]["name"] = f"Trinket fixed {idx}"
+        self.assertTrue(
+            validate_structured(
+                "hsreplay_battlegrounds_trinkets_lesser",
+                {"type": "bg_trinkets", "trinkets": trinkets},
+            ).ok
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

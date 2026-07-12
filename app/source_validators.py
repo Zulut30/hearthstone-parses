@@ -464,6 +464,43 @@ def _validate_bg_card_stats(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
+def _validate_bg_trinkets(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    trinkets = [row for row in (structured.get("trinkets") or []) if isinstance(row, dict)]
+    valid = [
+        row
+        for row in trinkets
+        if row.get("pick_rate")
+        and len(str(row.get("name") or "")) >= 4
+        and str(row.get("name") or "")[:1].isalnum()
+    ]
+    minimum_valid = max(6, len(trinkets) // 2)
+    report.metrics.update(
+        {
+            "trinkets": len(trinkets),
+            "valid_trinkets": len(valid),
+            "minimum_valid": minimum_valid,
+        }
+    )
+    if len(trinkets) < 8:
+        report.add_issue(
+            "bg_trinkets.too_few_rows",
+            f"bg trinkets too few ({len(trinkets)} < 8)",
+            field="trinkets",
+        )
+    if len(valid) < minimum_valid:
+        report.add_issue(
+            "bg_trinkets.invalid_names_or_stats",
+            f"bg trinkets invalid names/stats ({len(valid)}/{len(trinkets)}; minimum {minimum_valid})",
+            field="name,pick_rate",
+        )
+    report.score = round(
+        (min(len(trinkets) / 8.0, 1.0) + min(len(valid) / max(minimum_valid, 1), 1.0)) / 2,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -474,6 +511,7 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "arena_legendary_groups": _validate_arena_legendary_groups,
     "bg_comps": _validate_bg_comps,
     "bg_card_stats": _validate_bg_card_stats,
+    "bg_trinkets": _validate_bg_trinkets,
 }
 
 

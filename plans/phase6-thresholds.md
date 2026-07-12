@@ -20,7 +20,7 @@ and the replacement has a focused regression test.
 | groups ≥10 and at least one `key_card` | Arena legendary groups | contract + type validator | transferred + tested; old branch removed |
 | comps ≥3 and ≥max(3, half) with cards | BG comps | type validator | transferred + tested; old branch removed |
 | cards ≥50 and ≥40 with placement stats | BG card stats | type validator | transferred + tested; old branch removed |
-| trinkets ≥8 and ≥max(6, half) valid | BG trinkets | type validator | pending |
+| trinkets ≥8 and ≥max(6, half) valid | BG trinkets | type validator | transferred + tested; old branch removed |
 | decks ≥1 and at least one `final_deck` | Arena winning decks | contract + type validator | transferred + tested; old branch removed |
 | classes ≥8 | Arena class matrix | contract + type validator | transferred + tested; old branch removed |
 | classes ≥10 and ≥10 with stats | Arena class pages | contract + type validator | transferred + tested; old branch removed |
