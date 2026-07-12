@@ -174,8 +174,59 @@ def _validate_bg_heroes(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
+def _validate_vicious_live(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    distribution_names = {
+        str(row.get("deck") or "").strip()
+        for row in (structured.get("deck_distribution") or [])
+        if isinstance(row, dict) and _valid_name(row.get("deck"))
+    }
+    tier_names = {
+        str(deck.get("deck") or "").strip()
+        for bracket in (structured.get("tier_list") or [])
+        if isinstance(bracket, dict)
+        for deck in (bracket.get("decks") or [])
+        if isinstance(deck, dict) and _valid_name(deck.get("deck"))
+    }
+    deck_names = distribution_names | tier_names
+    placeholder_names = {
+        name
+        for name in deck_names
+        if re.fullmatch(r"(?:Other|Unknown)\s+\S+", name, flags=re.IGNORECASE)
+    }
+    named_archetypes = deck_names - placeholder_names
+    placeholder_ratio = len(placeholder_names) / max(len(deck_names), 1)
+    report.metrics.update(
+        {
+            "unique_decks": len(deck_names),
+            "named_archetypes": len(named_archetypes),
+            "placeholder_decks": len(placeholder_names),
+            "placeholder_ratio": round(placeholder_ratio, 4),
+        }
+    )
+
+    if len(named_archetypes) < 3:
+        report.add_issue(
+            "vicious_live.too_few_named_archetypes",
+            f"vicious live named archetypes too few ({len(named_archetypes)} < 3)",
+            field="deck",
+        )
+    if placeholder_ratio > 0.75:
+        report.add_issue(
+            "vicious_live.placeholder_dominated",
+            f"vicious live placeholder decks dominate ({len(placeholder_names)}/{len(deck_names)})",
+            field="deck",
+        )
+    report.score = round(
+        min(len(named_archetypes) / 8.0, 1.0) * (1.0 - placeholder_ratio),
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
+    "vicious_live": _validate_vicious_live,
 }
 
 

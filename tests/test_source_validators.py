@@ -71,6 +71,72 @@ class SourceValidatorsTest(unittest.TestCase):
         self.assertIn("source semantic validation failed", reason)
         self.assertIn("avg_placement diversity", reason)
 
+    def test_vicious_live_rejects_class_placeholders_as_archetypes(self) -> None:
+        placeholder_decks = [
+            {"deck": f"Other {hs_class}", "class": hs_class, "frequency": "9.09%"}
+            for hs_class in (
+                "DeathKnight",
+                "DemonHunter",
+                "Druid",
+                "Hunter",
+                "Mage",
+                "Paladin",
+                "Priest",
+                "Rogue",
+                "Shaman",
+                "Warlock",
+                "Warrior",
+            )
+        ]
+        structured = {
+            "type": "vicious_live",
+            "deck_distribution": placeholder_decks,
+            "tier_list": [
+                {
+                    "rank_bracket": bracket,
+                    "decks": [
+                        {"deck": row["deck"], "winrate": "50.00%"}
+                        for row in placeholder_decks
+                    ],
+                }
+                for bracket in ("All ranks", "Legend", "Diamond 1-4")
+            ],
+        }
+
+        report = validate_structured("vicious_syndicate_live_beta", structured)
+
+        self.assertFalse(report.ok)
+        self.assertEqual(report.metrics["named_archetypes"], 0)
+        self.assertEqual(report.metrics["placeholder_ratio"], 1.0)
+        codes = {issue.code for issue in report.issues}
+        self.assertIn("vicious_live.too_few_named_archetypes", codes)
+        self.assertIn("vicious_live.placeholder_dominated", codes)
+
+    def test_vicious_live_accepts_meaningful_archetype_names(self) -> None:
+        deck_names = [
+            "Rainbow DeathKnight",
+            "Discover Hunter",
+            "Spell Mage",
+            "Starship Rogue",
+            "Control Warrior",
+            "Other Priest",
+        ]
+        structured = {
+            "type": "vicious_live",
+            "deck_distribution": [{"deck": name} for name in deck_names],
+            "tier_list": [
+                {
+                    "rank_bracket": "All ranks",
+                    "decks": [{"deck": name, "winrate": "50.00%"} for name in deck_names],
+                }
+            ],
+        }
+
+        report = validate_structured("vicious_syndicate_live_beta", structured)
+
+        self.assertTrue(report.ok)
+        self.assertEqual(report.metrics["named_archetypes"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()
