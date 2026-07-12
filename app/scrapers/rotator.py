@@ -8,12 +8,13 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 
 from ..config import fetch_backend_max_seconds, fetch_max_retries
+from ..publish_gate import validate_candidate_for_publish
 from .http_resilience import DEFAULT_BACKOFF_SECONDS, backoff_delay_seconds
 from ..refresh_log import log_action
 from ..sources import Source
 from .base import FetchResult
 from .proxy import assert_proxy_configured, burn_proxy_session, source_can_use_flaresolverr_without_proxy
-from .quality import looks_like_real_page, quality_metrics, validate_parsed_data
+from .quality import looks_like_real_page, quality_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -241,18 +242,21 @@ async def fetch_html(
                     raise RuntimeError("page looks like Cloudflare or empty shell")
                 if parse_preview is not None:
                     parsed = parse_preview(result.html)
-                    ok, reason = validate_parsed_data(source, parsed)
-                    if not ok:
+                    gate = validate_candidate_for_publish(source, parsed, backend=name)
+                    if not gate.ok:
                         log_action(
                             "browser.quality.fail",
                             source_id=source.id,
                             backend=name,
                             attempt=attempt,
-                            detail=reason,
+                            detail=gate.reason,
                             level="warn",
-                            extra={"quality_metrics": quality_metrics(source, parsed)},
+                            extra={
+                                "quality_metrics": quality_metrics(source, parsed),
+                                "publish_gate": gate.extra,
+                            },
                         )
-                        raise RuntimeError(f"quality check failed: {reason}")
+                        raise RuntimeError(f"quality check failed: {gate.reason}")
                 logger.info(
                     "Fetched %s via %s attempt=%d (%d bytes)",
                     source.id,
