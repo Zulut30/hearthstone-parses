@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.publish_gate import validate_candidate_for_publish
 from app.sources import SOURCE_BY_ID
@@ -59,6 +60,38 @@ class PublishGateTest(unittest.TestCase):
         self.assertTrue(result.ok, result.reason)
         self.assertEqual(result.reason, "ok")
         self.assertTrue(result.extra["backend_allowed"])
+
+    def test_fallback_parser_is_published_with_warning(self) -> None:
+        source = SOURCE_BY_ID["hsreplay_battlegrounds_trinkets_lesser"]
+        trinkets = [
+            {
+                "name": f"Valid Trinket {index}",
+                "trinket_id": f"BG_TEST_{index}",
+                "pick_rate": "1.0%",
+                "avg_placement": "4.0",
+            }
+            for index in range(80)
+        ]
+        parsed = {
+            "title": "Battlegrounds lesser trinkets",
+            "structured": {
+                "type": "bg_trinkets",
+                "trinkets": trinkets,
+                "parser_level": "fallback_anchor",
+                "dropped_rows": 3,
+            },
+        }
+
+        with patch("app.scrapers.quality.log_action") as log_action:
+            result = validate_candidate_for_publish(source, parsed, backend="firecrawl")
+
+        self.assertTrue(result.ok, result.reason)
+        warning = next(
+            call for call in log_action.call_args_list
+            if call.args and call.args[0] == "source_semantic.validate.warn"
+        )
+        self.assertEqual(warning.kwargs["level"], "warn")
+        self.assertIn("fallback_anchor", warning.kwargs["detail"])
 
 
 if __name__ == "__main__":

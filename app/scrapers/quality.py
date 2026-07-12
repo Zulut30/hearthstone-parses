@@ -123,6 +123,29 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
                 )
             return False, f"source contract failed: {contract_reason}"
         semantic_report = validate_structured(source.id, structured)
+        semantic_warnings = [
+            issue for issue in semantic_report.issues if issue.severity == "warning"
+        ]
+        if semantic_warnings:
+            _log_quality_action(
+                "source_semantic.validate.warn",
+                source_id=source.id,
+                level="warn",
+                detail="; ".join(issue.message for issue in semantic_warnings),
+                extra={
+                    "semantic_score": semantic_report.score,
+                    "semantic_metrics": semantic_report.metrics,
+                    "semantic_issues": [
+                        {
+                            "code": issue.code,
+                            "field": issue.field,
+                            "severity": issue.severity,
+                            "message": issue.message,
+                        }
+                        for issue in semantic_warnings
+                    ],
+                },
+            )
         if not semantic_report.ok:
             _log_quality_action(
                 "source_semantic.validate.fail",
