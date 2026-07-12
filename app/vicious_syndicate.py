@@ -20,6 +20,7 @@ from .scrapers.http_resilience import (
 )
 from .scrapers.proxy import burn_proxy_session, httpx_client_kwargs
 from .sources import Source
+from .vicious_syndicate_auth import vicious_syndicate_cookies_for_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,9 @@ async def fetch_with_retry(
                 # Recreate the client per attempt so a burned sticky proxy session
                 # is reflected on the very next retry.
                 client_kwargs = httpx_client_kwargs(source_id, page_url=url)
+                cookies = vicious_syndicate_cookies_for_fetch()
+                if cookies:
+                    client_kwargs["cookies"] = cookies
                 async with httpx.AsyncClient(**client_kwargs) as attempt_client:
                     resp = await attempt_client.get(url, headers=headers)
                 blocked = is_session_blocked(resp.status_code, resp.text)

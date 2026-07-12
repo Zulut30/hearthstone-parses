@@ -214,6 +214,15 @@ def hsreplay_storage_path() -> Path:
     return Path(os.environ.get("HSREPLAY_STORAGE_PATH", str(data_dir() / "hsreplay-auth.json")))
 
 
+def vicious_syndicate_storage_path() -> Path:
+    return Path(
+        os.environ.get(
+            "VICIOUS_SYNDICATE_STORAGE_PATH",
+            str(data_dir() / "vicious-syndicate-auth.json"),
+        )
+    )
+
+
 def telegram_bot_token() -> str | None:
     value = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     return value or None

@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from .sources import Source
+from .vicious_syndicate_auth import vicious_syndicate_cookies_for_fetch
 
 FIREBASE_BASE = "https://data-reaper.firebaseio.com"
 FIREBASE_AUTH_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
@@ -184,14 +185,26 @@ def _extract(pattern: str, text: str, label: str) -> str:
     return match.group(1)
 
 
-async def _fetch_text(client: httpx.AsyncClient, url: str) -> str:
-    response = await client.get(url, headers={"user-agent": "Mozilla/5.0"})
+async def _fetch_text(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    cookies: dict[str, str] | None = None,
+) -> str:
+    response = await client.get(
+        url,
+        headers={"user-agent": "Mozilla/5.0"},
+        cookies=cookies,
+    )
     response.raise_for_status()
     return response.text
 
 
 async def _firebase_token(client: httpx.AsyncClient) -> str:
-    app_js, build_js = await _fetch_text(client, VS_APP_JS), await _fetch_text(client, VS_PREMIUM_BUILD_JS)
+    cookies = vicious_syndicate_cookies_for_fetch()
+    app_js, build_js = await _fetch_text(
+        client, VS_APP_JS, cookies=cookies
+    ), await _fetch_text(client, VS_PREMIUM_BUILD_JS, cookies=cookies)
     api_key = _extract(r'apiKey:\s*"([^"]+)"', app_js, "Firebase apiKey")
     email = _extract(r"email:\s*'([^']+)'", build_js, "Firebase email")
     password = _extract(r"pw:\s*'([^']+)'", build_js, "Firebase password")

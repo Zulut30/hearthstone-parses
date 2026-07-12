@@ -11,9 +11,10 @@ from app.vicious_syndicate import fetch_with_retry
 
 class _FakeAsyncClient:
     calls = 0
+    last_kwargs: dict[str, object] = {}
 
     def __init__(self, *args: object, **kwargs: object) -> None:
-        pass
+        type(self).last_kwargs = dict(kwargs)
 
     async def __aenter__(self) -> "_FakeAsyncClient":
         return self
@@ -33,6 +34,7 @@ class _FakeAsyncClient:
 class ViciousSyndicateFetchTest(unittest.TestCase):
     def setUp(self) -> None:
         _FakeAsyncClient.calls = 0
+        _FakeAsyncClient.last_kwargs = {}
 
     def test_optional_fetch_404_does_not_use_error_logger(self) -> None:
         async def run() -> None:
@@ -56,6 +58,34 @@ class ViciousSyndicateFetchTest(unittest.TestCase):
             log_http_error.assert_not_called()
             self.assertTrue(
                 any("Optional Vicious fetch failed" in message for message in logs.output)
+            )
+
+        asyncio.run(run())
+
+    def test_fetch_uses_saved_vicious_cookies(self) -> None:
+        async def run() -> None:
+            with (
+                patch("app.vicious_syndicate.httpx.AsyncClient", _FakeAsyncClient),
+                patch("app.vicious_syndicate.httpx_client_kwargs", return_value={}),
+                patch(
+                    "app.vicious_syndicate.vicious_syndicate_cookies_for_fetch",
+                    return_value={"wordpress_logged_in_test": "secret"},
+                ),
+                patch("app.vicious_syndicate.log_http_error"),
+                patch("app.vicious_syndicate.asyncio.sleep", new_callable=AsyncMock),
+                self.assertLogs("app.vicious_syndicate", level="WARNING"),
+            ):
+                await fetch_with_retry(
+                    _client=object(),  # type: ignore[arg-type]
+                    url="https://www.vicioussyndicate.com/deck-library/mage-decks/",
+                    semaphore=asyncio.Semaphore(1),
+                    max_retries=1,
+                    optional=True,
+                )
+
+            self.assertEqual(
+                _FakeAsyncClient.last_kwargs.get("cookies"),
+                {"wordpress_logged_in_test": "secret"},
             )
 
         asyncio.run(run())

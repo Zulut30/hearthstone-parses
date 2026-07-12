@@ -167,6 +167,26 @@ sudo /srv/hs-data-api/scripts/server-readiness.sh --strict --refresh-all  # пе
 ./venv/bin/python -m app.cli refresh --source hsreplay_cards_legend_included_popularity
 ```
 
+## Vicious Syndicate после выхода дополнения
+
+Если radar-страницы требуют браузерную сессию, экспортируйте cookies только с
+домена `vicioussyndicate.com` в формате Playwright storage state или
+Cookie-Editor и импортируйте их:
+
+```bash
+cd /srv/hs-data-api
+./venv/bin/python -m app.cli vicious-import-storage /secure/path/vicious-cookies.json
+./venv/bin/python -m app.cli refresh --source vicious_syndicate_radars
+./venv/bin/python -m app.cli refresh --source vicious_syndicate_live_beta
+./venv/bin/python -m app.cli quality-check
+```
+
+Нормальный результат — `upstream_state=ready`. Состояния
+`upstream_unclassified`, `upstream_stale` и `upstream_unavailable` означают,
+что Vicious ещё не опубликовал полноценные данные. Они должны оставить
+последний валидный cache, а не публиковать заглушки как реальные архетипы.
+Никогда не ослабляйте quality-gate ради зелёного refresh.
+
 ## HSGuru stale/cached-after-failure recovery
 
 Диагностика:

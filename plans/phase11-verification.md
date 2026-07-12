@@ -40,6 +40,20 @@ The three production data findings are exactly the kind of silent-success/stalen
 - The in-process HearthstoneJSON index previously remained frozen until process restart even after its file TTL elapsed. It now refreshes and rebuilds derived ID/name/dbf indexes after 24 hours, writes atomically, rejects payload truncation, serves stale data with a retry backoff during upstream failure, and falls back from unavailable locale data to enUS.
 - Final local suite after card-index hardening: **286 passed**, 4 subtests passed, 0 failed.
 
+## Final Vicious Syndicate verification
+
+- Rechecked live upstream on 2026-07-12: Firebase reports 392,274 games and 11
+  classes, but all 11 archetype buckets are still `Other <Class>`; the parser
+  reports `upstream_unclassified` and publishes zero placeholder decks.
+- The latest report index is issue 352, published 2026-06-18. Radar issue 349
+  remains an upstream-stale condition until Vicious publishes matching radars.
+- Optional Vicious browser cookies can now be imported with
+  `vicious-import-storage`. The storage file is written atomically with mode
+  `0600`, unrelated-domain cookies are discarded, and malformed storage never
+  breaks an otherwise public fetch.
+- Final suite after Vicious session and documentation completion: **296 passed**,
+  4 subtests passed, 0 failed.
+
 ## External steps still required
 
 1. Human review and merge PR #2.
