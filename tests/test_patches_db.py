@@ -4,7 +4,7 @@ import os
 from tempfile import TemporaryDirectory
 import unittest
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from app.main import app
 from app.patches_db import count_patches, get_patch, list_patches, upsert_patch

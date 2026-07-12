@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import sqlite3
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from app.main import app
 from app.public_cache import PUBLIC_CACHE_CONTROL, cache_revision

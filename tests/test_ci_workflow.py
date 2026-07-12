@@ -13,3 +13,4 @@ def test_ci_uses_node24_compatible_official_actions() -> None:
     assert "actions/setup-python@v6" in workflow
     assert "persist-credentials: false" in workflow
     assert "contents: read" in workflow
+    assert "pip install -r requirements-dev.txt" in workflow

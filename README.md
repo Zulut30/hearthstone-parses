@@ -165,6 +165,20 @@ python -m app.server
 
 На production-сервере используйте `scripts/install.sh` и systemd units из `systemd/`.
 
+## Тесты
+
+Dev/test зависимости отделены от production image:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+`httpx2` используется только TestClient-тестами в соответствии с актуальным
+Starlette API; runtime HTTP-клиенты продолжают использовать `httpx`.
+
 ## Основные API endpoints
 
 Public:

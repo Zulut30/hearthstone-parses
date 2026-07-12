@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from app.hsreplay_bg_hero_details import (
     _normalize_hero_power,
