@@ -36,6 +36,7 @@ def test_docker_systemd_installer_covers_every_timer(tmp_path: Path) -> None:
     )
 
     expected_timers = sorted(path.name for path in (ROOT / "systemd").glob("hs-data-api-docker-*.timer"))
+    assert "hs-data-api-docker-rebuild-hsreplay-index.timer" in expected_timers
     installed_timers = sorted(path.name for path in staged_systemd.glob("hs-data-api-docker-*.timer"))
     calls = calls_file.read_text(encoding="utf-8").splitlines()
     enabled_timers = sorted(line.removeprefix("enable --now ") for line in calls if line.startswith("enable --now "))
@@ -43,6 +44,9 @@ def test_docker_systemd_installer_covers_every_timer(tmp_path: Path) -> None:
     assert enabled_timers == expected_timers
     assert calls[0] == "daemon-reload"
     assert (staged_systemd / "hs-data-api-docker.service").is_file()
+    rebuild_service = staged_systemd / "hs-data-api-docker-rebuild-hsreplay-index.service"
+    assert rebuild_service.is_file()
+    assert "rebuild-hsreplay-index" in rebuild_service.read_text(encoding="utf-8")
     assert "/custom/hs-api/docker-compose.yml" in (
         staged_systemd / "hs-data-api-docker-refresh-bg-hero-details.service"
     ).read_text(encoding="utf-8")

@@ -127,6 +127,21 @@ class CurrentSnapshotConsistencyTest(unittest.TestCase):
         self.assertEqual({row["run_id"] for row in payload["archetypes"]}, {first_ok})
         self.assertEqual(get_latest_archetype_snapshot(101)["run_id"], first_ok)
 
+    def test_latest_archetype_run_lookup_has_covering_index(self) -> None:
+        conn = get_db_connection()
+        try:
+            columns = [
+                row[2]
+                for row in conn.execute("PRAGMA index_info(idx_archetype_runs_current)").fetchall()
+            ]
+        finally:
+            conn.close()
+
+        self.assertEqual(
+            columns,
+            ["source", "state", "game_type", "rank_range", "completed_at", "id"],
+        )
+
     def test_archetype_missing_from_new_successful_run_is_not_current(self) -> None:
         self._insert_archetype_run(state="ok", archetype_ids=[101, 102])
         latest_ok = self._insert_archetype_run(state="ok", archetype_ids=[101])

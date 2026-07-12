@@ -835,7 +835,7 @@ def _current_snapshot_ids() -> str:
               AND r.state = 'ok'
               AND r.game_type = ?
               AND r.rank_range = ?
-            ORDER BY COALESCE(r.completed_at, r.started_at) DESC, r.id DESC
+            ORDER BY r.completed_at DESC, r.id DESC
             LIMIT 1
         )
     """
