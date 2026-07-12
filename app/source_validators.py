@@ -321,12 +321,59 @@ def _validate_arena_class_pages(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
+def _validate_arena_winning_decks(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    decks = [row for row in (structured.get("decks") or []) if isinstance(row, dict)]
+    with_final_deck = sum(1 for row in decks if row.get("final_deck"))
+    report.metrics.update({"decks": len(decks), "decks_with_final_deck": with_final_deck})
+    if not decks:
+        report.add_issue(
+            "arena_winning_decks.empty",
+            "arena winning decks empty",
+            field="decks",
+        )
+    if with_final_deck < 1:
+        report.add_issue(
+            "arena_winning_decks.missing_final_deck",
+            "arena winning decks missing final_deck",
+            field="final_deck",
+        )
+    report.score = 1.0 if decks and with_final_deck else 0.0
+    return report
+
+
+def _validate_arena_legendary_groups(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    groups = [row for row in (structured.get("groups") or []) if isinstance(row, dict)]
+    with_key_card = sum(1 for row in groups if row.get("key_card"))
+    report.metrics.update({"groups": len(groups), "groups_with_key_card": with_key_card})
+    if len(groups) < 10:
+        report.add_issue(
+            "arena_legendary_groups.too_few_groups",
+            f"legendary groups too few ({len(groups)} < 10)",
+            field="groups",
+        )
+    if with_key_card < 1:
+        report.add_issue(
+            "arena_legendary_groups.missing_key_card",
+            "legendary groups missing key_card",
+            field="key_card",
+        )
+    report.score = round(
+        (min(len(groups) / 10.0, 1.0) + min(with_key_card, 1)) / 2,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
     "vicious_syndicate_radars": _validate_vicious_radars,
     "arena_class_matrix": _validate_arena_class_matrix,
     "arena_class_pages": _validate_arena_class_pages,
+    "arena_winning_decks": _validate_arena_winning_decks,
+    "arena_legendary_groups": _validate_arena_legendary_groups,
 }
 
 

@@ -176,12 +176,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "arena_legendary_groups":
-            if len(structured.get("groups") or []) < 10:
-                return False, f"legendary groups too few ({len(structured.get('groups') or [])})"
-            if not any(g.get("key_card") for g in structured.get("groups") or []):
-                return False, "legendary groups missing key_card"
-            return True, "ok"
         if structured.get("type") == "bg_comps":
             comps = structured.get("comps") or []
             if len(comps) < 3:
@@ -220,13 +214,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             ]
             if len(valid) < max(6, len(trinkets) // 2):
                 return False, f"bg trinkets invalid names/stats ({len(valid)}/{len(trinkets)})"
-            return True, "ok"
-        if structured.get("type") == "arena_winning_decks":
-            decks = structured.get("decks") or []
-            if len(decks) < 1:
-                return False, "arena winning decks empty"
-            if not any((d.get("final_deck") or []) for d in decks):
-                return False, "arena winning decks missing final_deck"
             return True, "ok"
         if structured.get("type") == "bg_minions":
             minions = structured.get("minions") or []

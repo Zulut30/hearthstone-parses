@@ -213,6 +213,41 @@ class SourceValidatorsTest(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertIn("arena_class_pages.missing_stats", {issue.code for issue in report.issues})
 
+    def test_arena_winning_decks_require_a_final_deck(self) -> None:
+        good = {
+            "type": "arena_winning_decks",
+            "decks": [{"title": "12 wins", "final_deck": ["Card"]}],
+        }
+        bad = {"type": "arena_winning_decks", "decks": [{"title": "broken"}]}
+
+        self.assertTrue(validate_structured("hsreplay_arena_winning_decks", good).ok)
+        report = validate_structured("hsreplay_arena_winning_decks", bad)
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "arena_winning_decks.missing_final_deck",
+            {issue.code for issue in report.issues},
+        )
+
+    def test_arena_legendary_groups_require_key_card(self) -> None:
+        groups = [{"name": f"Group {idx}", "key_card": None} for idx in range(10)]
+        report = validate_structured(
+            "hsreplay_arena_legendaries",
+            {"type": "arena_legendary_groups", "groups": groups},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "arena_legendary_groups.missing_key_card",
+            {issue.code for issue in report.issues},
+        )
+        groups[0]["key_card"] = "Legendary"
+        self.assertTrue(
+            validate_structured(
+                "hsreplay_arena_legendaries",
+                {"type": "arena_legendary_groups", "groups": groups},
+            ).ok
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
