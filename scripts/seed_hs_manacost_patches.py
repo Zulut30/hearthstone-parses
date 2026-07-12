@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.patches_db import delete_patches_not_in, upsert_patch
+from app.patches_db import count_patches, delete_patches_not_in, upsert_patch
 
 USER_AGENT = "HSDataAPI/0.1 (+https://api.hs-manacost.ru)"
 WIKI_PATCHES_URL = "https://hearthstone.wiki.gg/wiki/Patches"
@@ -193,6 +193,20 @@ def combined_patch_catalog(limit: int | None) -> list[dict[str, str]]:
     if limit is not None:
         catalog = catalog[:limit]
     return catalog
+
+
+def validate_full_catalog(catalog: list[dict[str, str]], *, existing_count: int) -> None:
+    versions = [str(item.get("version") or "") for item in catalog]
+    unique_versions = {version for version in versions if version}
+    minimum_count = max(100, int(existing_count * 0.80))
+    if len(unique_versions) < minimum_count:
+        raise RuntimeError(
+            "Patch catalog truncation guard rejected full refresh: "
+            f"discovered {len(unique_versions)}, required at least {minimum_count} "
+            f"(existing {existing_count})"
+        )
+    if len(unique_versions) != len(versions):
+        raise RuntimeError("Patch catalog contains empty or duplicate versions")
 
 
 def hs_manacost_version(wiki_version: str) -> str:
@@ -496,6 +510,8 @@ def main() -> int:
     args = parse_args(argv)
     limit = None if args.all else args.limit
     catalog = combined_patch_catalog(limit)
+    if args.all and not args.matched_only:
+        validate_full_catalog(catalog, existing_count=count_patches())
     versions = [item["version"] for item in catalog]
     post_urls = hs_manacost_post_urls()
     stored: list[dict[str, str | None]] = []

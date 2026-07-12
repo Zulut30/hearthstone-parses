@@ -7,7 +7,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.patches_db import get_patch, list_patches, upsert_patch
+from app.patches_db import count_patches, get_patch, list_patches, upsert_patch
 
 
 class PatchesDbTest(unittest.TestCase):
@@ -56,6 +56,7 @@ class PatchesDbTest(unittest.TestCase):
 
         listed = list_patches()
         self.assertEqual(listed["total"], 1)
+        self.assertEqual(count_patches(), 1)
         self.assertNotIn("content_text", listed["patches"][0])
 
     def test_api_routes(self) -> None:

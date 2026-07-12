@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from scripts.seed_hs_manacost_patches import (
     combined_patch_catalog,
     latest_official_patches,
+    validate_full_catalog,
 )
 
 
@@ -63,3 +66,16 @@ def test_combined_catalog_puts_official_new_patch_before_lagging_wiki() -> None:
     ]
     assert catalog[0]["official_url"] == "https://official.test/36"
     assert catalog[1]["official_url"] == "https://official.test/35-6-2"
+
+
+def test_full_catalog_guard_rejects_layout_truncation_before_deletion() -> None:
+    truncated = [{"version": f"35.{idx}"} for idx in range(20)]
+
+    with pytest.raises(RuntimeError, match="truncation guard"):
+        validate_full_catalog(truncated, existing_count=300)
+
+
+def test_full_catalog_guard_accepts_complete_history() -> None:
+    catalog = [{"version": f"{major}.{minor}"} for major in range(1, 32) for minor in range(10)]
+
+    validate_full_catalog(catalog, existing_count=300)

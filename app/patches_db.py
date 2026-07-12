@@ -313,6 +313,15 @@ def delete_patches_not_in(versions: set[str]) -> int:
         conn.close()
 
 
+def count_patches() -> int:
+    init_patches_db()
+    conn = get_db_connection()
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM hearthstone_patches").fetchone()[0])
+    finally:
+        conn.close()
+
+
 def list_patches(
     *,
     q: str | None = None,
