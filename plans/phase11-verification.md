@@ -24,6 +24,14 @@ Read-only audit of `https://api.hs-manacost.ru`:
 
 The three production data findings are exactly the kind of silent-success/staleness that the new health and publish gates surface; they require refresh after deployment, not weakening validators.
 
+## Post-baseline remediation added to the branch
+
+- Live Firebase recon confirmed every Vicious interval (`last6Hours` through `last2Weeks`) currently contains only 11 `Other <Class>` buckets. Extraction now reports `upstream_unclassified`, removes those buckets from deck/tier output, and fails the publish gate instead of presenting them as archetypes.
+- Live radar recon found 24 parsed radars at issue 349 while the latest report is issue 352. Radar output now reports `upstream_stale` and retains latest-report issue/date provenance.
+- BG hero detail refresh now runs Mon/Thu rather than only Monday; its stale limit is 120 hours (96-hour maximum schedule gap + 24-hour slack), preventing one missed weekly run from silently aging for 8–11 days.
+- Quality diagnostics are retained in failure statuses so `/sources/{id}` and operations tooling can distinguish upstream warm-up/staleness from transport or parser failures.
+- Final local suite after these changes: **281 passed**, 4 subtests passed, 0 failed; GitHub pytest is green on commit `a30686a`.
+
 ## External steps still required
 
 1. Human review and merge PR #2.
