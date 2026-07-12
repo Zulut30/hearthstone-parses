@@ -2,6 +2,8 @@
 
 Репозиторий: **https://github.com/Zulut30/hearthstone-parses**
 
+Канонический production checkout для Docker deployment: `/srv/hs-data-api`. Старые non-Docker units в репозитории сохраняют `/opt/hs-data-api` как legacy default; Docker units и новые установки должны использовать `/srv/hs-data-api`.
+
 Перед продакшеном:
 
 - **[docs/API.md](docs/API.md)** — публичные/admin endpoints, source IDs, JSON-схемы.
@@ -11,17 +13,17 @@
 ## Быстрая установка с нуля
 
 ```bash
-sudo git clone https://github.com/Zulut30/hearthstone-parses.git /opt/hs-data-api
-cd /opt/hs-data-api
-sudo ./scripts/install.sh
+sudo git clone https://github.com/Zulut30/hearthstone-parses.git /srv/hs-data-api
+cd /srv/hs-data-api
+sudo ./scripts/install.sh --dir /srv/hs-data-api
 sudo nano /etc/hs-data-api.env   # прокси, HS_API_KEY, опционально HSReplay/Telegram
 sudo systemctl restart hs-data-api hs-flaresolverr
 sudo systemctl start hs-data-api-refresh.timer hs-data-api-refresh-api.timer hs-data-api-freshness-check.timer
-sudo /opt/hs-data-api/scripts/server-readiness.sh --strict
-sudo /opt/hs-data-api/scripts/server-readiness.sh --strict --refresh-all
+sudo /srv/hs-data-api/scripts/server-readiness.sh --strict
+sudo /srv/hs-data-api/scripts/server-readiness.sh --strict --refresh-all
 ```
 
-Или одной командой (клонирует в `/opt/hs-data-api`):
+Legacy one-line installer по умолчанию использует `/opt/hs-data-api`; для canonical Docker layout используйте явную установку выше:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Zulut30/hearthstone-parses/main/scripts/install.sh | sudo bash
@@ -34,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/Zulut30/hearthstone-parses/main/scr
 **На старом сервере:**
 
 ```bash
-cd /opt/hs-data-api   # или /root/hearthstone-parses
+cd /srv/hs-data-api
 ./scripts/export-bundle.sh /tmp/hs-migrate.tar.gz
 scp /tmp/hs-migrate.tar.gz user@NEW_SERVER:/tmp/
 ```
@@ -59,19 +61,19 @@ sudo ./scripts/server-readiness.sh --strict
 curl -s http://127.0.0.1:8000/health | jq .
 source /etc/hs-data-api.env
 curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/health | jq .
-/opt/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48
-/opt/hs-data-api/venv/bin/python -m app.cli quality-check
+/srv/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48
+/srv/hs-data-api/venv/bin/python -m app.cli quality-check
 ```
 
 `/health` — лёгкий публичный liveness. Подробная диагностика источников, stale/cache state и filesystem path теперь находится в admin-only `/ops/health`.
 
-Скрипт `audit.sh` повторно прогоняет `validate_parsed_data` по кэшу и показывает источники с расхождением статуса и качества данных. `freshness-check` возвращает non-zero, если есть stale или `cached-after-failure` источники; это отдельный сигнал, потому что refresh job может завершиться systemd-success и при этом оставить старый кэш видимым для API. `quality-check` проверяет все cached datasets через parser validation, source contracts и quality score; scores ниже `--min-quality-score` валят команду, а диапазон до `--warn-quality-score` попадает в warning list.
+Скрипт `audit.sh` повторно прогоняет единый `validate_candidate_for_publish` по кэшу и показывает источники с расхождением статуса и качества данных. `freshness-check` возвращает non-zero, если есть stale или `cached-after-failure` источники; это отдельный сигнал, потому что refresh job может завершиться systemd-success и при этом оставить старый кэш видимым для API. `quality-check` проверяет все cached datasets через parser validation, source contracts и quality score; scores ниже `--min-quality-score` валят команду, а диапазон до `--warn-quality-score` попадает в warning list.
 
 ## Структура на сервере
 
 | Путь | Назначение |
 |------|------------|
-| `/opt/hs-data-api` | Код приложения (git clone) |
+| `/srv/hs-data-api` | Код приложения (git clone) и Docker Compose stack |
 | `/var/lib/hs-data-api` | Кэш JSON, статусы, `hsreplay-auth.json` |
 | `/etc/hs-data-api.env` | Секреты и настройки (не в git) |
 | `systemd/hs-data-api*.service` | API и ежедневный refresh |
@@ -94,8 +96,11 @@ sudo ./scripts/deploy-local.sh
 **Или через git:**
 
 ```bash
-cd /opt/hs-data-api
-git pull
+cd /srv/hs-data-api
+test -z "$(git status --porcelain)"  # не затирать локальные изменения
+git fetch --prune origin
+git checkout main
+git pull --ff-only origin main
 ./venv/bin/pip install -r requirements.txt
 sudo ./scripts/merge-env-example.sh /etc/hs-data-api.env
 sudo ./scripts/install-docker-systemd.sh
@@ -104,6 +109,8 @@ sudo systemctl disable --now hs-data-api-refresh-protected.timer 2>/dev/null || 
 sudo systemctl restart hs-data-api hs-flaresolverr
 ./scripts/audit.sh
 ```
+
+Перед этим merge PR и выбор release commit выполняются отдельно. Не деплойте непроверенную feature-ветку и не используйте `git reset --hard` для обновления production checkout.
 
 Production refresh schedule:
 
@@ -129,8 +136,8 @@ curl -s http://127.0.0.1:8000/health | jq .
 curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/health | jq '{ok, sources, states, stale_count, cached_count}'
 curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/health/premium | jq .
 curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/summary | jq '.freshness'
-/opt/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48
-/opt/hs-data-api/venv/bin/python -m app.cli quality-check
+/srv/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48
+/srv/hs-data-api/venv/bin/python -m app.cli quality-check
 ```
 
 HSReplay archetype database smoke-test:
@@ -148,8 +155,8 @@ Green deploy для production: публичный `/health.ok=true`, admin `/op
 Для нового сервера или сервера с большим количеством соседних сервисов используйте один readiness gate:
 
 ```bash
-sudo /opt/hs-data-api/scripts/server-readiness.sh --strict
-sudo /opt/hs-data-api/scripts/server-readiness.sh --strict --refresh-all  # перед переключением traffic/DNS
+sudo /srv/hs-data-api/scripts/server-readiness.sh --strict
+sudo /srv/hs-data-api/scripts/server-readiness.sh --strict --refresh-all  # перед переключением traffic/DNS
 ```
 
 Скрипт проверяет env, venv, source tier registry, systemd timers, FlareSolverr, proxy, strict preflight, `/health`, `/ops/summary`, freshness и quality. Это основной smoke-test после переноса.
@@ -168,7 +175,7 @@ sudo /opt/hs-data-api/scripts/server-readiness.sh --strict --refresh-all  # пе
 source /etc/hs-data-api.env
 curl -s -H "X-API-Key: ${HS_API_KEY}" "http://127.0.0.1:8000/ops/summary?since_hours=48" | jq '{freshness, cached_after_failure_sources, backend_failures}'
 curl -s -H "X-API-Key: ${HS_API_KEY}" "http://127.0.0.1:8000/ops/events?action_group=browser&since_hours=48" | jq '.[-20:]'
-/opt/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48 --alert
+/srv/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48 --alert
 ```
 
 Для HSGuru используется отдельный `HS_HSGURU_FETCH_BACKENDS` (default: `flaresolverr,scrapling,curl_cffi,cloudscraper,patchright`). При Cloudflare/403 browser rotator burn-ит sticky proxy session; timeout и quality failures открывают circuit только для конкретного source, чтобы один плохой endpoint не выключал backend для всей HSGuru пачки.
@@ -176,7 +183,7 @@ curl -s -H "X-API-Key: ${HS_API_KEY}" "http://127.0.0.1:8000/ops/events?action_g
 Recovery:
 
 ```bash
-cd /opt/hs-data-api
+cd /srv/hs-data-api
 sudo systemctl start hs-data-api-freshness-check.service
 ./venv/bin/python -m app.cli refresh --source hsguru_meta_wild_top_legend
 ./venv/bin/python -m app.cli refresh --tier browser_protected

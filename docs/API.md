@@ -26,6 +26,8 @@ X-API-Key: <HS_API_KEY>
 
 ## Public Endpoints
 
+Сохранённое поле `state` принимает только значения `ok`, `partial`, `fetch_error`, `http_error`, `blocked_by_protection`, `proxy_required`, `quality_error`, `never_fetched`. Значение `ok_cached` встречается только в вычисляемом `effective_state`, когда API продолжает безопасно отдавать предыдущий успешный dataset после неудачного refresh.
+
 | Method | Path | Назначение |
 | --- | --- | --- |
 | `GET` | `/health` | Лёгкий liveness API. Не раскрывает список источников, пути и premium auth детали. |
@@ -503,9 +505,9 @@ curl -s -X POST \
   "freshness_ok": true,
   "degraded": false,
   "data_dir": "/var/lib/hs-data-api",
-  "sources": 40,
+  "sources": 46,
   "states": {
-    "ok": 40
+    "ok": 46
   },
   "hard_failed_sources": [],
   "semantic_failed_sources": [],

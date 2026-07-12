@@ -26,7 +26,7 @@
 
 | Путь | Назначение | В git |
 |------|------------|-------|
-| `/opt/hs-data-api` | Код приложения (Python 3.12, venv) | Да |
+| `/srv/hs-data-api` | Код приложения и Docker Compose stack | Да |
 | `/var/lib/hs-data-api` | Кэш `datasets/`, `statuses/`, lock, индексы карт | Нет |
 | `/etc/hs-data-api.env` | Секреты и настройки | **Никогда** |
 | `systemd` units | API + ежедневный refresh | Да (шаблоны) |
@@ -48,7 +48,7 @@ flowchart TB
         Route{Источник}
         API[API-first модули]
         Rot[rotator.py]
-        Q[quality.py]
+        Q[publish_gate + source contracts + semantic validators]
         Save[storage.py]
     end
 
@@ -91,35 +91,13 @@ flowchart TB
 
 Маршрутизация задаётся в `fetcher._fetch_hsreplay_api_source()` и списке `api_sources` в `fetcher.py`.
 
-### 2.4. Quality gate
+### 2.4. Publish gate и качество
 
-Перед сохранением `app/scrapers/quality.py` проверяет:
+Любой backend-кандидат проходит через `app.publish_gate.validate_candidate_for_publish()` до сохранения. Gate последовательно применяет backend policy из `app/source_contracts.py`, структурный контракт и semantic validator из `app/source_validators.py`. Минимальные строки, fill-rate критичных полей и regression thresholds имеют один источник истины; `quality.py` остаётся orchestration-фасадом и логирует предупреждения/отказы. Провал даёт `quality_error`, предыдущий успешный dataset сохраняется.
 
-- не Cloudflare challenge;
-- минимальное число строк/таблиц/карт;
-- наличие метрик (winrate, placement, tier и т.д.) по типу `structured.type`.
+### 2.5. Источники данных (46)
 
-При провале статус → `quality_error`, опционально Telegram-алерт.
-
-### 2.5. Источники данных (33)
-
-| ID (пример) | Сайт | Категория | Backend |
-|-------------|------|-----------|---------|
-| `hsguru_*` (11) | HSGuru | meta / matchups / streamer | FlareSolverr |
-| `hsreplay_arena*` (4) | HSReplay | arena | hsreplay_api |
-| `hsreplay_cards_*` (2) | HSReplay | ranked Gold 14d | hsreplay_cards_browser + `card_list` API |
-| `hsreplay_battlegrounds_*` (3) | HSReplay | comps / trinkets | jina / browser |
-| `hsreplay_decks_trending` | HSReplay | ranked | patchright |
-| `firestone_battlegrounds_*` (3) | Firestone | BG | firestone_api |
-| `firestone_arena_*` (4) | Firestone | arena | firestone_api |
-| `heartharena_tierlist` | HearthArena | arena | heartharena_api |
-| `metastats_*` (2) | MetaStats | ranked | metastats_api |
-| `hearthstone_decks` | hearthstone-decks.net | ranked | hearthstone_decks_api |
-| `vicious_syndicate_radars` | Vicious Syndicate | matchups | vicious_syndicate_api |
-
-Полный список: `app/sources.py`.
-
-**Удалённый источник:** `hsreplay_battlegrounds_heroes` (нестабильные метрики; вместо него при необходимости — Firestone API героев, модуль `firestone_bg_heroes.py`, отдельный source при добавлении).
+Реестр содержит 44 scrape-источника и 2 dedicated pipeline (`hsreplay_archetypes`, `hsreplay_battlegrounds_hero_details`). Полный автоматически генерируемый каталог: [SOURCES.md](SOURCES.md). Его синхронизация с `app.sources.SOURCES` проверяется pytest.
 
 ---
 
@@ -164,6 +142,8 @@ flowchart TB
 | `GET /health` | Нет | Лёгкий liveness без внутренних деталей |
 | `GET /sources`, `/sources/{id}` | Нет | Метаданные + status |
 | `GET /datasets`, `/datasets/{id}` | Нет | **Полный кэш JSON** |
+| `GET /api/*` | Нет | Legacy read-only API; тело сохраняется совместимым |
+| `GET /v1/*` | Нет | Версионированные typed endpoints в конверте `{data, meta}` |
 | `GET /demo/*`, `/ui` | Нет | Демо-интерфейс |
 | `GET /system/technologies` | Нет | Публичная redacted техническая информация |
 | `GET /ops/health` | `X-API-Key` | Подробное здоровье источников, stale/cache state |
@@ -228,7 +208,7 @@ git grep -E 'password|token|api_key|HS_FETCH_PROXY' -- ':!*.example' ':!docs/*'
 
 ### 3.9. Чеклист безопасности нового сервера
 
-- [ ] `git clone` в `/opt/hs-data-api`, не работать из home с world-readable
+- [ ] `git clone` в `/srv/hs-data-api`, не работать из home с world-readable
 - [ ] Создать `/etc/hs-data-api.env` из `.env.example`, `chmod 600`
 - [ ] Сгенерировать сильный `HS_API_KEY` (`openssl rand -hex 32`)
 - [ ] Прокси только residential; не использовать IP датацентра для парсинга
@@ -253,7 +233,7 @@ git grep -E 'password|token|api_key|HS_FETCH_PROXY' -- ':!*.example' ':!docs/*'
 Проверка:
 
 ```bash
-cd /opt/hs-data-api
+cd /srv/hs-data-api
 source /etc/hs-data-api.env  # или load через cli
 venv/bin/python -m app.cli proxy-rotation-check
 # Ожидание: "rotating": true, unique_ips > 1
@@ -294,6 +274,8 @@ venv/bin/python -m app.cli proxy-rotation-check
 | `blocked_by_protection` | Cloudflare |
 | `http_error` | 4xx/5xx |
 | `proxy_required` | Нет `HS_FETCH_PROXY_URL` |
+| `partial` | Refresh завершён неполным результатом; хороший cache не перезаписывается |
+| `never_fetched` | Успешного refresh ещё не было |
 
 ### 5.2. Команды мониторинга
 
@@ -396,7 +378,7 @@ sudo ./scripts/import-bundle.sh /tmp/hs-migrate.tar.gz
 ## 8. Обновление кода
 
 ```bash
-cd /opt/hs-data-api
+cd /srv/hs-data-api
 git pull
 venv/bin/pip install -r requirements.txt
 venv/bin/patchright install chromium
@@ -414,4 +396,4 @@ venv/bin/python -m app.cli refresh --source <SOURCE_ID>
 - Оператор сервера отвечает за: хранение `/etc/hs-data-api.env`, ротацию ключей, соблюдение ToS сайтов-источников.
 - Разработчик репозитория: Issues/PR на GitHub `Zulut30/hearthstone-parses`.
 
-**Версия документа:** 2026-06-02 (ветка `main`, 33 источника, без `hsreplay_battlegrounds_heroes`).
+**Версия документа:** 2026-07-12 (46 источников; contracts/publish-gate; API v1).
