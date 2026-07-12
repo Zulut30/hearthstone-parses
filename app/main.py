@@ -20,6 +20,7 @@ from .routers.constructed import router as constructed_v1_router
 from .routers.bg import router as bg_v1_router
 from .routers.arena import router as arena_v1_router
 from .routers.system import router as system_v1_router
+from .public_cache import PublicCacheMiddleware
 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -41,6 +42,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Accept", "Content-Type", "X-API-Key"],
 )
+app.add_middleware(PublicCacheMiddleware)
 app.include_router(constructed_v1_router)
 app.include_router(bg_v1_router)
 app.include_router(arena_v1_router)
