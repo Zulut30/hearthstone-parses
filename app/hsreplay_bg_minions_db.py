@@ -13,6 +13,8 @@ from .db import get_db_connection, init_db
 from .hsreplay_bg_stats import BG_MMR, BG_TIME_RANGE, fetch_battlegrounds_minions
 
 SOURCE = "hsreplay_battlegrounds_minions"
+MIN_CURRENT_BG_MINIONS = 150
+MIN_STATS_FILL_RATE = 0.80
 
 
 def _now() -> str:
@@ -182,6 +184,29 @@ def _store_minions(run_id: int, structured: dict[str, Any]) -> int:
         conn.close()
 
 
+def _snapshot_quality_errors(structured: dict[str, Any], *, stored_count: int) -> list[str]:
+    minions = [row for row in (structured.get("minions") or []) if isinstance(row, dict)]
+    total = len(minions)
+    stats_filled = sum(
+        1
+        for row in minions
+        if row.get("games_with_minion") is not None
+        and (row.get("combat_winrate_value") is not None or row.get("combat_winrate") is not None)
+        and (row.get("popularity_value") is not None or row.get("popularity") is not None)
+    )
+    stats_fill_rate = stats_filled / max(total, 1)
+    errors: list[str] = []
+    if total < MIN_CURRENT_BG_MINIONS:
+        errors.append(f"BG minion snapshot too small ({total} < {MIN_CURRENT_BG_MINIONS})")
+    if stored_count != total:
+        errors.append(f"BG minion rows stored incompletely ({stored_count}/{total})")
+    if stats_fill_rate < MIN_STATS_FILL_RATE:
+        errors.append(
+            f"BG minion stats fill too low ({stats_filled}/{total}; {stats_fill_rate:.1%})"
+        )
+    return errors
+
+
 async def refresh_bg_minion_database() -> dict[str, Any]:
     run_id = _start_run(mmr_percentile=BG_MMR, time_range=BG_TIME_RANGE)
     total = 0
@@ -191,10 +216,21 @@ async def refresh_bg_minion_database() -> dict[str, Any]:
         minions = structured.get("minions") or []
         total = len(minions)
         ok = _store_minions(run_id, structured)
+        quality_errors = _snapshot_quality_errors(structured, stored_count=ok)
         # NOTE: SQLite run-state domain ("ok"/"partial"/"failed"/"running"), not app.source_state.SourceState.
-        state = "ok" if ok == total and ok else "partial" if ok else "failed"
-        _finish_run(run_id, state=state, minions_total=total, minions_ok=ok)
-        return {"ok": state in {"ok", "partial"}, "state": state, "run_id": run_id, "minions_total": total, "minions_ok": ok, "source": structured.get("source")}
+        state = "ok" if not quality_errors else "partial" if ok else "failed"
+        error = "; ".join(quality_errors) or None
+        _finish_run(run_id, state=state, minions_total=total, minions_ok=ok, error=error)
+        return {
+            "ok": state == "ok",
+            "published": state == "ok",
+            "state": state,
+            "run_id": run_id,
+            "minions_total": total,
+            "minions_ok": ok,
+            "quality_errors": quality_errors,
+            "source": structured.get("source"),
+        }
     except Exception as exc:
         _finish_run(run_id, state="failed", minions_total=total, minions_ok=ok, error=str(exc)[:1000])
         raise
