@@ -64,7 +64,7 @@ def _valid_name(value: Any) -> bool:
     return str(value or "").strip() not in {"", "-", "—", "Unknown"}
 
 
-def _validate_bg_heroes(structured: dict[str, Any]) -> ValidationReport:
+def _validate_bg_heroes(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     heroes = [row for row in (structured.get("heroes") or []) if isinstance(row, dict)]
     row_count = len(heroes)
@@ -175,7 +175,7 @@ def _validate_bg_heroes(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_vicious_live(structured: dict[str, Any]) -> ValidationReport:
+def _validate_vicious_live(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     class_distribution = [
         row for row in (structured.get("class_distribution") or []) if isinstance(row, dict)
@@ -255,7 +255,7 @@ def _validate_vicious_live(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_vicious_radars(structured: dict[str, Any]) -> ValidationReport:
+def _validate_vicious_radars(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     issue_raw = str(structured.get("issue") or "")
     latest_issue_raw = str(structured.get("latest_report_issue") or "")
@@ -309,7 +309,7 @@ def _validate_vicious_radars(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_arena_class_matrix(structured: dict[str, Any]) -> ValidationReport:
+def _validate_arena_class_matrix(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
     report.metrics["classes"] = len(classes)
@@ -323,7 +323,7 @@ def _validate_arena_class_matrix(structured: dict[str, Any]) -> ValidationReport
     return report
 
 
-def _validate_arena_class_pages(structured: dict[str, Any]) -> ValidationReport:
+def _validate_arena_class_pages(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
     with_stats = sum(
@@ -351,7 +351,7 @@ def _validate_arena_class_pages(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_arena_winning_decks(structured: dict[str, Any]) -> ValidationReport:
+def _validate_arena_winning_decks(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     decks = [row for row in (structured.get("decks") or []) if isinstance(row, dict)]
     with_final_deck = sum(1 for row in decks if row.get("final_deck"))
@@ -372,7 +372,7 @@ def _validate_arena_winning_decks(structured: dict[str, Any]) -> ValidationRepor
     return report
 
 
-def _validate_arena_legendary_groups(structured: dict[str, Any]) -> ValidationReport:
+def _validate_arena_legendary_groups(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     groups = [row for row in (structured.get("groups") or []) if isinstance(row, dict)]
     with_key_card = sum(1 for row in groups if row.get("key_card"))
@@ -396,7 +396,7 @@ def _validate_arena_legendary_groups(structured: dict[str, Any]) -> ValidationRe
     return report
 
 
-def _validate_bg_comps(structured: dict[str, Any]) -> ValidationReport:
+def _validate_bg_comps(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     comps = [row for row in (structured.get("comps") or []) if isinstance(row, dict)]
     with_cards = sum(
@@ -429,7 +429,7 @@ def _validate_bg_comps(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_bg_card_stats(structured: dict[str, Any]) -> ValidationReport:
+def _validate_bg_card_stats(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     tiers = structured.get("tiers") or {}
     cards = [
@@ -464,7 +464,7 @@ def _validate_bg_card_stats(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_bg_trinkets(structured: dict[str, Any]) -> ValidationReport:
+def _validate_bg_trinkets(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     trinkets = [row for row in (structured.get("trinkets") or []) if isinstance(row, dict)]
     valid = [
@@ -501,7 +501,7 @@ def _validate_bg_trinkets(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_bg_minions(structured: dict[str, Any]) -> ValidationReport:
+def _validate_bg_minions(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     minions = [row for row in (structured.get("minions") or []) if isinstance(row, dict)]
     with_stats = sum(
@@ -529,7 +529,7 @@ def _validate_bg_minions(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-def _validate_bg_compositions(structured: dict[str, Any]) -> ValidationReport:
+def _validate_bg_compositions(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     compositions = [
         row for row in (structured.get("compositions") or []) if isinstance(row, dict)
@@ -563,7 +563,7 @@ def _validate_bg_compositions(structured: dict[str, Any]) -> ValidationReport:
     return report
 
 
-_VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
+_VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
     "vicious_syndicate_radars": _validate_vicious_radars,
@@ -583,7 +583,7 @@ def validate_structured(source_id: str, structured: dict[str, Any]) -> Validatio
     validator = _VALIDATORS.get(str(structured.get("type") or ""))
     if validator is None:
         return ValidationReport(metrics={"source_id": source_id, "structured_type": structured.get("type")})
-    report = validator(structured)
+    report = validator(source_id, structured)
     report.metrics["source_id"] = source_id
     report.metrics["structured_type"] = structured.get("type")
     return report
