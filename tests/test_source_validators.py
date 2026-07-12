@@ -476,6 +476,36 @@ class SourceValidatorsTest(unittest.TestCase):
             ).ok
         )
 
+    def test_hsreplay_meta_requires_twenty_complete_archetypes(self) -> None:
+        classes = [
+            {
+                "class": f"Class {class_idx}",
+                "archetypes": [
+                    {
+                        "archetype": f"Deck {class_idx}-{deck_idx}",
+                        "winrate": "50%" if class_idx * 3 + deck_idx < 19 else None,
+                        "popularity": "2%" if class_idx * 3 + deck_idx < 19 else None,
+                        "games": 100 if class_idx * 3 + deck_idx < 19 else None,
+                    }
+                    for deck_idx in range(3)
+                ],
+            }
+            for class_idx in range(8)
+        ]
+        structured = {"type": "hsreplay_meta_archetypes", "classes": classes}
+
+        report = validate_structured("hsreplay_meta_test", structured)
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "hsreplay_meta_archetypes.missing_metrics",
+            {issue.code for issue in report.issues},
+        )
+        classes[6]["archetypes"][1].update(
+            {"winrate": "50%", "popularity": "2%", "games": 100}
+        )
+        self.assertTrue(validate_structured("hsreplay_meta_test", structured).ok)
+
 
 if __name__ == "__main__":
     unittest.main()

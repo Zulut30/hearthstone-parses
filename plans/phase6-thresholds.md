@@ -30,6 +30,6 @@ and the replacement has a focused regression test.
 | cards ≥ dynamic source threshold and tier labels present | Arena card tiers | contract + source-aware validator | transferred + tested; old branch removed |
 | classes ≥5, cards ≥300, tier ids ≥200 | HearthArena tier list | contract + type validator | transferred + tested; old branch removed |
 | cards ≥30, metrics ≥20, blocked payload rejected | card stats | contract + type validator | transferred + tested; old branch removed |
-| classes ≥8, archetypes ≥20, metrics ≥20 | HSReplay meta archetypes | contract + type validator | pending |
+| classes ≥8, archetypes ≥20, metrics ≥20 | HSReplay meta archetypes | contract + type validator | transferred + tested; old branch removed |
 | premium-login/userdata/content markers | HSReplay raw-page fallback | page/auth structural checks | remains in `quality.py` by design |
 | default text lines ≥10 | unstructured fallback | page structural check | remains in `quality.py` by design |

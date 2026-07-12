@@ -688,6 +688,62 @@ def _validate_card_stats(_source_id: str, structured: dict[str, Any]) -> Validat
     return report
 
 
+def _validate_hsreplay_meta_archetypes(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    archetypes = [
+        archetype
+        for class_row in classes
+        for archetype in (class_row.get("archetypes") or [])
+        if isinstance(archetype, dict)
+    ]
+    with_metrics = sum(
+        1
+        for archetype in archetypes
+        if archetype.get("winrate")
+        and archetype.get("popularity")
+        and archetype.get("games")
+    )
+    report.metrics.update(
+        {
+            "classes": len(classes),
+            "archetypes": len(archetypes),
+            "archetypes_with_metrics": with_metrics,
+        }
+    )
+    if len(classes) < 8:
+        report.add_issue(
+            "hsreplay_meta_archetypes.too_few_classes",
+            f"meta archetypes too few classes ({len(classes)} < 8)",
+            field="classes",
+        )
+    if len(archetypes) < 20:
+        report.add_issue(
+            "hsreplay_meta_archetypes.too_few_rows",
+            f"meta archetypes too few rows ({len(archetypes)} < 20)",
+            field="archetypes",
+        )
+    if with_metrics < 20:
+        report.add_issue(
+            "hsreplay_meta_archetypes.missing_metrics",
+            f"meta archetypes missing metrics ({with_metrics}/{len(archetypes)}; minimum 20)",
+            field="winrate,popularity,games",
+        )
+    report.score = round(
+        (
+            min(len(classes) / 8.0, 1.0)
+            + min(len(archetypes) / 20.0, 1.0)
+            + min(with_metrics / 20.0, 1.0)
+        )
+        / 3,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -704,6 +760,7 @@ _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "arena_card_tiers": _validate_arena_card_tiers,
     "heartharena_tierlist": _validate_heartharena_tierlist,
     "card_stats": _validate_card_stats,
+    "hsreplay_meta_archetypes": _validate_hsreplay_meta_archetypes,
 }
 
 

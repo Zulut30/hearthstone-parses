@@ -166,25 +166,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "hsreplay_meta_archetypes":
-            classes = structured.get("classes") or []
-            archetypes = [
-                archetype
-                for class_group in classes
-                for archetype in (class_group.get("archetypes") or [])
-            ]
-            if len(classes) < 8:
-                return False, f"meta archetypes too few classes ({len(classes)})"
-            if len(archetypes) < 20:
-                return False, f"meta archetypes too few rows ({len(archetypes)})"
-            with_metrics = sum(
-                1
-                for archetype in archetypes
-                if archetype.get("winrate") and archetype.get("popularity") and archetype.get("games")
-            )
-            if with_metrics < 20:
-                return False, f"meta archetypes missing metrics ({with_metrics}/{len(archetypes)})"
-            return True, "ok"
         if structured and get_contract(source.id) is not None:
             return True, "ok"
         if any("could not load data" in line.lower() for line in text_lines):
