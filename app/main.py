@@ -17,6 +17,8 @@ from .source_state import SourceState
 from .sources import SOURCES, SOURCE_BY_ID
 from .storage import load_dataset, load_status, root_dir, save_dataset, save_status
 from .routers.constructed import router as constructed_v1_router
+from .routers.bg import router as bg_v1_router
+from .routers.arena import router as arena_v1_router
 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -39,6 +41,8 @@ app.add_middleware(
     allow_headers=["Accept", "Content-Type", "X-API-Key"],
 )
 app.include_router(constructed_v1_router)
+app.include_router(bg_v1_router)
+app.include_router(arena_v1_router)
 
 
 @app.middleware("http")
