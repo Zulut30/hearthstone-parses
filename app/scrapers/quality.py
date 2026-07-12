@@ -166,30 +166,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "bg_comps":
-            comps = structured.get("comps") or []
-            if len(comps) < 3:
-                return False, f"bg comps too few ({len(comps)})"
-            with_cards = sum(
-                1 for c in comps if (c.get("main_cards") or c.get("additional_cards"))
-            )
-            if with_cards < max(3, len(comps) // 2):
-                return False, f"bg comps mostly empty ({with_cards}/{len(comps)} with cards)"
-            return True, "ok"
-        if structured.get("type") == "bg_card_stats":
-            tiers = structured.get("tiers") or {}
-            total_cards = sum(len(cards) for cards in tiers.values())
-            if total_cards < 50:
-                return False, f"bg_card_stats too few total cards ({total_cards})"
-            with_stats = sum(
-                1
-                for cards in tiers.values()
-                for c in cards
-                if c.get("average_placement") is not None or c.get("total_played")
-            )
-            if with_stats < 40:
-                return False, f"bg_card_stats missing placement stats ({with_stats}/{total_cards})"
-            return True, "ok"
         if structured.get("type") == "bg_trinkets":
             trinkets = structured.get("trinkets") or []
             if len(trinkets) < 8:

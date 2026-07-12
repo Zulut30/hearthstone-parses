@@ -18,8 +18,8 @@ and the replacement has a focused regression test.
 | classes ≥8, tier brackets ≥3, tier rows ≥20 | Vicious Live | `source_validators` + contract | transferred + tested; old branch removed |
 | radars ≥5 | Vicious radars | `SourceContract` | old branch removed; tested |
 | groups ≥10 and at least one `key_card` | Arena legendary groups | contract + type validator | transferred + tested; old branch removed |
-| comps ≥3 and ≥max(3, half) with cards | BG comps | type validator | pending |
-| cards ≥50 and ≥40 with placement stats | BG card stats | type validator | pending |
+| comps ≥3 and ≥max(3, half) with cards | BG comps | type validator | transferred + tested; old branch removed |
+| cards ≥50 and ≥40 with placement stats | BG card stats | type validator | transferred + tested; old branch removed |
 | trinkets ≥8 and ≥max(6, half) valid | BG trinkets | type validator | pending |
 | decks ≥1 and at least one `final_deck` | Arena winning decks | contract + type validator | transferred + tested; old branch removed |
 | classes ≥8 | Arena class matrix | contract + type validator | transferred + tested; old branch removed |

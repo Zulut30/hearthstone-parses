@@ -396,6 +396,74 @@ def _validate_arena_legendary_groups(structured: dict[str, Any]) -> ValidationRe
     return report
 
 
+def _validate_bg_comps(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    comps = [row for row in (structured.get("comps") or []) if isinstance(row, dict)]
+    with_cards = sum(
+        1 for row in comps if row.get("main_cards") or row.get("additional_cards")
+    )
+    minimum_with_cards = max(3, len(comps) // 2)
+    report.metrics.update(
+        {
+            "comps": len(comps),
+            "comps_with_cards": with_cards,
+            "minimum_with_cards": minimum_with_cards,
+        }
+    )
+    if len(comps) < 3:
+        report.add_issue(
+            "bg_comps.too_few_comps",
+            f"bg comps too few ({len(comps)} < 3)",
+            field="comps",
+        )
+    if with_cards < minimum_with_cards:
+        report.add_issue(
+            "bg_comps.mostly_empty",
+            f"bg comps mostly empty ({with_cards}/{len(comps)} with cards; minimum {minimum_with_cards})",
+            field="main_cards,additional_cards",
+        )
+    report.score = round(
+        (min(len(comps) / 3.0, 1.0) + min(with_cards / max(minimum_with_cards, 1), 1.0)) / 2,
+        4,
+    )
+    return report
+
+
+def _validate_bg_card_stats(structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    tiers = structured.get("tiers") or {}
+    cards = [
+        card
+        for tier_cards in tiers.values()
+        if isinstance(tier_cards, list)
+        for card in tier_cards
+        if isinstance(card, dict)
+    ] if isinstance(tiers, dict) else []
+    with_stats = sum(
+        1
+        for card in cards
+        if card.get("average_placement") is not None or card.get("total_played")
+    )
+    report.metrics.update({"cards": len(cards), "cards_with_stats": with_stats})
+    if len(cards) < 50:
+        report.add_issue(
+            "bg_card_stats.too_few_cards",
+            f"bg card stats too few ({len(cards)} < 50)",
+            field="tiers",
+        )
+    if with_stats < 40:
+        report.add_issue(
+            "bg_card_stats.missing_stats",
+            f"bg card stats missing placement stats ({with_stats}/{len(cards)}; minimum 40)",
+            field="average_placement,total_played",
+        )
+    report.score = round(
+        (min(len(cards) / 50.0, 1.0) + min(with_stats / 40.0, 1.0)) / 2,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -404,6 +472,8 @@ _VALIDATORS: dict[str, Callable[[dict[str, Any]], ValidationReport]] = {
     "arena_class_pages": _validate_arena_class_pages,
     "arena_winning_decks": _validate_arena_winning_decks,
     "arena_legendary_groups": _validate_arena_legendary_groups,
+    "bg_comps": _validate_bg_comps,
+    "bg_card_stats": _validate_bg_card_stats,
 }
 
 

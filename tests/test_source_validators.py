@@ -270,6 +270,46 @@ class SourceValidatorsTest(unittest.TestCase):
             ).ok
         )
 
+    def test_bg_comps_require_cards_in_at_least_half_the_rows(self) -> None:
+        comps = [
+            {"name": f"Comp {idx}", "main_cards": ["Card"] if idx < 2 else []}
+            for idx in range(6)
+        ]
+        report = validate_structured(
+            "hsreplay_battlegrounds_comps",
+            {"type": "bg_comps", "comps": comps},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn("bg_comps.mostly_empty", {issue.code for issue in report.issues})
+        comps[2]["additional_cards"] = ["Card"]
+        self.assertTrue(
+            validate_structured(
+                "hsreplay_battlegrounds_comps",
+                {"type": "bg_comps", "comps": comps},
+            ).ok
+        )
+
+    def test_bg_card_stats_require_placement_metrics(self) -> None:
+        cards = [
+            {"name": f"Card {idx}", "average_placement": 4.0 if idx < 39 else None}
+            for idx in range(50)
+        ]
+        report = validate_structured(
+            "firestone_battlegrounds_cards",
+            {"type": "bg_card_stats", "tiers": {"1": cards}},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn("bg_card_stats.missing_stats", {issue.code for issue in report.issues})
+        cards[39]["total_played"] = 100
+        self.assertTrue(
+            validate_structured(
+                "firestone_battlegrounds_cards",
+                {"type": "bg_card_stats", "tiers": {"1": cards}},
+            ).ok
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
