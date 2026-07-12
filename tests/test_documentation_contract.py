@@ -63,3 +63,4 @@ def test_operations_docs_use_current_catalog_and_publish_gate() -> None:
     assert "validate_candidate_for_publish" in combined
     assert "33 шт." not in combined
     assert "/srv/hs-data-api" in combined
+    assert "uvicorn app.server:app" not in combined

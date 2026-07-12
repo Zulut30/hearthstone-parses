@@ -160,7 +160,7 @@ cp .env.example /etc/hs-data-api.env
 python -m app.cli proxy-check
 python -m app.cli refresh --all
 python -m app.cli refresh-hsreplay-archetypes
-uvicorn app.server:app --host 0.0.0.0 --port 8000
+python -m app.server
 ```
 
 На production-сервере используйте `scripts/install.sh` и systemd units из `systemd/`.
