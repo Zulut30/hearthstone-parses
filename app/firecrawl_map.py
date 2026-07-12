@@ -13,6 +13,13 @@ from .storage import load_dataset
 
 FIRECRAWL_MAP_URL = "https://api.firecrawl.dev/v2/map"
 HSREPLAY_MAP_LIMIT = 5000
+MIN_HSREPLAY_MAP_URLS = 500
+MIN_INDEX_COUNTS = {
+    "standard_minions": 100,
+    "battlegrounds_minions": 150,
+    "battlegrounds_heroes": 30,
+    "standard_unique_archetypes": 20,
+}
 
 
 def firecrawl_dir() -> Path:
@@ -90,6 +97,16 @@ def _unique_urls(payload: dict[str, Any]) -> list[str]:
     return sorted(out)
 
 
+def _validate_map_size(url_count: int, *, previous_count: int) -> None:
+    minimum_count = max(MIN_HSREPLAY_MAP_URLS, int(previous_count * 0.50))
+    if url_count < minimum_count:
+        raise RuntimeError(
+            "HSReplay Firecrawl map truncation guard rejected refresh: "
+            f"discovered {url_count}, required at least {minimum_count} "
+            f"(previous {previous_count})"
+        )
+
+
 def fetch_hsreplay_firecrawl_map() -> dict[str, Any]:
     api_key = firecrawl_api_key()
     if not api_key:
@@ -118,6 +135,9 @@ def fetch_hsreplay_firecrawl_map() -> dict[str, Any]:
 
     now = datetime.now(UTC).isoformat()
     urls = _unique_urls(parsed)
+    previous = load_hsreplay_map() or {}
+    previous_count = int(previous.get("url_count") or 0)
+    _validate_map_size(len(urls), previous_count=previous_count)
     result = {
         "ok": True,
         "fetched_at": now,
@@ -237,6 +257,15 @@ def build_hsreplay_index() -> dict[str, Any]:
         "battlegrounds_heroes": _unique_by(battlegrounds_heroes, ("dbfId", "hero")),
         "standard_unique_archetypes": _unique_by(standard_archetypes, ("archetype_id", "archetype")),
     }
+    quality_errors = [
+        f"{name} too small ({int(result['counts'].get(name) or 0)} < {minimum})"
+        for name, minimum in MIN_INDEX_COUNTS.items()
+        if int(result["counts"].get(name) or 0) < minimum
+    ]
+    if quality_errors:
+        raise RuntimeError(
+            "HSReplay derived index quality gate rejected refresh: " + "; ".join(quality_errors)
+        )
     _write_json(hsreplay_index_path(), result)
     return result
 

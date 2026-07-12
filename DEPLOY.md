@@ -111,6 +111,9 @@ Production refresh schedule:
 - `hs-data-api-refresh-api.timer`: API-tier parser run at `18:00 Europe/Warsaw`; skips browser-protected sources to reduce proxy traffic.
 - `hs-data-api-freshness-check.timer`: audit at `07:45` and `18:45 Europe/Warsaw`.
 - `hs-data-api-docker-firecrawl-hsreplay-map.timer`: weekly HSReplay crawl-map/index refresh at `02:35 Europe/Warsaw` on Mondays.
+- `hs-data-api-docker-rebuild-hsreplay-index.timer`: daily derived-index rebuild at
+  `19:15 Europe/Warsaw` from current cached datasets, without spending Firecrawl
+  credits or waiting for the weekly URL map.
 - `hs-data-api-docker-refresh-hsreplay-archetypes.timer`: HSReplay Standard archetype SQLite snapshots at `03:20 Europe/Warsaw` on Mondays and Thursdays.
 - `scripts/install-docker-systemd.sh`: автоматически устанавливает и включает все
   `hs-data-api-docker-*.timer`, поэтому новый pipeline timer не останется только

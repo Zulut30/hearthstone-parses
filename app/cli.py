@@ -92,6 +92,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "firecrawl-map-hsreplay",
         help="Run Firecrawl /v2/map for hsreplay.net and rebuild the derived HSReplay index.",
     )
+    sub.add_parser(
+        "rebuild-hsreplay-index",
+        help="Rebuild the derived HSReplay index from current cached datasets without Firecrawl credits.",
+    )
     archetypes = sub.add_parser(
         "refresh-hsreplay-archetypes",
         help="Refresh the local SQLite database with HSReplay Standard archetype snapshots.",
@@ -306,6 +310,12 @@ def main(argv: list[str] | None = None) -> int:
         from .firecrawl_map import refresh_hsreplay_map_and_index
 
         result = refresh_hsreplay_map_and_index()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "rebuild-hsreplay-index":
+        from .firecrawl_map import build_hsreplay_index
+
+        result = build_hsreplay_index()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "refresh-hsreplay-archetypes":
