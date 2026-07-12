@@ -5,7 +5,7 @@ from typing import Any
 
 from ..quality_thresholds import threshold_for
 from ..refresh_log import log_action
-from ..source_contracts import contract_quality_ok, contract_quality_report
+from ..source_contracts import contract_quality_ok, contract_quality_report, get_contract
 from ..source_validators import validate_structured
 from ..sources import Source
 
@@ -44,7 +44,9 @@ def _looks_like_bg_avg_placement(value: Any) -> bool:
 def looks_like_real_page(html: str, source: Source) -> bool:
     if is_cloudflare_challenge(html):
         return False
-    if len(html) < 2000:
+    contract = get_contract(source.id)
+    min_html_bytes = contract.min_html_bytes if contract else 2_000
+    if len(html) < min_html_bytes:
         return False
     if source.site == "hsreplay":
         return bool(
@@ -55,9 +57,6 @@ def looks_like_real_page(html: str, source: Source) -> bool:
             )
         )
     if source.site == "hsguru":
-        min_bytes = 25_000 if source.category in {"meta", "matchups"} else 8_000
-        if len(html) < min_bytes:
-            return False
         return bool(
             re.search(r"hsguru\.com|archetype|matchup|streamer|meta|canvas", html, re.I)
         ) and "just a moment" not in html.lower()

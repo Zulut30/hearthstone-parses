@@ -5,12 +5,25 @@ import unittest
 from app.api_only_sources import blocks_browser_fallback
 from app.dataset_regression import check_dataset_regression
 from app.hsreplay_client import _channel_urls
-from app.scrapers.quality import quality_metrics, validate_parsed_data
+from app.scrapers.quality import looks_like_real_page, quality_metrics, validate_parsed_data
 from app.source_contracts import contract_quality_report, get_contract
 from app.sources import SOURCE_BY_ID
 
 
 class SourceContractsTest(unittest.TestCase):
+    def test_page_size_thresholds_come_from_source_contracts(self) -> None:
+        meta = SOURCE_BY_ID["hsguru_meta_standard_legend"]
+        streamer = SOURCE_BY_ID["hsguru_streamer_decks_legend_1000"]
+        meta_contract = get_contract(meta.id)
+        streamer_contract = get_contract(streamer.id)
+
+        self.assertEqual(meta_contract.min_html_bytes, 25_000)  # type: ignore[union-attr]
+        self.assertEqual(streamer_contract.min_html_bytes, 8_000)  # type: ignore[union-attr]
+        self.assertFalse(looks_like_real_page("hsguru.com".ljust(24_999, "x"), meta))
+        self.assertTrue(looks_like_real_page("hsguru.com".ljust(25_000, "x"), meta))
+        self.assertFalse(looks_like_real_page("hsguru.com".ljust(7_999, "x"), streamer))
+        self.assertTrue(looks_like_real_page("hsguru.com".ljust(8_000, "x"), streamer))
+
     def test_hsguru_streamer_decks_keeps_public_source_identity(self) -> None:
         source = SOURCE_BY_ID["hsguru_streamer_decks_legend_1000"]
 

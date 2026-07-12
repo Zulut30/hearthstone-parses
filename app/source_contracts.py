@@ -17,6 +17,7 @@ class SourceContract:
     volatility: str = "stable"
     fallback_policy: str = "html_allowed"
     recommendation: str | None = None
+    min_html_bytes: int = 2_000
 
 
 HSREPLAY_JSON_CHANNELS = ("curl_cffi", "flaresolverr")
@@ -400,6 +401,7 @@ for _sid in (
             regression_drop_ratio=0.30,
             fallback_policy="html_allowed",
             recommendation="Investigate HSGuru embedded/internal API and migrate away from hydrated browser pages.",
+            min_html_bytes=8_000 if "streamer_decks" in _sid else 25_000,
         ),
     )
 
