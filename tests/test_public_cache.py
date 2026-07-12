@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import sqlite3
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -84,3 +85,49 @@ def test_legacy_api_shape_is_unchanged_and_gets_cache_headers() -> None:
 def test_cache_revision_is_best_effort_when_storage_is_unavailable() -> None:
     with patch("app.public_cache.load_dataset", side_effect=PermissionError("denied")):
         assert cache_revision("/datasets", b"") == "not-cached"
+
+
+def _consumer_decks_connection() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE decks (
+          id INTEGER, source_id TEXT, title TEXT, archetype TEXT, class TEXT,
+          format TEXT, deck_code TEXT, win_rate REAL, updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO decks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (1, "consumer-test", "Spell Mage", "Spell Mage", "Mage", "standard", "AAECA-test", 52.5, "2026-07-12T08:00:00+00:00"),
+    )
+    return conn
+
+
+def test_deckview_legacy_decks_contract_remains_unchanged() -> None:
+    with patch(
+        "app.db.get_db_connection",
+        side_effect=[_consumer_decks_connection(), _consumer_decks_connection()],
+    ):
+        response = client.get("/api/db/decks?source_id=consumer-test&limit=50&offset=0")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "total": 1,
+        "limit": 50,
+        "offset": 0,
+        "decks": [
+            {
+                "id": 1,
+                "source_id": "consumer-test",
+                "title": "Spell Mage",
+                "archetype": "Spell Mage",
+                "class": "Mage",
+                "format": "standard",
+                "deck_code": "AAECA-test",
+                "win_rate": 52.5,
+                "updated_at": "2026-07-12T08:00:00+00:00",
+            }
+        ],
+    }
