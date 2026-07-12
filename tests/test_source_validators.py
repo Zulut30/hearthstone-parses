@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import unittest
+from unittest.mock import patch
 
 from app.scrapers.quality import validate_parsed_data
 from app.source_validators import validate_structured
@@ -505,6 +506,48 @@ class SourceValidatorsTest(unittest.TestCase):
             {"winrate": "50%", "popularity": "2%", "games": 100}
         )
         self.assertTrue(validate_structured("hsreplay_meta_test", structured).ok)
+
+    def test_hsguru_meta_uses_structured_strategy_count(self) -> None:
+        structured = {
+            "type": "meta",
+            "strategies": [{"Archetype": f"Deck {idx}"} for idx in range(4)],
+        }
+        with patch("app.source_validators.threshold_for", return_value=5):
+            report = validate_structured("hsguru_meta_standard_legend", structured)
+        self.assertFalse(report.ok)
+        self.assertIn("hsguru_meta.too_few_rows", {issue.code for issue in report.issues})
+        structured["strategies"].append({"Archetype": "Deck 4"})
+        with patch("app.source_validators.threshold_for", return_value=5):
+            self.assertTrue(validate_structured("hsguru_meta_standard_legend", structured).ok)
+
+    def test_hsguru_streamer_decks_accept_rows_or_codes(self) -> None:
+        sparse = {"type": "streamer_decks", "rows": [{"Deck": "One"}]}
+        report = validate_structured("hsguru_streamer_decks_legend_1000", sparse)
+        self.assertFalse(report.ok)
+        sparse["rows"].append({"Deck": "Two", "deck_code": "AAE-one"})
+        sparse["rows"].append({"Deck": "Three"})
+        self.assertTrue(
+            validate_structured("hsguru_streamer_decks_legend_1000", sparse).ok
+        )
+
+    def test_hsguru_matchups_require_rows_and_winrates(self) -> None:
+        matchups = [{"archetype": f"Deck {idx}", "vs": "Other"} for idx in range(3)]
+        report = validate_structured(
+            "hsguru_matchups_legend",
+            {"type": "matchups", "matchups": matchups},
+        )
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "hsguru_matchups.missing_winrates",
+            {issue.code for issue in report.issues},
+        )
+        matchups[0]["winrate"] = "50%"
+        self.assertTrue(
+            validate_structured(
+                "hsguru_matchups_legend",
+                {"type": "matchups", "matchups": matchups},
+            ).ok
+        )
 
 
 if __name__ == "__main__":

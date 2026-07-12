@@ -9,9 +9,9 @@ and the replacement has a focused regression test.
 | HTML ≥ 2,000 bytes | default fetched page | `SourceContract.min_html_bytes` | transferred + tested |
 | HSGuru meta/matchups HTML ≥ 25,000 bytes | HSGuru meta/matchups | `SourceContract.min_html_bytes` | transferred + tested |
 | HSGuru streamer HTML ≥ 8,000 bytes | HSGuru streamer decks | `SourceContract.min_html_bytes` | transferred + tested |
-| meta table rows ≥ configured 5 | HSGuru meta | contract/type validator | pending |
-| streamer deck codes ≥2 or table rows ≥3 | HSGuru streamer decks | type validator | pending |
-| matchup rows ≥3 or text lines ≥30 plus content marker | HSGuru matchups | type validator | pending |
+| meta rows ≥ configured 5 | HSGuru structured meta | contract + type validator | transferred + tested; raw table fallback retained |
+| streamer deck codes ≥2 or rows ≥3 | HSGuru structured streamer decks | contract + type validator | transferred + tested; raw table fallback retained |
+| matchup rows ≥3 plus winrate content | HSGuru structured matchups | contract + type validator | transferred + tested; raw text fallback retained |
 | decks ≥5 | MetaStats decks | `SourceContract` (current minimum 40) | old weaker branch removed; tested by contract suite |
 | matchups ≥ configured 10 | MetaStats matchups | `SourceContract` (current minimum 50) | old weaker branch removed; tested by contract suite |
 | decks ≥5 | Hearthstone Decks | `SourceContract` (current minimum 40) | old weaker branch removed; tested by contract suite |

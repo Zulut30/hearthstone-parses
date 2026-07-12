@@ -146,6 +146,8 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
             return False, f"source semantic validation failed: {semantic_report.reason}"
 
     if source.site == "hsguru":
+        if structured:
+            return True, "ok"
         if source.category == "meta":
             min_rows = int(threshold_for(source.id, "meta_table_rows_min", 5))
             if table_rows < min_rows:

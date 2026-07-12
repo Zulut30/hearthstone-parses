@@ -396,6 +396,13 @@ for _sid in (
         _sid,
         SourceContract(
             source_id=_sid,
+            structured_type=(
+                "streamer_decks"
+                if "streamer_decks" in _sid
+                else "matchups"
+                if "matchups" in _sid
+                else "meta"
+            ),
             allow_browser_fallback=True,
             min_rows=3,
             regression_drop_ratio=0.30,

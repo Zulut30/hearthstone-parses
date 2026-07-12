@@ -744,6 +744,70 @@ def _validate_hsreplay_meta_archetypes(
     return report
 
 
+def _validate_hsguru_meta(source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    strategies = [
+        row for row in (structured.get("strategies") or []) if isinstance(row, dict)
+    ]
+    minimum_rows = int(threshold_for(source_id, "meta_table_rows_min", 5))
+    report.metrics.update({"strategies": len(strategies), "minimum_rows": minimum_rows})
+    if len(strategies) < minimum_rows:
+        report.add_issue(
+            "hsguru_meta.too_few_rows",
+            f"HSGuru meta too few rows ({len(strategies)} < {minimum_rows})",
+            field="strategies",
+        )
+    report.score = round(min(len(strategies) / max(minimum_rows, 1), 1.0), 4)
+    return report
+
+
+def _validate_hsguru_streamer_decks(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    rows = [row for row in (structured.get("rows") or []) if isinstance(row, dict)]
+    deck_codes = sum(1 for row in rows if row.get("deck_code"))
+    report.metrics.update({"rows": len(rows), "deck_codes": deck_codes})
+    if deck_codes < 2 and len(rows) < 3:
+        report.add_issue(
+            "hsguru_streamer_decks.missing_codes_or_rows",
+            f"HSGuru streamer decks missing codes/rows ({deck_codes} codes, {len(rows)} rows)",
+            field="deck_code,rows",
+        )
+    report.score = round(max(min(deck_codes / 2.0, 1.0), min(len(rows) / 3.0, 1.0)), 4)
+    return report
+
+
+def _validate_hsguru_matchups(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    matchups = [
+        row for row in (structured.get("matchups") or []) if isinstance(row, dict)
+    ]
+    with_winrate = sum(1 for row in matchups if row.get("winrate"))
+    report.metrics.update({"matchups": len(matchups), "matchups_with_winrate": with_winrate})
+    if len(matchups) < 3:
+        report.add_issue(
+            "hsguru_matchups.too_few_rows",
+            f"HSGuru matchups too few rows ({len(matchups)} < 3)",
+            field="matchups",
+        )
+    if with_winrate < 1:
+        report.add_issue(
+            "hsguru_matchups.missing_winrates",
+            "HSGuru matchups content not detected",
+            field="winrate",
+        )
+    report.score = round(
+        (min(len(matchups) / 3.0, 1.0) + min(with_winrate, 1)) / 2,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -761,6 +825,9 @@ _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "heartharena_tierlist": _validate_heartharena_tierlist,
     "card_stats": _validate_card_stats,
     "hsreplay_meta_archetypes": _validate_hsreplay_meta_archetypes,
+    "meta": _validate_hsguru_meta,
+    "streamer_decks": _validate_hsguru_streamer_decks,
+    "matchups": _validate_hsguru_matchups,
 }
 
 
