@@ -197,6 +197,15 @@ curl -s "https://api.hs-manacost.ru/sources?site=hsreplay" | jq .
 
 Если live refresh упал, но старый cache рабочий, endpoint может продолжать отдавать старый dataset. В status тогда появляются `serving_cached_dataset`, `effective_state=ok_cached`, `last_refresh_state`, `last_refresh_error`, `cached_dataset_age_hours`. Это не ломает публичный `/health`, но видно в `/ops/health`, `/ops/summary` и `python -m app.cli freshness-check`.
 
+Для источников, которые временно не публикуют полноценные upstream-данные,
+structured/status diagnostics содержат `upstream_state`. Например,
+`vicious_syndicate_live_beta` использует `upstream_unclassified`, пока Firebase
+после выхода дополнения содержит только агрегаты `Other <Class>`; такие строки
+не выдаются как реальные архетипы и кандидат не проходит publish-gate. Radar
+использует `upstream_stale`, если опубликованный radar issue отстаёт от последнего
+Data Reaper report. Эти состояния означают задержку upstream, а не разрешение
+ослабить contract.
+
 ### `GET /api/bg/trinkets`
 
 Публичный endpoint для `bg.kolodahearthstone.ru`: объединяет `hsreplay_battlegrounds_trinkets_lesser` и `hsreplay_battlegrounds_trinkets_greater` и сохраняет варианты одной карты по расе.
