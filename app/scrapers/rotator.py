@@ -11,6 +11,7 @@ from ..config import fetch_backend_max_seconds, fetch_max_retries
 from ..publish_gate import validate_candidate_for_publish
 from .http_resilience import DEFAULT_BACKOFF_SECONDS, backoff_delay_seconds
 from ..refresh_log import log_action
+from ..source_state import SourceState
 from ..sources import Source
 from .base import FetchResult
 from .proxy import assert_proxy_configured, burn_proxy_session, source_can_use_flaresolverr_without_proxy
@@ -351,7 +352,7 @@ async def fetch_html(
     log_action(
         "browser.fetch.end",
         source_id=source.id,
-        state="fetch_error",
+        state=SourceState.FETCH_ERROR,
         detail=detail,
         level="error",
     )
