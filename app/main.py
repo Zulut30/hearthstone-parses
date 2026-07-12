@@ -184,22 +184,38 @@ def _semantic_dataset_quality(
     structured = (((dataset or {}).get("data") or {}).get("structured") or {})
     if not structured:
         return None
+    from .source_contracts import contract_quality_report
     from .source_validators import validate_structured
 
-    report = validate_structured(source_id, structured)
+    semantic_report = validate_structured(source_id, structured)
+    contract_report = contract_quality_report(source_id, structured)
+    semantic_issues = [
+        {
+            "code": issue.code,
+            "message": issue.message,
+            "field": issue.field,
+            "severity": issue.severity,
+        }
+        for issue in semantic_report.issues
+    ]
+    contract_issues = [
+        {
+            "code": "source_contract.failed",
+            "message": warning,
+            "field": None,
+            "severity": "error",
+        }
+        for warning in contract_report.get("warnings") or []
+    ]
+    score_candidates = [semantic_report.score]
+    if isinstance(contract_report.get("quality_score"), (int, float)):
+        score_candidates.append(float(contract_report["quality_score"]))
     return {
-        "ok": report.ok,
-        "score": report.score,
-        "issues": [
-            {
-                "code": issue.code,
-                "message": issue.message,
-                "field": issue.field,
-                "severity": issue.severity,
-            }
-            for issue in report.issues
-        ],
-        "metrics": report.metrics,
+        "ok": semantic_report.ok and bool(contract_report.get("ok")),
+        "score": min(score_candidates),
+        "issues": [*semantic_issues, *contract_issues],
+        "metrics": semantic_report.metrics,
+        "contract": contract_report,
     }
 
 

@@ -480,9 +480,10 @@ curl -s -X POST \
 ```
 
 `serving_ok=false` выставляется не только при transport/refresh error, но и когда
-уже сохранённый dataset не проходит семантическую проверку (например, все
+уже сохранённый dataset не проходит contract или семантическую проверку (например, все
 архетипы являются `Other <Class>` или radar относится к старому отчёту). В
-`GET /sources/{source_id}` тот же результат доступен в поле `semantic_quality`.
+`GET /sources/{source_id}` тот же объединённый результат доступен в поле
+`semantic_quality`; подробный contract report находится во вложенном `contract`.
 
 ### `GET /health/premium`
 

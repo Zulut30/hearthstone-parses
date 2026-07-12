@@ -90,6 +90,32 @@ class HealthEndpointTest(unittest.TestCase):
             },
         )
 
+    def test_cached_dataset_quality_includes_contract_failures(self) -> None:
+        dataset = {
+            "data": {
+                "structured": {
+                    "type": "metastats_decks",
+                    "decks": [
+                        {
+                            "archetype_name": "Only deck",
+                            "win_rate": "50%",
+                            "games": 100,
+                        }
+                    ],
+                }
+            }
+        }
+
+        quality = main._semantic_dataset_quality("metastats_decks", dataset)
+
+        self.assertIsNotNone(quality)
+        self.assertFalse(quality["ok"])
+        self.assertFalse(quality["contract"]["ok"])
+        self.assertIn(
+            "source_contract.failed",
+            {issue["code"] for issue in quality["issues"]},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
