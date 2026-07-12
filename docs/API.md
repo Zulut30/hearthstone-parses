@@ -62,6 +62,46 @@ X-API-Key: <HS_API_KEY>
 | `GET` | `/api/db/archetypes/{id}/decks` | Сборки архетипа, опционально с картами. |
 | `GET` | `/api/db/archetypes/{id}/history` | Popularity/winrate time series. |
 
+## API v1
+
+Версионированные endpoints добавлены независимо от legacy API. Старые `/datasets/*` и `/api/*` не редиректятся и сохраняют прежнюю форму JSON.
+
+| Method | Path | Data |
+| --- | --- | --- |
+| `GET` | `/v1/constructed/decks` | SQL-backed колоды с фильтрами legacy endpoint. |
+| `GET` | `/v1/constructed/archetypes` | Последние успешные snapshots архетипов. |
+| `GET` | `/v1/bg/heroes` | Solo/duos герои с пагинацией. |
+| `GET` | `/v1/bg/minions` | Последний успешный snapshot существ. |
+| `GET` | `/v1/arena/classes` | Классы арены из выбранного кешированного источника. |
+| `GET` | `/v1/system/sources` | Типизированный каталог источников. |
+| `GET` | `/v1/system/datasets` | Состояние кешей всех источников. |
+| `GET` | `/v1/system/health` | Диагностика в v1-конверте; не кешируется. |
+
+Все v1-ответы используют конверт:
+
+```json
+{
+  "data": [],
+  "meta": {
+    "source_id": "hsreplay_archetypes",
+    "fetched_at": "2026-07-12T08:00:00+00:00",
+    "stale": false,
+    "count": 42,
+    "limit": 100,
+    "offset": 0
+  }
+}
+```
+
+Публичные `GET /v1/*`, `GET /api/*` и `GET /datasets*` возвращают:
+
+```http
+Cache-Control: public, max-age=300, stale-while-revalidate=600
+ETag: "..."
+```
+
+`ETag` учитывает путь, query string и время актуального snapshot/dataset. Условный запрос с `If-None-Match` возвращает `304` без тела. `/health`, `/v1/system/health`, `/ops`, `/admin` и `/ui` исключены из публичного кеша.
+
 ### `GET /health`
 
 Публичный liveness endpoint. Он специально минимальный: подробные diagnostics перенесены в `/ops/health`.
