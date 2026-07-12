@@ -361,13 +361,17 @@ curl -s "https://api.hs-manacost.ru/api/bg/heroes/57946/best-composition" | jq .
 
 ## Hearthstone Patch Database
 
-`scripts/seed_hs_manacost_patches.py --all` берет все версии из
-`https://hearthstone.wiki.gg/wiki/Patches`, ищет соответствующие публикации в
-sitemap/WP API hs-manacost.ru и сохраняет их в SQLite. Wiki-версии хранятся в
-полном виде с build-номером, например `35.6.2.245096`, а для Manacost отдельно
-сохраняется короткая версия `35.6.2`. Если статья hs-manacost.ru не найдена,
-строка все равно сохраняется как `match_state = "missing_manacost"` со ссылкой
-на wiki.
+`scripts/seed_hs_manacost_patches.py --all` берет свежие версии и метаданные из
+официальной ленты патчей Blizzard, дополняет историю версиями из
+`https://hearthstone.wiki.gg/wiki/Patches`, затем ищет соответствующие
+публикации в sitemap/WP API hs-manacost.ru и сохраняет результат в SQLite.
+Поэтому задержка обновления Wiki не скрывает новый официальный патч. Полные
+wiki-версии с build-номером (например, `35.6.2.245096`) объединяются с
+официальными данными без дубликатов, а для Manacost отдельно сохраняется
+короткая версия `35.6.2`. Поля `official_url`, `official_title`,
+`official_published_at`, `official_modified_at` и `official_summary` явно
+показывают первичный источник. Если статья hs-manacost.ru не найдена, строка
+все равно сохраняется как `match_state = "missing_manacost"`.
 
 Автоматическое обновление выполняет systemd timer:
 `hs-data-api-docker-refresh-patches.timer`.

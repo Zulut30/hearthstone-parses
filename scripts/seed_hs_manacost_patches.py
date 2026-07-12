@@ -21,6 +21,7 @@ from app.patches_db import delete_patches_not_in, upsert_patch
 
 USER_AGENT = "HSDataAPI/0.1 (+https://api.hs-manacost.ru)"
 WIKI_PATCHES_URL = "https://hearthstone.wiki.gg/wiki/Patches"
+OFFICIAL_NEWS_URL = "https://hearthstone.blizzard.com/en-us/news?category=patch-notes"
 HS_MANACOST_SITEMAP_URL = "https://hs-manacost.ru/sitemap.xml"
 HS_MANACOST_WP_POSTS_URL = "https://hs-manacost.ru/wp-json/wp/v2/posts"
 
@@ -119,6 +120,79 @@ def latest_wiki_versions(limit: int | None) -> list[str]:
         if limit is not None and len(versions) >= limit:
             break
     return versions
+
+
+def latest_official_patches(limit: int | None) -> list[dict[str, str]]:
+    page = fetch_text(OFFICIAL_NEWS_URL)
+    scripts = re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        page,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    patches: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_script in scripts:
+        try:
+            payload = json.loads(html.unescape(raw_script))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        entities = ((payload.get("mainEntity") or {}).get("itemListElement") or [])
+        for entity in entities:
+            headline = str(entity.get("headline") or "").strip()
+            match = re.fullmatch(r"([0-9]+(?:\.[0-9]+){1,3}) Patch Notes", headline)
+            if not match or match.group(1) in seen:
+                continue
+            version = match.group(1)
+            seen.add(version)
+            patches.append(
+                {
+                    "version": version,
+                    "official_title": headline,
+                    "official_url": str(entity.get("url") or ""),
+                    "official_published_at": str(entity.get("datePublished") or ""),
+                    "official_modified_at": str(entity.get("dateModified") or ""),
+                    "official_summary": str(entity.get("description") or "").strip(),
+                }
+            )
+            if limit is not None and len(patches) >= limit:
+                return patches
+    if not patches:
+        raise RuntimeError("Official Hearthstone news returned no patch notes")
+    return patches
+
+
+def combined_patch_catalog(limit: int | None) -> list[dict[str, str]]:
+    official = latest_official_patches(limit)
+    wiki_versions = latest_wiki_versions(None)
+    official_by_wiki_version: dict[str, dict[str, str]] = {}
+    unmatched_official: list[dict[str, str]] = []
+    for official_patch in official:
+        official_version = official_patch["version"]
+        wiki_version = next(
+            (
+                candidate
+                for candidate in wiki_versions
+                if candidate == official_version
+                or hs_manacost_version(candidate) == official_version
+            ),
+            None,
+        )
+        if wiki_version:
+            official_by_wiki_version[wiki_version] = official_patch
+        else:
+            unmatched_official.append(official_patch)
+    catalog = [
+        {**official_by_wiki_version.get(version, {}), "version": version}
+        for version in wiki_versions
+    ]
+    catalog.extend(unmatched_official)
+    catalog.sort(
+        key=lambda item: tuple(int(part) for part in item["version"].split(".")),
+        reverse=True,
+    )
+    if limit is not None:
+        catalog = catalog[:limit]
+    return catalog
 
 
 def hs_manacost_version(wiki_version: str) -> str:
@@ -341,7 +415,13 @@ def headings(markup: str) -> list[dict[str, str]]:
     return parser.sections
 
 
-def build_wiki_patch(version: str, *, wiki_rank: int, hs_version: str | None = None) -> dict:
+def build_wiki_patch(
+    version: str,
+    *,
+    wiki_rank: int,
+    hs_version: str | None = None,
+    official: dict[str, str] | None = None,
+) -> dict:
     return {
         "version": version,
         "display_version": version,
@@ -349,12 +429,20 @@ def build_wiki_patch(version: str, *, wiki_rank: int, hs_version: str | None = N
         "wiki_title": f"Patch {version}",
         "wiki_url": f"https://hearthstone.wiki.gg/wiki/Patch_{version}",
         "hs_manacost_version": hs_version,
+        **(official or {}),
         "match_state": "missing_manacost",
         "fetched_at": datetime.now(UTC).isoformat(),
     }
 
 
-def build_patch(version: str, source_url: str, hs_version: str, *, wiki_rank: int) -> dict:
+def build_patch(
+    version: str,
+    source_url: str,
+    hs_version: str,
+    *,
+    wiki_rank: int,
+    official: dict[str, str] | None = None,
+) -> dict:
     slug = source_url.rstrip("/").split("/")[-1]
     post = wp_post_by_slug(slug)
     content_html = (post.get("content") or {}).get("rendered") or ""
@@ -370,6 +458,7 @@ def build_patch(version: str, source_url: str, hs_version: str, *, wiki_rank: in
         "wiki_title": f"Patch {version}",
         "wiki_url": f"https://hearthstone.wiki.gg/wiki/Patch_{version}",
         "hs_manacost_version": hs_version,
+        **(official or {}),
         "title": title,
         "slug": slug,
         "source_url": post.get("link") or source_url,
@@ -406,19 +495,28 @@ def main() -> int:
         argv = ["--limit", argv[0]]
     args = parse_args(argv)
     limit = None if args.all else args.limit
-    versions = latest_wiki_versions(limit)
+    catalog = combined_patch_catalog(limit)
+    versions = [item["version"] for item in catalog]
     post_urls = hs_manacost_post_urls()
     stored: list[dict[str, str | None]] = []
     missing: list[str] = []
-    for wiki_rank, version in enumerate(versions):
+    for wiki_rank, catalog_item in enumerate(catalog):
+        version = catalog_item["version"]
+        official = {key: value for key, value in catalog_item.items() if key != "version"}
         source_url, hs_version = find_patch_url(post_urls, version)
         if source_url and hs_version:
-            patch = build_patch(version, source_url, hs_version, wiki_rank=wiki_rank)
+            patch = build_patch(
+                version,
+                source_url,
+                hs_version,
+                wiki_rank=wiki_rank,
+                official=official,
+            )
         else:
             missing.append(version)
             if args.matched_only:
                 continue
-            patch = build_wiki_patch(version, wiki_rank=wiki_rank)
+            patch = build_wiki_patch(version, wiki_rank=wiki_rank, official=official)
         upsert_patch(patch)
         stored.append(
             {
@@ -426,6 +524,7 @@ def main() -> int:
                 "wiki_rank": patch.get("wiki_rank"),
                 "hs_manacost_version": patch.get("hs_manacost_version"),
                 "wiki_url": patch.get("wiki_url"),
+                "official_url": patch.get("official_url"),
                 "title": patch.get("title"),
                 "source_url": patch.get("source_url"),
                 "match_state": patch.get("match_state"),

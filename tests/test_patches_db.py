@@ -30,6 +30,9 @@ class PatchesDbTest(unittest.TestCase):
                 "display_version": "35.6.0",
                 "wiki_title": "Patch 35.6.0",
                 "wiki_url": "https://hearthstone.wiki.gg/wiki/Patch_35.6.0",
+                "official_title": "35.6 Patch Notes",
+                "official_url": "https://hearthstone.blizzard.com/en-us/news/24276665/35-6-patch-notes",
+                "official_published_at": "2026-06-02T17:00:00+00:00",
                 "hs_manacost_version": "35.6",
                 "title": "Обновление 35.6",
                 "slug": "obnovlenie-35-6-test",
@@ -46,6 +49,8 @@ class PatchesDbTest(unittest.TestCase):
         self.assertEqual(by_wiki_version["title"], "Обновление 35.6")
         self.assertEqual(by_manacost_version["version"], "35.6.0")
         self.assertEqual(by_wiki_version["wiki_title"], "Patch 35.6.0")
+        self.assertEqual(by_wiki_version["official_title"], "35.6 Patch Notes")
+        self.assertIn("hearthstone.blizzard.com", by_wiki_version["official_url"])
         self.assertEqual(by_wiki_version["match_state"], "matched")
         self.assertEqual(by_wiki_version["sections"][0]["title"], "Навигация")
 
