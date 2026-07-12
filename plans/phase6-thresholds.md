@@ -33,3 +33,15 @@ and the replacement has a focused regression test.
 | classes ≥8, archetypes ≥20, metrics ≥20 | HSReplay meta archetypes | contract + type validator | transferred + tested; old branch removed |
 | premium-login/userdata/content markers | HSReplay raw-page fallback | page/auth structural checks | remains in `quality.py` by design |
 | default text lines ≥10 | unstructured fallback | page structural check | remains in `quality.py` by design |
+
+## Completion evidence
+
+- `app/scrapers/quality.py` contains no per-`structured.type` dispatch; it only
+  coordinates contract/semantic validation and raw-page structural fallbacks.
+- Browser rotators call `validate_candidate_for_publish`, not
+  `validate_parsed_data` directly.
+- Live parity audit on 2026-07-12 checked all 46 cached datasets: 44 usable
+  datasets passed both layers; only the already identified Vicious radar/live
+  datasets failed semantic validation.
+- `tests/test_phase6_validation_consolidation.py` prevents threshold-inventory
+  regressions and validation-path bypasses.
