@@ -15,12 +15,12 @@ async def apply_playwright_stealth(page: Any) -> bool:
     if not fetch_playwright_stealth_enabled():
         return False
     try:
-        from playwright_stealth import stealth_async
+        from playwright_stealth import Stealth
     except ImportError:
         if not _applied_once:
             logger.info("playwright-stealth not installed; skip stealth patches")
             _applied_once = True
         return False
 
-    await stealth_async(page)
+    await Stealth().apply_stealth_async(page)
     return True
