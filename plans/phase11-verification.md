@@ -32,6 +32,13 @@ The three production data findings are exactly the kind of silent-success/stalen
 - Quality diagnostics are retained in failure statuses so `/sources/{id}` and operations tooling can distinguish upstream warm-up/staleness from transport or parser failures.
 - Final local suite after these changes: **281 passed**, 4 subtests passed, 0 failed; GitHub pytest is green on commit `a30686a`.
 
+## New-expansion card coverage
+
+- Current HearthstoneJSON lists 135 collectible cards in `ESCAPEFROM_VIOLET_HOLD`; the full local card index contains 254 records for the set including non-collectible/token forms.
+- Production `hsreplay_cards_legend_included_winrate` and `...included_popularity` each resolve all 135/135 collectible IDs. The union of all four ranked card datasets also covers 135/135; the one-day Legend sample contains 132/135, which is expected usage sampling rather than an index miss.
+- The in-process HearthstoneJSON index previously remained frozen until process restart even after its file TTL elapsed. It now refreshes and rebuilds derived ID/name/dbf indexes after 24 hours, writes atomically, rejects payload truncation, serves stale data with a retry backoff during upstream failure, and falls back from unavailable locale data to enUS.
+- Final local suite after card-index hardening: **286 passed**, 4 subtests passed, 0 failed.
+
 ## External steps still required
 
 1. Human review and merge PR #2.
