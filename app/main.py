@@ -173,6 +173,33 @@ def source_payload(source_id: str) -> dict:
         "status": status,
         "has_dataset": dataset is not None,
         "dataset_fetched_at": dataset.get("fetched_at") if dataset else None,
+        "semantic_quality": _semantic_dataset_quality(source_id, dataset),
+    }
+
+
+def _semantic_dataset_quality(
+    source_id: str,
+    dataset: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    structured = (((dataset or {}).get("data") or {}).get("structured") or {})
+    if not structured:
+        return None
+    from .source_validators import validate_structured
+
+    report = validate_structured(source_id, structured)
+    return {
+        "ok": report.ok,
+        "score": report.score,
+        "issues": [
+            {
+                "code": issue.code,
+                "message": issue.message,
+                "field": issue.field,
+                "severity": issue.severity,
+            }
+            for issue in report.issues
+        ],
+        "metrics": report.metrics,
     }
 
 
@@ -303,6 +330,8 @@ def build_health_diagnostics() -> dict:
     cached_sources: list[str] = []
     cached_after_failure_sources: list[str] = []
     hard_failed_sources: list[str] = []
+    semantic_failed_sources: list[str] = []
+    semantic_failures: list[dict[str, Any]] = []
     for source, status in zip(SOURCES, statuses, strict=True):
         state = status["state"] if status else SourceState.NEVER_FETCHED
         states[state] = states.get(state, 0) + 1
@@ -312,12 +341,23 @@ def build_health_diagnostics() -> dict:
                 cached_after_failure_sources.append(source.id)
         if state != SourceState.OK:
             hard_failed_sources.append(source.id)
+        semantic_quality = _semantic_dataset_quality(source.id, load_dataset(source.id))
+        if semantic_quality and not semantic_quality["ok"]:
+            semantic_failed_sources.append(source.id)
+            semantic_failures.append(
+                {
+                    "source_id": source.id,
+                    "score": semantic_quality["score"],
+                    "issues": semantic_quality["issues"],
+                    "metrics": semantic_quality["metrics"],
+                }
+            )
 
     from .stale_monitor import find_stale_sources
 
     stale_sources = find_stale_sources(include_ok=True)
     stale_ids = [str(item["source_id"]) for item in stale_sources]
-    serving_ok = not hard_failed_sources
+    serving_ok = not hard_failed_sources and not semantic_failed_sources
     freshness_ok = not stale_ids and not cached_sources
     return {
         "ok": serving_ok,
@@ -328,6 +368,8 @@ def build_health_diagnostics() -> dict:
         "sources": len(SOURCES),
         "states": states,
         "hard_failed_sources": hard_failed_sources,
+        "semantic_failed_sources": semantic_failed_sources,
+        "semantic_failures": semantic_failures,
         "cached_sources": cached_sources,
         "cached_after_failure_sources": cached_after_failure_sources,
         "stale_sources": stale_ids,

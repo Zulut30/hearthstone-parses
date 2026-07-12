@@ -33,7 +33,9 @@ class HealthEndpointTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, patch.object(main, "SOURCES", [source]), patch.object(
             main, "load_status", return_value=status
-        ), patch.object(main, "root_dir", return_value=Path(tmp)), patch.object(
+        ), patch.object(main, "load_dataset", return_value=None), patch.object(
+            main, "root_dir", return_value=Path(tmp)
+        ), patch.object(
             main, "api_key", return_value="secret"
         ), patch(
             "app.stale_monitor.find_stale_sources", return_value=stale
@@ -50,6 +52,40 @@ class HealthEndpointTest(unittest.TestCase):
         self.assertEqual(payload["cached_after_failure_sources"], ["src1"])
         self.assertEqual(payload["cached_after_failure_count"], 1)
         self.assertEqual(payload["stale_sources"], ["src1"])
+
+    def test_ops_health_detects_semantically_invalid_cached_dataset(self) -> None:
+        source = type("SourceStub", (), {"id": "vicious_syndicate_live_beta"})()
+        status = {"source_id": source.id, "state": "ok", "fetched_at": "2026-07-12T00:00:00Z"}
+        placeholders = [{"deck": f"Other Class{idx}"} for idx in range(11)]
+        dataset = {
+            "data": {
+                "structured": {
+                    "type": "vicious_live",
+                    "deck_distribution": placeholders,
+                    "tier_list": [{"rank_bracket": "All", "decks": placeholders}],
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(main, "SOURCES", [source]), patch.object(
+            main, "load_status", return_value=status
+        ), patch.object(main, "load_dataset", return_value=dataset), patch.object(
+            main, "root_dir", return_value=Path(tmp)
+        ), patch.object(main, "api_key", return_value="secret"), patch(
+            "app.stale_monitor.find_stale_sources", return_value=[]
+        ):
+            response = TestClient(main.app).get("/ops/health", headers={"X-API-Key": "secret"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["serving_ok"])
+        self.assertTrue(payload["degraded"])
+        self.assertEqual(payload["semantic_failed_sources"], [source.id])
+        self.assertEqual(
+            payload["semantic_failures"][0]["issues"][0]["code"],
+            "vicious_live.too_few_named_archetypes",
+        )
 
 
 if __name__ == "__main__":

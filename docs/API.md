@@ -426,7 +426,7 @@ curl -L "https://api.hs-manacost.ru/api/bg/compositions/screenshot/latest/image"
 | `POST` | `/admin/refresh/bg-hero-details` | Запустить обновление BG hero details и duos tier list. |
 | `POST` | `/admin/capture/bg-compositions-screenshot` | Сделать Firecrawl screenshot BG compositions. |
 | `PUT` | `/admin/datasets/{source_id}` | Ручная загрузка JSON dataset в cache. |
-| `GET` | `/ops/health` | Подробное состояние источников: states, stale, cached, data dir. |
+| `GET` | `/ops/health` | Подробное состояние источников: states, stale, cached, semantic quality, data dir. |
 | `GET` | `/health/premium` | Проверка локального premium auth состояния. |
 | `GET` | `/health/premium?live=true` | Live-probe HSReplay/VS premium endpoints. |
 | `GET` | `/ops/summary` | Сводка событий refresh за период. |
@@ -468,6 +468,8 @@ curl -s -X POST \
     "ok": 40
   },
   "hard_failed_sources": [],
+  "semantic_failed_sources": [],
+  "semantic_failures": [],
   "cached_sources": [],
   "cached_after_failure_sources": [],
   "stale_sources": [],
@@ -476,6 +478,11 @@ curl -s -X POST \
   "cached_after_failure_count": 0
 }
 ```
+
+`serving_ok=false` выставляется не только при transport/refresh error, но и когда
+уже сохранённый dataset не проходит семантическую проверку (например, все
+архетипы являются `Other <Class>` или radar относится к старому отчёту). В
+`GET /sources/{source_id}` тот же результат доступен в поле `semantic_quality`.
 
 ### `GET /health/premium`
 
