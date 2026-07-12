@@ -447,6 +447,35 @@ class SourceValidatorsTest(unittest.TestCase):
         classes[3]["cards"][19]["tier_id"] = "A"
         self.assertTrue(validate_structured("heartharena_tierlist", structured).ok)
 
+    def test_card_stats_reject_blocked_and_metric_sparse_payloads(self) -> None:
+        blocked = {
+            "type": "card_stats",
+            "blocked": True,
+            "cards": [{"name": f"Card {idx}"} for idx in range(5)],
+        }
+        report = validate_structured("hsreplay_cards_test", blocked)
+        codes = {issue.code for issue in report.issues}
+        self.assertIn("card_stats.blocked_or_empty", codes)
+        self.assertIn("card_stats.too_few_cards", codes)
+
+        cards = [
+            {"name": f"Card {idx}", "deck_winrate": "50%" if idx < 19 else None}
+            for idx in range(30)
+        ]
+        report = validate_structured(
+            "hsreplay_cards_test",
+            {"type": "card_stats", "cards": cards},
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("card_stats.missing_metrics", {issue.code for issue in report.issues})
+        cards[19]["deck_popularity"] = "1%"
+        self.assertTrue(
+            validate_structured(
+                "hsreplay_cards_test",
+                {"type": "card_stats", "cards": cards},
+            ).ok
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

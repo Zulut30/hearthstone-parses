@@ -648,6 +648,46 @@ def _validate_heartharena_tierlist(
     return report
 
 
+def _validate_card_stats(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+    report = ValidationReport()
+    cards = [row for row in (structured.get("cards") or []) if isinstance(row, dict)]
+    with_metrics = sum(
+        1 for row in cards if row.get("deck_winrate") or row.get("deck_popularity")
+    )
+    blocked = bool(structured.get("blocked"))
+    report.metrics.update(
+        {"cards": len(cards), "cards_with_metrics": with_metrics, "blocked": blocked}
+    )
+    if blocked and len(cards) < 10:
+        report.add_issue(
+            "card_stats.blocked_or_empty",
+            "card stats blocked or empty",
+            field="blocked",
+        )
+    if len(cards) < 30:
+        report.add_issue(
+            "card_stats.too_few_cards",
+            f"card stats too few ({len(cards)} < 30)",
+            field="cards",
+        )
+    if with_metrics < 20:
+        report.add_issue(
+            "card_stats.missing_metrics",
+            f"card stats missing metrics ({with_metrics}/{len(cards)}; minimum 20)",
+            field="deck_winrate,deck_popularity",
+        )
+    report.score = round(
+        (
+            float(not blocked or len(cards) >= 10)
+            + min(len(cards) / 30.0, 1.0)
+            + min(with_metrics / 20.0, 1.0)
+        )
+        / 3,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -663,6 +703,7 @@ _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_compositions": _validate_bg_compositions,
     "arena_card_tiers": _validate_arena_card_tiers,
     "heartharena_tierlist": _validate_heartharena_tierlist,
+    "card_stats": _validate_card_stats,
 }
 
 

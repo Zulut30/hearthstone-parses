@@ -166,18 +166,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "card_stats":
-            cards = structured.get("cards") or []
-            if structured.get("blocked") and len(cards) < 10:
-                return False, "card stats blocked or empty"
-            if len(cards) < 30:
-                return False, f"card stats too few ({len(cards)})"
-            with_metrics = sum(
-                1 for c in cards if c.get("deck_winrate") or c.get("deck_popularity")
-            )
-            if with_metrics < 20:
-                return False, f"card stats missing metrics ({with_metrics}/{len(cards)})"
-            return True, "ok"
         if structured.get("type") == "hsreplay_meta_archetypes":
             classes = structured.get("classes") or []
             archetypes = [
