@@ -194,6 +194,27 @@ class SourceContractsTest(unittest.TestCase):
         self.assertFalse(report["ok"])
         self.assertIn("too few rows", "; ".join(report["warnings"]))
 
+    def test_contract_backed_structured_source_needs_no_duplicate_site_branch(self) -> None:
+        source = SOURCE_BY_ID["metastats_decks"]
+        parsed = {
+            "title": "MetaStats decks",
+            "structured": {
+                "type": "metastats_decks",
+                "decks": [
+                    {
+                        "archetype_name": f"Deck {idx}",
+                        "win_rate": "50%",
+                        "games": 100,
+                    }
+                    for idx in range(40)
+                ],
+            },
+        }
+
+        ok, reason = validate_parsed_data(source, parsed)
+
+        self.assertTrue(ok, reason)
+
     def test_hsguru_meta_contract_rejects_tiny_hydration(self) -> None:
         report = contract_quality_report(
             "hsguru_meta_wild_top_legend",
