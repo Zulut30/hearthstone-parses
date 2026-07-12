@@ -417,6 +417,36 @@ class SourceValidatorsTest(unittest.TestCase):
 
         self.assertTrue(report.ok)
 
+    def test_heartharena_requires_two_hundred_tier_ids(self) -> None:
+        classes = [
+            {
+                "class": f"Class {class_idx}",
+                "cards": [
+                    {
+                        "name": f"Card {class_idx}-{card_idx}",
+                        "tier_id": "A" if class_idx * 60 + card_idx < 199 else None,
+                    }
+                    for card_idx in range(60)
+                ],
+            }
+            for class_idx in range(5)
+        ]
+        structured = {
+            "type": "heartharena_tierlist",
+            "total_cards": 300,
+            "classes": classes,
+        }
+
+        report = validate_structured("heartharena_tierlist", structured)
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "heartharena_tierlist.missing_tier_ids",
+            {issue.code for issue in report.issues},
+        )
+        classes[3]["cards"][19]["tier_id"] = "A"
+        self.assertTrue(validate_structured("heartharena_tierlist", structured).ok)
+
 
 if __name__ == "__main__":
     unittest.main()

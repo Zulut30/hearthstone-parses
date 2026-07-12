@@ -28,7 +28,7 @@ and the replacement has a focused regression test.
 | minions ≥50 and ≥40 with stats | BG minions | contract + type validator | transferred + tested; old branch removed |
 | compositions ≥5 and ≥5 with stats | BG compositions | contract + type validator | transferred + tested; old branch removed |
 | cards ≥ dynamic source threshold and tier labels present | Arena card tiers | contract + source-aware validator | transferred + tested; old branch removed |
-| classes ≥5, cards ≥300, tier ids ≥200 | HearthArena tier list | contract + type validator | pending |
+| classes ≥5, cards ≥300, tier ids ≥200 | HearthArena tier list | contract + type validator | transferred + tested; old branch removed |
 | cards ≥30, metrics ≥20, blocked payload rejected | card stats | contract + type validator | pending |
 | classes ≥8, archetypes ≥20, metrics ≥20 | HSReplay meta archetypes | contract + type validator | pending |
 | premium-login/userdata/content markers | HSReplay raw-page fallback | page/auth structural checks | remains in `quality.py` by design |

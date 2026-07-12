@@ -602,6 +602,52 @@ def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> Va
     return report
 
 
+def _validate_heartharena_tierlist(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
+    total_cards = int(structured.get("total_cards") or 0)
+    with_tier = sum(
+        1
+        for class_row in classes
+        for card in (class_row.get("cards") or [])
+        if isinstance(card, dict) and card.get("tier_id")
+    )
+    report.metrics.update(
+        {"classes": len(classes), "total_cards": total_cards, "cards_with_tier_id": with_tier}
+    )
+    if len(classes) < 5:
+        report.add_issue(
+            "heartharena_tierlist.too_few_classes",
+            f"heartharena classes too few ({len(classes)} < 5)",
+            field="classes",
+        )
+    if total_cards < 300:
+        report.add_issue(
+            "heartharena_tierlist.too_few_cards",
+            f"heartharena cards too few ({total_cards} < 300)",
+            field="total_cards",
+        )
+    if with_tier < 200:
+        report.add_issue(
+            "heartharena_tierlist.missing_tier_ids",
+            f"heartharena cards missing tier_id ({with_tier} < 200)",
+            field="tier_id",
+        )
+    report.score = round(
+        (
+            min(len(classes) / 5.0, 1.0)
+            + min(total_cards / 300.0, 1.0)
+            + min(with_tier / 200.0, 1.0)
+        )
+        / 3,
+        4,
+    )
+    return report
+
+
 _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_heroes": _validate_bg_heroes,
     "vicious_live": _validate_vicious_live,
@@ -616,6 +662,7 @@ _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "bg_minions": _validate_bg_minions,
     "bg_compositions": _validate_bg_compositions,
     "arena_card_tiers": _validate_arena_card_tiers,
+    "heartharena_tierlist": _validate_heartharena_tierlist,
 }
 
 

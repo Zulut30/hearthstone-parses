@@ -166,19 +166,6 @@ def validate_parsed_data(source: Source, parsed: dict[str, Any]) -> tuple[bool, 
         return True, "ok"
 
     if source.site in ("hsreplay", "firestone", "heartharena"):
-        if structured.get("type") == "heartharena_tierlist":
-            classes = structured.get("classes") or []
-            if len(classes) < 5:
-                return False, f"heartharena classes too few ({len(classes)})"
-            total_cards = structured.get("total_cards", 0)
-            if total_cards < 300:
-                return False, f"heartharena cards too few ({total_cards})"
-            with_tier = sum(
-                1 for cl in classes for c in (cl.get("cards") or []) if c.get("tier_id")
-            )
-            if with_tier < 200:
-                return False, f"heartharena cards missing tier_id ({with_tier})"
-            return True, "ok"
         if structured.get("type") == "card_stats":
             cards = structured.get("cards") or []
             if structured.get("blocked") and len(cards) < 10:
