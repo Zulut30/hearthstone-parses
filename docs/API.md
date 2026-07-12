@@ -2,6 +2,9 @@
 
 Актуальная документация REST API для `hearthstone-parses`.
 
+Практический каталог наборов, полей и готовых запросов:
+[DATA_CATALOG.md](DATA_CATALOG.md).
+
 Production base URL:
 
 ```text
