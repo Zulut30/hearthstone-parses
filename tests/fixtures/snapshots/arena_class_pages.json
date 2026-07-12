@@ -1,0 +1,17 @@
+{
+  "classes": [
+    {"class": "Deathknight", "winrate": "55.0%", "win_rate": 55.0, "pct_7_plus": 72.0, "pick_rate": 10.0, "num_drafts": 1200, "deck_class": 1},
+    {"class": "Demonhunter", "winrate": "54.0%", "win_rate": 54.0, "pct_7_plus": 71.0, "pick_rate": 9.0, "num_drafts": 1100, "deck_class": 14},
+    {"class": "Druid", "winrate": "53.0%", "win_rate": 53.0, "pct_7_plus": 70.0, "pick_rate": 9.0, "num_drafts": 1000, "deck_class": 2},
+    {"class": "Hunter", "winrate": "52.0%", "win_rate": 52.0, "pct_7_plus": 69.0, "pick_rate": 9.0, "num_drafts": 900, "deck_class": 3},
+    {"class": "Mage", "winrate": "51.0%", "win_rate": 51.0, "pct_7_plus": 68.0, "pick_rate": 9.0, "num_drafts": 800, "deck_class": 4},
+    {"class": "Paladin", "winrate": "50.0%", "win_rate": 50.0, "pct_7_plus": 67.0, "pick_rate": 9.0, "num_drafts": 700, "deck_class": 5},
+    {"class": "Priest", "winrate": "49.0%", "win_rate": 49.0, "pct_7_plus": 66.0, "pick_rate": 9.0, "num_drafts": 600, "deck_class": 6},
+    {"class": "Rogue", "winrate": "48.0%", "win_rate": 48.0, "pct_7_plus": 65.0, "pick_rate": 9.0, "num_drafts": 500, "deck_class": 7},
+    {"class": "Shaman", "winrate": "47.0%", "win_rate": 47.0, "pct_7_plus": 64.0, "pick_rate": 9.0, "num_drafts": 400, "deck_class": 8},
+    {"class": "Warlock", "winrate": "46.0%", "win_rate": 46.0, "pct_7_plus": 63.0, "pick_rate": 9.0, "num_drafts": 300, "deck_class": 9},
+    {"class": "Warrior", "winrate": "45.0%", "win_rate": 45.0, "pct_7_plus": 62.0, "pick_rate": 9.0, "num_drafts": 200, "deck_class": 10}
+  ],
+  "matchups": [{"class": "Deathknight", "opponent": "Warrior", "win_rate": 57.0}],
+  "source": {"api_url": "https://hsreplay.net/api/v1/arena/classes_stats/"}
+}
