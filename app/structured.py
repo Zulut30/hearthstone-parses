@@ -4,10 +4,9 @@ import re
 from typing import Any
 
 from .cards_index import resolve_card_name
-from .parsing_normalize import looks_like_name, normalize_percent_text
+from .parsing_normalize import is_percent, looks_like_name
 from .sources import SOURCE_BY_ID, Source
 
-PERCENT_RE = re.compile(r"^\d+(\.\d+)?%$")
 INT_RE = re.compile(r"^\d+$")
 # HSReplay serves localized deck rows ("Winrate ... Games" or "Побед ... Игр"),
 # with either dot or comma decimals and space/nbsp thousand separators.
@@ -17,10 +16,6 @@ DECK_LINK_RE = re.compile(
     r"(?:\s+Avg Duration\s+(?P<duration>[\d.,]+\s*(?:min|мин)))?",
     re.I,
 )
-
-
-def _is_percent(value: str) -> bool:
-    return bool(PERCENT_RE.match(value.strip()))
 
 
 def _is_int(value: str) -> bool:
@@ -37,7 +32,7 @@ def parse_legendary_groups(lines: list[str]) -> list[dict[str, Any]]:
         cards: list[dict[str, Any]] = []
         i += 1
         while i < len(lines) and lines[i] not in ("Winrate", "Included Cards:"):
-            if _is_int(lines[i]) and i + 1 < len(lines) and not _is_percent(lines[i + 1]):
+            if _is_int(lines[i]) and i + 1 < len(lines) and not is_percent(lines[i + 1]):
                 count = int(lines[i])
                 name = lines[i + 1]
                 resolved = resolve_card_name(name)
@@ -158,7 +153,7 @@ def parse_bg_heroes(lines: list[str]) -> list[dict[str, Any]]:
     current: dict[str, Any] | None = None
     while i < len(lines):
         line = lines[i]
-        if _is_percent(line):
+        if is_percent(line):
             if current is not None:
                 current["pick_rate"] = line
                 heroes.append(current)
@@ -219,10 +214,6 @@ def parse_hsguru_matchups(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return pairs
 
 
-def _parse_percent_value(value: str) -> str | None:
-    return normalize_percent_text(value)
-
-
 def parse_cards_from_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
     for table in tables:
@@ -237,7 +228,7 @@ def parse_cards_from_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]
                         continue
                     kl = key.lower()
                     if "card" in kl or kl == "карта" or key == "column_1":
-                        if len(val) > 2 and not _is_percent(val):
+                        if len(val) > 2 and not is_percent(val):
                             name = val
                             break
                 if not name:
@@ -325,7 +316,7 @@ def parse_card_stats_lines(lines: list[str]) -> list[dict[str, Any]]:
                 while i < len(lines):
                     if lines[i] == "★" or (lines[i].isdigit() and int(lines[i]) <= 10):
                         break
-                    if _is_percent(lines[i]) or lines[i].replace(",", ".").replace(".", "", 1).isdigit():
+                    if is_percent(lines[i]) or lines[i].replace(",", ".").replace(".", "", 1).isdigit():
                         stats.append(lines[i])
                         i += 1
                         continue
@@ -492,10 +483,10 @@ def parse_bg_trinkets(lines: list[str]) -> list[dict[str, Any]]:
             current_tier = line.strip().upper()
             i += 1
             continue
-        if _is_percent(line) and "Place" not in line:
+        if is_percent(line) and "Place" not in line:
             if current is not None:
                 current["pick_rate"] = line
-                if i + 1 < len(lines) and not _is_percent(lines[i + 1]) and lines[i + 1].replace(".", "", 1).isdigit():
+                if i + 1 < len(lines) and not is_percent(lines[i + 1]) and lines[i + 1].replace(".", "", 1).isdigit():
                     current["avg_placement"] = lines[i + 1]
                 items.append(current)
                 current = None
@@ -550,7 +541,7 @@ def parse_arena_matrix(tables: list[dict[str, Any]], lines: list[str]) -> list[d
     ]
     i = 0
     while i + 2 < len(lines):
-        if lines[i] in classes and _is_percent(lines[i + 2]):
+        if lines[i] in classes and is_percent(lines[i + 2]):
             pairs.append({"class_a": lines[i], "class_b": lines[i + 1], "winrate": lines[i + 2]})
             i += 3
         else:

@@ -29,6 +29,11 @@ def parse_percent(value: Any, *, embedded: bool = False) -> float | None:
     return parse_decimal(raw, embedded=embedded)
 
 
+def is_percent(value: Any) -> bool:
+    raw = str(value or "").strip()
+    return raw.endswith("%") and parse_percent(raw) is not None
+
+
 def normalize_percent_text(value: Any) -> str | None:
     """Return a normalized percent string while preserving supplied precision."""
     raw = str(value or "").strip().replace(",", ".")

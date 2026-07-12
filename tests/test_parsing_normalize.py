@@ -1,5 +1,6 @@
 from app.parsing_normalize import (
     extract_markdown_links,
+    is_percent,
     looks_like_name,
     normalize_percent_text,
     parse_decimal,
@@ -13,6 +14,8 @@ def test_decimal_and_percent_normalization_is_locale_tolerant_but_strict() -> No
     assert parse_decimal("rank 4.25") is None
     assert parse_decimal("rank 4.25", embedded=True) == 4.25
     assert parse_percent("51,7%") == 51.7
+    assert is_percent("51,7%")
+    assert not is_percent("51,7")
     assert normalize_percent_text("51,70") == "51.70%"
     assert normalize_percent_text("unknown") is None
 
