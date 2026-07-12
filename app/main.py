@@ -16,6 +16,7 @@ from .fetcher import refresh_sources
 from .source_state import SourceState
 from .sources import SOURCES, SOURCE_BY_ID
 from .storage import load_dataset, load_status, root_dir, save_dataset, save_status
+from .routers.constructed import router as constructed_v1_router
 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -37,6 +38,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Accept", "Content-Type", "X-API-Key"],
 )
+app.include_router(constructed_v1_router)
 
 
 @app.middleware("http")
