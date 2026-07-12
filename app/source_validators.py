@@ -482,8 +482,18 @@ def _validate_bg_trinkets(_source_id: str, structured: dict[str, Any]) -> Valida
             "trinkets": len(trinkets),
             "valid_trinkets": len(valid),
             "minimum_valid": minimum_valid,
+            "parser_level": structured.get("parser_level"),
+            "dropped_rows": int(structured.get("dropped_rows") or 0),
         }
     )
+    parser_level = str(structured.get("parser_level") or "primary")
+    if parser_level != "primary":
+        report.add_issue(
+            "bg_trinkets.fallback_parser",
+            f"bg trinkets parsed with fallback level {parser_level}",
+            field="parser_level",
+            severity="warning",
+        )
     if len(trinkets) < 8:
         report.add_issue(
             "bg_trinkets.too_few_rows",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from app.hsreplay_extract import extract_bg_trinkets
+from app.hsreplay_extract import extract_bg_trinkets, extract_for_source
 from app.structured import parse_bg_trinkets
 
 
@@ -75,3 +75,21 @@ def test_extract_bg_trinkets_reads_hsreplay_variant_badges() -> None:
     assert {row["tribe"] for row in trinkets} == {"Murloc", "Undead"}
     assert {row["trinket_id"] for row in trinkets} == {"BG30_MagicItem_426"}
     assert all(row["variant_key"] for row in trinkets)
+
+
+def test_trinket_extractor_reports_fallback_level_and_dropped_rows() -> None:
+    html = """
+    <img alt="BG30_MagicItem_broken">
+    <a href="/battlegrounds/trinkets/123/valid-trinket">Valid Trinket</a>
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    structured = extract_for_source(
+        "hsreplay_battlegrounds_trinkets_lesser",
+        soup,
+        html,
+    )
+
+    assert structured["parser_level"] == "fallback_anchor"
+    assert structured["dropped_rows"] == 1
+    assert [row["name"] for row in structured["trinkets"]] == ["Valid Trinket"]
