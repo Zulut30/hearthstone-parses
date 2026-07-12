@@ -282,6 +282,7 @@ def _validate_vicious_radars(_source_id: str, structured: dict[str, Any]) -> Val
             "vicious_radars.outdated_issue",
             f"vicious radar issue is outdated ({issue} < {latest_issue})",
             field="issue",
+            severity="warning",
         )
     if content_age_days is None:
         report.add_issue(
@@ -294,6 +295,7 @@ def _validate_vicious_radars(_source_id: str, structured: dict[str, Any]) -> Val
             "vicious_radars.stale_content",
             f"vicious latest report content is stale ({content_age_days} days > 21)",
             field="latest_report_published_at",
+            severity="warning",
         )
     issue_score = 1.0 if issue is not None and issue == latest_issue else 0.0
     age_score = 1.0 if content_age_days is not None and content_age_days <= 21 else 0.0

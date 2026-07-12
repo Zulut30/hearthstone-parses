@@ -85,3 +85,8 @@ The three production data findings are exactly the kind of silent-success/stalen
   payload rather than applying an HTML-title test. Its only two bad sources are
   the expected Vicious upstream failures; four valid datasets remain in the
   warning score band for observation.
+- Vicious authenticated cookies were imported into the production data volume
+  with mode `0600`. The latest complete radar issue (349, 24 validated graphs)
+  is intentionally publishable with `upstream_stale` metadata while report 352
+  has no matching radar. A dedicated two-hour timer will switch to the next
+  complete issue automatically; unclassified Live placeholders remain blocked.

@@ -22,22 +22,33 @@ class CliTest(unittest.TestCase):
         with TemporaryDirectory() as td:
             env_path = Path(td) / "hs.env"
             env_path.write_text(
-                "HS_HSGURU_FETCH_BACKENDS=flaresolverr,scrapling,curl_cffi\n",
+                "HS_HSGURU_FETCH_BACKENDS=flaresolverr,scrapling,curl_cffi\n"
+                "VICIOUS_SYNDICATE_STORAGE_PATH=/tmp/vicious-session.json\n",
                 encoding="utf-8",
             )
             old = os.environ.get("HS_HSGURU_FETCH_BACKENDS")
+            old_vicious = os.environ.get("VICIOUS_SYNDICATE_STORAGE_PATH")
             os.environ["HS_HSGURU_FETCH_BACKENDS"] = "patchright"
+            os.environ["VICIOUS_SYNDICATE_STORAGE_PATH"] = "/tmp/stale.json"
             try:
                 cli.load_env_file(env_path)
                 self.assertEqual(
                     os.environ["HS_HSGURU_FETCH_BACKENDS"],
                     "flaresolverr,scrapling,curl_cffi",
                 )
+                self.assertEqual(
+                    os.environ["VICIOUS_SYNDICATE_STORAGE_PATH"],
+                    "/tmp/vicious-session.json",
+                )
             finally:
                 if old is None:
                     os.environ.pop("HS_HSGURU_FETCH_BACKENDS", None)
                 else:
                     os.environ["HS_HSGURU_FETCH_BACKENDS"] = old
+                if old_vicious is None:
+                    os.environ.pop("VICIOUS_SYNDICATE_STORAGE_PATH", None)
+                else:
+                    os.environ["VICIOUS_SYNDICATE_STORAGE_PATH"] = old_vicious
 
     def test_quality_check_returns_nonzero_for_invalid_cached_dataset(self) -> None:
         source = Source("bad_source", "https://example.test", "hsreplay", "arena")
