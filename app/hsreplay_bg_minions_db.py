@@ -218,16 +218,15 @@ def latest_run() -> dict[str, Any] | None:
         conn.close()
 
 
-def _latest_snapshot_where() -> str:
+def _current_snapshot_where() -> str:
     return """
-        s.id IN (
-            SELECT s2.id
-            FROM bg_minion_snapshots s2
-            JOIN (
-                SELECT dbf_id, MAX(fetched_at) AS fetched_at
-                FROM bg_minion_snapshots
-                GROUP BY dbf_id
-            ) latest ON latest.dbf_id = s2.dbf_id AND latest.fetched_at = s2.fetched_at
+        s.run_id = (
+            SELECT r.id
+            FROM bg_minion_refresh_runs r
+            WHERE r.source = ?
+              AND r.state = 'ok'
+            ORDER BY COALESCE(r.completed_at, r.started_at) DESC, r.id DESC
+            LIMIT 1
         )
     """
 
@@ -242,8 +241,8 @@ def list_minion_snapshots(
     init_db()
     conn = get_db_connection()
     try:
-        where = [_latest_snapshot_where()]
-        params: list[Any] = []
+        where = [_current_snapshot_where()]
+        params: list[Any] = [SOURCE]
         if q:
             where.append("(m.name LIKE ? OR COALESCE(m.name_ru, '') LIKE ? OR m.card_id LIKE ?)")
             params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
@@ -260,7 +259,7 @@ def list_minion_snapshots(
             for row in conn.execute(
                 f"""
                 SELECT
-                    s.id AS snapshot_id, s.fetched_at, s.dbf_id, m.card_id, m.name, m.name_ru,
+                    s.id AS snapshot_id, s.run_id, s.fetched_at, s.dbf_id, m.card_id, m.name, m.name_ru,
                     COALESCE(s.tavern_tier, m.tavern_tier) AS tavern_tier,
                     s.impact, s.combat_winrate, s.popularity, s.games_with_minion,
                     s.games_without_minion, s.avg_placement_with, s.avg_placement_without
@@ -282,17 +281,20 @@ def get_minion_detail(dbf_id: int) -> dict[str, Any] | None:
     init_db()
     conn = get_db_connection()
     try:
-        row = conn.execute(
+        query = (
             """
             SELECT
                 s.id AS snapshot_id, s.*, m.card_id, m.name, m.name_ru, m.card_type, m.rarity
             FROM bg_minion_snapshots s
             JOIN bg_minions m ON m.dbf_id = s.dbf_id
             WHERE s.dbf_id = ?
-            ORDER BY s.fetched_at DESC
-            LIMIT 1
-            """,
-            (dbf_id,),
+              AND
+            """
+            + _current_snapshot_where()
+        )
+        row = conn.execute(
+            query,
+            (dbf_id, SOURCE),
         ).fetchone()
         if not row:
             return None
