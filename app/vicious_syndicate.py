@@ -158,6 +158,13 @@ def normalize_radar_url(path: str) -> str:
     return path
 
 
+def radar_upstream_state(issue: str, latest_report_issue: str) -> str:
+    try:
+        return "ready" if int(issue) == int(latest_report_issue) else "upstream_stale"
+    except (TypeError, ValueError):
+        return "upstream_unavailable"
+
+
 def find_radar_url(html: str, *, base_url: str) -> str | None:
     soup = BeautifulSoup(html, "lxml")
     embedded = soup.find(["object", "embed", "iframe"])
@@ -550,6 +557,7 @@ async def fetch_vicious_syndicate_radars(source: Source) -> dict[str, Any]:
         "type": "vicious_syndicate_radars",
         "issue": issue,
         **latest_report,
+        "upstream_state": radar_upstream_state(issue, latest_report["latest_report_issue"]),
         "classes_summary": list(classes_summary.values()),
         "radars": radars,
         "total_radars": len(radars),

@@ -131,6 +131,52 @@ def _vs_name(archetype: list[str]) -> str:
     return f"{archetype[1]} {archetype[0].replace('§', '')}"
 
 
+def live_upstream_availability(*archetype_lists: list[list[str]]) -> dict[str, Any]:
+    unique = {
+        (str(item[0]), str(item[1]))
+        for rows in archetype_lists
+        for item in rows
+        if isinstance(item, list) and len(item) >= 2
+    }
+    placeholders = {
+        item for item in unique if item[1].strip().lower() in {"other", "unknown"}
+    }
+    named = unique - placeholders
+    ready = len(named) >= 3
+    return {
+        "state": "ready" if ready else "upstream_unclassified",
+        "ready": ready,
+        "total_archetypes": len(unique),
+        "named_archetypes": len(named),
+        "placeholder_archetypes": len(placeholders),
+        "reason": (
+            None
+            if ready
+            else "Vicious Firebase has not classified post-expansion archetypes yet"
+        ),
+    }
+
+
+def _without_placeholder_decks(
+    deck_distribution: list[dict[str, Any]],
+    tier_list: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    placeholder = re.compile(r"^(?:Other|Unknown)\s+\S+$", re.IGNORECASE)
+    decks = [row for row in deck_distribution if not placeholder.fullmatch(str(row.get("deck") or ""))]
+    tiers = [
+        {
+            **bracket,
+            "decks": [
+                row
+                for row in (bracket.get("decks") or [])
+                if not placeholder.fullmatch(str(row.get("deck") or ""))
+            ],
+        }
+        for bracket in tier_list
+    ]
+    return decks, tiers
+
+
 def _extract(pattern: str, text: str, label: str) -> str:
     match = re.search(pattern, text)
     if not match:
@@ -315,6 +361,16 @@ async def fetch_vicious_live(source: Source) -> dict[str, Any]:
     ladder_view = build_ladder_view(ladder_payload["lastDay"])
     table_view = build_table_view(table_payload["last2Weeks"]["ranks_all"])
     tier_list = build_power_tier_list(ladder_view, table_view)
+    availability = live_upstream_availability(
+        ladder_payload["lastDay"].get("archetypes") or [],
+        table_payload["last2Weeks"]["ranks_all"].get("archetypes") or [],
+    )
+    deck_distribution = ladder_view["deck_distribution"]
+    if not availability["ready"]:
+        deck_distribution, tier_list = _without_placeholder_decks(
+            deck_distribution,
+            tier_list,
+        )
     return {
         "type": "vicious_live",
         "format": "Standard",
@@ -323,11 +379,14 @@ async def fetch_vicious_live(source: Source) -> dict[str, Any]:
         "tier_matchup_time_range": "last2Weeks",
         "games": ladder_view["games"],
         "class_distribution": ladder_view["class_distribution"],
-        "deck_distribution": ladder_view["deck_distribution"],
+        "deck_distribution": deck_distribution,
         "tier_list": tier_list,
+        "upstream_state": availability["state"],
+        "upstream_availability": availability,
         "source": {
             "url": source.url,
             "backend": "vicious_live_firebase",
+            "upstream_ready": availability["ready"],
             "firebase_paths": [
                 "premiumData/ladderData/Standard",
                 "premiumData/tableData/Standard",

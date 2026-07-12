@@ -189,6 +189,7 @@ def _validate_vicious_live(_source_id: str, structured: dict[str, Any]) -> Valid
     placeholder_ratio = len(placeholder_names) / max(len(deck_names), 1)
     report.metrics.update(
         {
+            "upstream_state": structured.get("upstream_state"),
             "unique_decks": len(deck_names),
             "named_archetypes": len(named_archetypes),
             "placeholder_decks": len(placeholder_names),
@@ -198,6 +199,14 @@ def _validate_vicious_live(_source_id: str, structured: dict[str, Any]) -> Valid
             "tier_decks": tier_deck_count,
         }
     )
+
+    upstream_state = str(structured.get("upstream_state") or "ready")
+    if upstream_state != "ready":
+        report.add_issue(
+            "vicious_live.upstream_not_ready",
+            f"vicious live upstream is not ready ({upstream_state})",
+            field="upstream_state",
+        )
 
     if len(class_distribution) < 8:
         report.add_issue(
