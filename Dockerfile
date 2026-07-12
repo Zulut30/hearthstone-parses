@@ -10,7 +10,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      ca-certificates curl git xvfb \
+      ca-certificates curl git nodejs npm xvfb \
       libnss3 libnspr4 libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
       libgbm1 libasound2 libpangocairo-1.0-0 libpango-1.0-0 libcairo2 \
@@ -21,6 +21,11 @@ COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /app/requirements.txt \
     && python -m patchright install chromium
+
+COPY scripts/fingerprint-node/package.json scripts/fingerprint-node/package-lock.json /app/scripts/fingerprint-node/
+RUN cd /app/scripts/fingerprint-node \
+    && npm ci --omit=dev --ignore-scripts \
+    && npm cache clean --force
 
 COPY app /app/app
 COPY web /app/web
