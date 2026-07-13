@@ -2,10 +2,41 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ..hsguru_decks import exact_hsguru_decks
 from .models import ArchetypeRow, ApiMeta, DeckRow, Envelope, freshest_timestamp, timestamp_is_stale
 
 
 router = APIRouter(prefix="/v1/constructed", tags=["v1-constructed"])
+
+
+@router.get(
+    "/hsguru-deck",
+    response_model=Envelope[list[DeckRow]],
+    response_model_exclude_none=True,
+)
+async def hsguru_deck(
+    archetype: str = Query(..., min_length=2, max_length=120),
+    format_name: str = Query("standard", pattern="^(standard|wild)$"),
+    rank: str = Query("legend", pattern="^(legend|diamond_4to1|top_5k|top_legend|all)$"),
+) -> Envelope[list[DeckRow]]:
+    try:
+        rows = await exact_hsguru_decks(archetype, format_name, rank)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="HSGuru deck lookup failed") from exc
+    if not rows:
+        raise HTTPException(status_code=404, detail="Exact HSGuru archetype deck not found")
+    fetched_at = freshest_timestamp(rows, "updated_at")
+    return Envelope(
+        data=[DeckRow.model_validate(row) for row in rows],
+        meta=ApiMeta(
+            source_id="hsguru_decks",
+            fetched_at=fetched_at,
+            stale=timestamp_is_stale(fetched_at),
+            count=len(rows),
+            limit=len(rows),
+            offset=0,
+        ),
+    )
 
 
 @router.get(

@@ -38,6 +38,28 @@ def test_v1_decks_filters_class_and_format_case_insensitively() -> None:
     assert body["data"][0]["archetype"] == "Evenlock"
 
 
+def test_v1_hsguru_deck_returns_only_exact_results() -> None:
+    row = {
+        "source_id": "hsguru_decks",
+        "title": "Big Shaman",
+        "archetype": "Big Shaman",
+        "class": "Shaman",
+        "format": "Wild",
+        "deck_code": "AAECAaoIExactBigShamanDeckCode1234567890==",
+        "win_rate": 51.2,
+        "games": 170,
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    with patch("app.routers.constructed.exact_hsguru_decks", return_value=[row]) as lookup:
+        response = client.get(
+            "/v1/constructed/hsguru-deck?archetype=Big%20Shaman&format_name=wild&rank=legend"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["archetype"] == "Big Shaman"
+    lookup.assert_awaited_once_with("Big Shaman", "wild", "legend")
+
+
 def test_v1_archetypes_returns_typed_envelope() -> None:
     fetched_at = datetime.now(UTC).isoformat()
     payload = {
