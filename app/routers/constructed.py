@@ -29,10 +29,10 @@ def decks(
         query = "SELECT * FROM decks WHERE 1=1"
         params: list[object] = []
         if class_name:
-            query += " AND class = ?"
+            query += " AND LOWER(class) = LOWER(?)"
             params.append(class_name)
         if format_name:
-            query += " AND format = ?"
+            query += " AND LOWER(format) = LOWER(?)"
             params.append(format_name)
         if source_id:
             query += " AND source_id = ?"

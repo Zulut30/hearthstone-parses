@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import sqlite3
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
@@ -9,6 +10,32 @@ from app.main import app
 
 
 client = TestClient(app)
+
+
+def _deck_connection() -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """CREATE TABLE decks (
+            id INTEGER, source_id TEXT, class TEXT, archetype TEXT,
+            deck_code TEXT, win_rate REAL, title TEXT, format TEXT, updated_at TEXT
+        )"""
+    )
+    connection.execute(
+        "INSERT INTO decks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (1, "fixture", "Warlock", "Evenlock", "AAECAf0GTestDeckCode1234567890==", 55.1, "Evenlock", "Wild", datetime.now(UTC).isoformat()),
+    )
+    return connection
+
+
+def test_v1_decks_filters_class_and_format_case_insensitively() -> None:
+    with patch("app.db.get_db_connection", side_effect=_deck_connection):
+        response = client.get("/v1/constructed/decks?class_name=warlock&format_name=wild")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["meta"]["count"] == 1
+    assert body["data"][0]["archetype"] == "Evenlock"
 
 
 def test_v1_archetypes_returns_typed_envelope() -> None:
