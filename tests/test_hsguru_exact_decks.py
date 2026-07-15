@@ -45,6 +45,22 @@ def test_parser_never_substitutes_another_archetype() -> None:
     assert parse_hsguru_decks_html(html, archetype="Big Shaman", format_name="wild") == []
 
 
+def test_exact_filtered_page_accepts_specific_build_title() -> None:
+    html = _card("FUU Plague DK", "deathknight", EVENLOCK_CODE, 231, 50.0)
+
+    rows = parse_hsguru_decks_html(
+        html,
+        archetype="Plague DK",
+        format_name="wild",
+        trust_exact_filter=True,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["archetype"] == "Plague DK"
+    assert rows[0]["title"] == "FUU Plague DK"
+    assert rows[0]["class"] == "DeathKnight"
+
+
 def test_lookup_continues_after_a_failed_fresh_slice() -> None:
     exact_row = {
         "archetype": "Big Shaman",

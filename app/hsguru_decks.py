@@ -57,6 +57,7 @@ def parse_hsguru_decks_html(
     archetype: str,
     format_name: str,
     fetched_at: str | None = None,
+    trust_exact_filter: bool = False,
 ) -> list[dict[str, Any]]:
     """Parse only exact-archetype deck cards from a filtered HSGuru page."""
     expected_archetype = _key(archetype)
@@ -70,7 +71,7 @@ def parse_hsguru_decks_html(
         deck_text = html.unescape(str(copy_button.get("data-clipboard-text") or "")) if copy_button else ""
         title_match = re.search(r"^###\s+(.+?)\s*$", deck_text, flags=re.MULTILINE)
         title = title_match.group(1).strip() if title_match else ""
-        if _key(title) != expected_archetype:
+        if not trust_exact_filter and _key(title) != expected_archetype:
             continue
 
         parsed_format = re.search(r"^#\s*Format:\s*(.+?)\s*$", deck_text, flags=re.MULTILINE)
@@ -99,7 +100,11 @@ def parse_hsguru_decks_html(
             {
                 "source_id": "hsguru_decks",
                 "title": title,
-                "archetype": title,
+                # HSGuru's exact archetype filter may return deck titles with
+                # rune prefixes (for example FUU/BUU/UUB). Keep the requested
+                # aggregate archetype as the API identity and the full build
+                # title separately.
+                "archetype": archetype if trust_exact_filter else title,
                 "class": class_name,
                 "format": deck_format,
                 "deck_code": deck_code,
@@ -145,7 +150,12 @@ async def _fetch_attempt(archetype: str, format_name: str, params: list[tuple[st
                 on_session_burn=lambda: burn_proxy_session(source_id, page_url=url, reason="exact-deck-blocked"),
                 validate_body=lambda status, text: status == 200 and "deck_stats_viewport" in text,
             )
-            return parse_hsguru_decks_html(body, archetype=archetype, format_name=format_name)
+            return parse_hsguru_decks_html(
+                body,
+                archetype=archetype,
+                format_name=format_name,
+                trust_exact_filter=True,
+            )
         except Exception as exc:
             last_error = exc
             if proxy_attempt == 0:
