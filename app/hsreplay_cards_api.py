@@ -86,13 +86,9 @@ def _normalize_card_row(row: dict[str, Any], *, sort_mode: str, locale: str = "r
     avg_turns_in_hand = row.get("avg_turns_in_hand") or row.get("avgTurnsInHand")
     avg_turn_played_on = row.get("avg_turn_played_on") or row.get("avgTurnPlayedOn")
 
-    if sort_mode == "winrate":
-        entry["deck_winrate"] = _fmt_pct(wr) or _fmt_pct(pop)
-    else:
-        entry["deck_popularity"] = _fmt_pct(pop) or _fmt_pct(wr)
-    if wr:
+    if wr is not None:
         entry["deck_winrate"] = _fmt_pct(wr)
-    if pop:
+    if pop is not None:
         entry["deck_popularity"] = _fmt_pct(pop)
     if copies is not None:
         entry["avg_copies"] = copies
@@ -219,8 +215,7 @@ def parse_cards_from_api_payloads(
     sort_mode: str,
     locale: str = "ruRU",
 ) -> list[dict[str, Any]]:
-    cards: list[dict[str, Any]] = []
-    seen: set[int] = set()
+    cards_by_dbf: dict[int, dict[str, Any]] = {}
     for url, body in payloads:
         lower = url.lower()
         if "card_list" not in lower and not any(h in lower for h in _CARD_API_PATH_HINTS):
@@ -234,11 +229,15 @@ def parse_cards_from_api_payloads(
             if not entry:
                 continue
             dbf = entry.get("dbfId")
-            if not dbf or int(dbf) in seen:
+            if not dbf:
                 continue
-            seen.add(int(dbf))
-            cards.append(entry)
-    return cards
+            dbf_id = int(dbf)
+            current = cards_by_dbf.get(dbf_id)
+            if current is None:
+                cards_by_dbf[dbf_id] = entry
+                continue
+            current.update({key: value for key, value in entry.items() if value is not None})
+    return list(cards_by_dbf.values())
 
 
 def _api_payload_diagnostics(payloads: list[tuple[str, Any]]) -> dict[str, Any]:
