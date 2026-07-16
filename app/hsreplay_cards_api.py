@@ -166,7 +166,11 @@ def _rows_from_series_data(data: Any) -> list[dict[str, Any]]:
 def _parse_card_list_analytics(body: dict[str, Any]) -> list[dict[str, Any]]:
     series = body.get("series")
     if isinstance(series, dict):
-        rows = _rows_from_series_data(series.get("data"))
+        data = series.get("data")
+        if isinstance(data, dict) and isinstance(data.get("ALL"), list):
+            rows = [row for row in (_coerce_card_row(item) for item in data["ALL"]) if row]
+        else:
+            rows = _rows_from_series_data(data)
         if rows:
             return rows
     return _rows_from_series_data(body.get("data"))
