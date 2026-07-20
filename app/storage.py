@@ -37,6 +37,16 @@ def status_path(source_id: str) -> Path:
     return root_dir() / "statuses" / f"{source_id}.json"
 
 
+def baseline_path(source_id: str, label: str) -> Path:
+    for value in (source_id, label):
+        allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+        if not value or any(character not in allowed for character in value):
+            raise ValueError("Invalid baseline storage key")
+    directory = root_dir() / "baselines"
+    directory.mkdir(exist_ok=True)
+    return directory / f"{source_id}.{label}.json"
+
+
 def _is_test_process() -> bool:
     if pytest_current_test():
         return True
@@ -156,3 +166,16 @@ def load_dataset(source_id: str) -> dict[str, Any] | None:
 
 def load_status(source_id: str) -> dict[str, Any] | None:
     return read_json(status_path(source_id))
+
+
+def save_baseline_once(source_id: str, label: str, payload: dict[str, Any]) -> bool:
+    path = baseline_path(source_id, label)
+    with _dataset_write_lock:
+        if path.exists():
+            return False
+        write_json(path, payload)
+    return True
+
+
+def load_baseline(source_id: str, label: str) -> dict[str, Any] | None:
+    return read_json(baseline_path(source_id, label))

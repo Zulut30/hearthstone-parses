@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 WINDOW_TIMEZONE = "Europe/Warsaw"
 DEFAULT_WINDOW_START = date(2026, 7, 21)
 DEFAULT_WINDOW_UNTIL = date(2026, 7, 28)
+POST_PATCH_BASELINE_LABEL = f"arena-post-patch-{DEFAULT_WINDOW_START.isoformat()}"
 
 
 @dataclass(frozen=True)

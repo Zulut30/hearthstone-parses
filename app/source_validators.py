@@ -15,6 +15,31 @@ from .post_patch_policy import (
 from .quality_thresholds import threshold_for
 
 
+ARENA_PERCENT_FIELDS = (
+    "deck_winrate",
+    "win_rate",
+    "winrate_when_drawn",
+    "winrate_when_played",
+    "in_runs",
+    "pick_rate",
+    "offer_rate",
+    "popularity",
+    "drawn_winrate",
+    "mulligan_winrate",
+    "kept_rate",
+)
+
+
+def _parse_arena_percent(value: Any) -> float | None:
+    # parse_percent delegates to a legacy helper that treats numeric zero as empty.
+    # Zero is a valid percentage for freshly collected post-patch rows.
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return parse_percent(value)
+
+
 @dataclass(frozen=True)
 class ValidationIssue:
     code: str
@@ -586,25 +611,59 @@ def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> Va
         for row in cards[:50]
     )
     policy = policy_for(source_id)
-    unique_card_ids = {
+    card_ids = [
         str(row.get("card_id") or row.get("id") or "").strip()
         for row in cards
         if str(row.get("card_id") or row.get("id") or "").strip()
-    }
+    ]
+    unique_card_ids = set(card_ids)
+    duplicate_card_ids = len(card_ids) - len(unique_card_ids)
+    parsed_winrates = [
+        (
+            row.get("deck_winrate")
+            if row.get("deck_winrate") is not None
+            else row.get("win_rate")
+        )
+        for row in cards
+    ]
     valid_winrates = sum(
         1
-        for row in cards
-        if (value := parse_percent(row.get("deck_winrate") or row.get("win_rate")))
+        for raw_value in parsed_winrates
+        if (value := _parse_arena_percent(raw_value))
         is not None
         and 0.0 <= value <= 100.0
     )
+    invalid_winrates = sum(
+        1
+        for raw_value in parsed_winrates
+        if raw_value not in (None, "")
+        and (
+            (value := _parse_arena_percent(raw_value)) is None
+            or not 0.0 <= value <= 100.0
+        )
+    )
+    invalid_percent_values: list[tuple[str, Any]] = []
+    for row in cards:
+        for field_name in ARENA_PERCENT_FIELDS:
+            raw_value = row.get(field_name)
+            if raw_value in (None, ""):
+                continue
+            parsed_value = _parse_arena_percent(raw_value)
+            if parsed_value is None or not 0.0 <= parsed_value <= 100.0:
+                invalid_percent_values.append((field_name, raw_value))
     report.metrics.update(
         {
             "cards": len(cards),
             "minimum_cards": minimum_cards,
             "has_tier_labels": has_tier_labels,
             "unique_card_ids": len(unique_card_ids),
+            "duplicate_card_ids": duplicate_card_ids,
             "valid_winrates": valid_winrates,
+            "invalid_winrates": invalid_winrates,
+            "invalid_percent_values": len(invalid_percent_values),
+            "invalid_percent_fields": sorted(
+                {field_name for field_name, _ in invalid_percent_values}
+            ),
         }
     )
     if len(cards) < minimum_cards:
@@ -630,6 +689,12 @@ def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> Va
                 ),
                 field="card_id,id",
             )
+        if duplicate_card_ids:
+            report.add_issue(
+                "arena_card_tiers.duplicate_card_ids",
+                f"arena card tiers contain duplicate card ids ({duplicate_card_ids})",
+                field="card_id,id",
+            )
         if valid_winrates < required_valid_rows:
             report.add_issue(
                 "arena_card_tiers.invalid_winrates",
@@ -638,6 +703,24 @@ def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> Va
                     f"({valid_winrates} < {required_valid_rows})"
                 ),
                 field="deck_winrate,win_rate",
+            )
+        if invalid_winrates:
+            report.add_issue(
+                "arena_card_tiers.impossible_winrates",
+                f"arena card tiers contain invalid winrates ({invalid_winrates})",
+                field="deck_winrate,win_rate",
+            )
+        if invalid_percent_values:
+            invalid_fields = sorted(
+                {field_name for field_name, _ in invalid_percent_values}
+            )
+            report.add_issue(
+                "arena_card_tiers.impossible_percentages",
+                (
+                    "arena card tiers contain out-of-range percentage values "
+                    f"({len(invalid_percent_values)} across {', '.join(invalid_fields)})"
+                ),
+                field=",".join(invalid_fields),
             )
         if source_id == "firestone_arena_cards_normal":
             rows_with_sample = sum(
@@ -682,14 +765,16 @@ def _validate_heartharena_tierlist(
     ]
     with_tier = sum(1 for card in cards if card.get("tier_id"))
     with_card_id = sum(1 for card in cards if card.get("card_id") or card.get("id"))
+    actual_cards = len(cards)
     minimum_classes, minimum_cards, minimum_tier_ids = effective_heartharena_thresholds(
         source_id,
-        total_cards=total_cards,
+        total_cards=actual_cards,
     )
     report.metrics.update(
         {
             "classes": len(classes),
             "total_cards": total_cards,
+            "actual_cards": actual_cards,
             "cards_with_tier_id": with_tier,
             "cards_with_card_id": with_card_id,
             "minimum_classes": minimum_classes,
@@ -703,11 +788,20 @@ def _validate_heartharena_tierlist(
             f"heartharena classes too few ({len(classes)} < {minimum_classes})",
             field="classes",
         )
-    if total_cards < minimum_cards:
+    if actual_cards < minimum_cards:
         report.add_issue(
             "heartharena_tierlist.too_few_cards",
-            f"heartharena cards too few ({total_cards} < {minimum_cards})",
-            field="total_cards",
+            f"heartharena cards too few ({actual_cards} < {minimum_cards})",
+            field="classes.cards",
+        )
+    if total_cards != actual_cards:
+        report.add_issue(
+            "heartharena_tierlist.card_count_mismatch",
+            (
+                "heartharena declared card count does not match flattened cards "
+                f"({total_cards} != {actual_cards})"
+            ),
+            field="total_cards,classes.cards",
         )
     if with_tier < minimum_tier_ids:
         report.add_issue(
@@ -724,7 +818,7 @@ def _validate_heartharena_tierlist(
         )
     score_parts = [
         min(len(classes) / max(minimum_classes, 1), 1.0),
-        min(total_cards / max(minimum_cards, 1), 1.0),
+        min(actual_cards / max(minimum_cards, 1), 1.0),
         min(with_tier / max(minimum_tier_ids, 1), 1.0),
     ]
     if policy is not None:

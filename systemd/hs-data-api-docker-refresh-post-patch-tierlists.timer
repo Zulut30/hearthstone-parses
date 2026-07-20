@@ -11,7 +11,7 @@ OnCalendar=2026-07-26 00,05,10,15,20:20:00 Europe/Warsaw
 OnCalendar=2026-07-27 01,06,11,16,21:20:00 Europe/Warsaw
 AccuracySec=1s
 RandomizedDelaySec=0
-Persistent=true
+Persistent=false
 RemainAfterElapse=no
 Unit=hs-data-api-docker-refresh-post-patch-tierlists.service
 

@@ -64,9 +64,15 @@ from .refresh_log import (
     set_refresh_context,
 )
 from .dataset_regression import check_dataset_regression, estimate_metric_count
-from .post_patch_policy import build_provisional_metadata
+from .post_patch_policy import POST_PATCH_BASELINE_LABEL, build_provisional_metadata
 from .proxy_errors import ProxyPaymentRequiredError
-from .storage import load_dataset, load_status, save_dataset, save_status
+from .storage import (
+    load_dataset,
+    load_status,
+    save_baseline_once,
+    save_dataset,
+    save_status,
+)
 from .telegram_alerts import mark_alert_sent, should_send_alert
 
 logger = logging.getLogger(__name__)
@@ -78,6 +84,46 @@ _firecrawl_fallback_attempts_by_source: dict[str, int] = {}
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+PROVISIONAL_STATUS_KEYS = (
+    "data_phase",
+    "provisional",
+    "accepted_rows",
+    "baseline_rows",
+    "coverage_ratio",
+    "minimum_sample",
+    "patch_window",
+)
+
+
+def _provisional_metadata_from_parsed(parsed: dict[str, Any]) -> dict[str, Any]:
+    for key in ("structured", "hsreplay_extracted"):
+        structured = parsed.get(key)
+        if not isinstance(structured, dict):
+            continue
+        if structured.get("provisional") is not True:
+            continue
+        if structured.get("data_phase") != "post_patch_early":
+            continue
+        return {
+            field: structured[field]
+            for field in PROVISIONAL_STATUS_KEYS
+            if field in structured
+        }
+    return {}
+
+
+def _attach_provisional_status(
+    status: dict[str, Any], metadata: dict[str, object]
+) -> dict[str, Any]:
+    if not metadata:
+        return status
+    status.update(metadata)
+    quality = status.get("quality")
+    if isinstance(quality, dict):
+        quality.update(metadata)
+    return status
 
 
 def _status_payload(
@@ -203,6 +249,7 @@ def _preserve_cached_ok_status(source: Source, failed_status: dict[str, Any]) ->
         backend=dataset.get("backend"),
         detail="Serving cached dataset; latest live refresh failed.",
     )
+    _attach_provisional_status(status, _provisional_metadata_from_parsed(parsed))
     status["serving_cached_dataset"] = True
     status["effective_state"] = EFFECTIVE_OK_CACHED
     status["last_refresh_state"] = failed_status.get("state")
@@ -399,10 +446,10 @@ def _save_dataset_with_checks(
     dataset: dict[str, Any],
     *,
     fetched_at: str,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, dict[str, object]]:
     """
     Save dataset; run regression check against previous snapshot.
-    Returns (regression_detected, regression_message).
+    Returns (regression_detected, regression_message, provisional_metadata).
     """
     previous = load_dataset(source.id)
     dataset.setdefault("runtime", runtime_version_info())
@@ -433,7 +480,7 @@ def _save_dataset_with_checks(
             detail=msg,
             extra=extra,
         )
-        return reg, msg
+        return reg, msg, {}
     previous_structured = (prev_data or {}).get("structured") or {}
     previous_baseline = previous_structured.get("baseline_rows")
     if previous_structured.get("provisional") and isinstance(previous_baseline, int):
@@ -452,20 +499,35 @@ def _save_dataset_with_checks(
         at=metadata_time,
     )
     if provisional_metadata:
+        if previous is not None and not previous_structured.get("provisional"):
+            baseline_created = save_baseline_once(
+                source.id,
+                POST_PATCH_BASELINE_LABEL,
+                previous,
+            )
+            if baseline_created:
+                log_action(
+                    "dataset.baseline.preserve",
+                    source_id=source.id,
+                    state=SourceState.OK,
+                    extra={"label": POST_PATCH_BASELINE_LABEL},
+                )
         for key in ("structured", "hsreplay_extracted"):
             structured = new_data.get(key)
             if isinstance(structured, dict):
                 structured.update(provisional_metadata)
     save_dataset(source.id, dataset)
+    log_extra = dict(extra)
+    log_extra.update(provisional_metadata)
     log_action(
         "dataset.save",
         source_id=source.id,
         state=SourceState.OK,
         backend=dataset.get("backend"),
         bytes_out=dataset.get("content_length"),
-        extra=extra if extra else None,
+        extra=log_extra or None,
     )
-    return reg, msg
+    return reg, msg, provisional_metadata
 
 
 async def _maybe_stale_data_alert(source: Source, status: dict[str, Any]) -> None:
@@ -831,7 +893,9 @@ async def _try_firecrawl_html(
             "used_residential_proxy": False,
             "data": parsed,
         }
-        reg, reg_msg = _save_dataset_with_checks(source, dataset, fetched_at=fetched_at)
+        reg, reg_msg, provisional_metadata = _save_dataset_with_checks(
+            source, dataset, fetched_at=fetched_at
+        )
         state = SourceState.PARTIAL if reg else SourceState.OK
         status = _status_payload(
             source,
@@ -847,6 +911,7 @@ async def _try_firecrawl_html(
         )
         status["firecrawl_credits_used"] = scraped.metadata.get("creditsUsed")
         status["firecrawl_cache_state"] = scraped.metadata.get("cacheState")
+        _attach_provisional_status(status, provisional_metadata)
         if reg:
             status = _save_failure_status(source, status)
         else:
@@ -862,6 +927,7 @@ async def _try_firecrawl_html(
                 "cache_state": scraped.metadata.get("cacheState"),
                 "reason": reason,
                 "quality_metrics": qmetrics,
+                **provisional_metadata,
             },
         )
         return status
@@ -1086,7 +1152,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                         "content_length": content_length,
                         "used_residential_proxy": _source_uses_residential_proxy(source, backend),
                     }
-                    reg, reg_msg = _save_dataset_with_checks(
+                    reg, reg_msg, provisional_metadata = _save_dataset_with_checks(
                         source, dataset, fetched_at=fetched_at
                     )
                     state = SourceState.PARTIAL if reg else SourceState.OK
@@ -1102,6 +1168,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                         used_residential_proxy=_source_uses_residential_proxy(source, backend),
                         quality=qmetrics,
                     )
+                    _attach_provisional_status(status, provisional_metadata)
                     if reg:
                         status = _save_failure_status(source, status)
                     else:
@@ -1113,6 +1180,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
                         backend=backend,
                         tier=source_tier,
                         bytes_out=content_length,
+                        extra=provisional_metadata or None,
                     )
                     if reg and reg_msg:
                         await send_telegram_alert(
@@ -1446,12 +1514,14 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         "used_residential_proxy": _source_uses_residential_proxy(source, backend),
         "data": parsed,
     }
-    reg, reg_msg = _save_dataset_with_checks(source, dataset, fetched_at=fetched_at)
+    reg, reg_msg, provisional_metadata = _save_dataset_with_checks(
+        source, dataset, fetched_at=fetched_at
+    )
     log_action(
         "quality.validate.ok",
         source_id=source.id,
         backend=backend,
-        extra={"quality_metrics": qmetrics},
+        extra={"quality_metrics": qmetrics, **provisional_metadata},
     )
     state = SourceState.PARTIAL if reg else SourceState.OK
     status = _status_payload(
@@ -1466,6 +1536,7 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
         used_residential_proxy=_source_uses_residential_proxy(source, backend),
         quality=qmetrics,
     )
+    _attach_provisional_status(status, provisional_metadata)
     if reg:
         status = _save_failure_status(source, status)
     else:
