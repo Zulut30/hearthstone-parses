@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+import math
 import os
 from zoneinfo import ZoneInfo
 
@@ -103,7 +104,7 @@ def effective_heartharena_thresholds(
         return 5, 300, 200
     minimum_tier_ids = max(
         1,
-        int(policy.minimum_rows * policy.minimum_tier_fill_rate),
+        math.ceil(max(total_cards, policy.minimum_rows) * policy.minimum_tier_fill_rate),
     )
     return policy.minimum_classes, policy.minimum_rows, minimum_tier_ids
 

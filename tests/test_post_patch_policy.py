@@ -102,6 +102,53 @@ class PostPatchPolicyTest(unittest.TestCase):
         self.assertEqual(report.metrics["minimum_classes"], 1)
         self.assertEqual(report.metrics["minimum_tier_ids"], 16)
 
+    def test_heartharena_requires_tier_ids_for_eighty_percent_of_larger_payload(self) -> None:
+        cards = [
+            {
+                "card_id": f"CARD_{idx}",
+                "name": f"Card {idx}",
+                "tier_id": "B" if idx < 16 else None,
+            }
+            for idx in range(100)
+        ]
+        structured = {
+            "type": "heartharena_tierlist",
+            "classes": [{"class": "Mage", "cards": cards}],
+            "total_cards": 100,
+            "total_classes": 1,
+        }
+
+        with patch("app.post_patch_policy.current_time", return_value=WINDOW_TIME):
+            report = validate_structured("heartharena_tierlist", structured)
+
+        self.assertFalse(report.ok)
+        self.assertEqual(report.metrics["minimum_tier_ids"], 80)
+        self.assertIn(
+            "heartharena_tierlist.missing_tier_ids",
+            {issue.code for issue in report.issues},
+        )
+
+    def test_heartharena_rejects_early_rows_without_card_identifiers(self) -> None:
+        cards = [
+            {"name": f"Card {idx}", "tier_id": "B"}
+            for idx in range(20)
+        ]
+        structured = {
+            "type": "heartharena_tierlist",
+            "classes": [{"class": "Mage", "cards": cards}],
+            "total_cards": 20,
+            "total_classes": 1,
+        }
+
+        with patch("app.post_patch_policy.current_time", return_value=WINDOW_TIME):
+            report = validate_structured("heartharena_tierlist", structured)
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "heartharena_tierlist.missing_card_ids",
+            {issue.code for issue in report.issues},
+        )
+
     def test_short_arena_list_rejects_duplicate_card_identifiers(self) -> None:
         cards = _arena_cards(20)
         for card in cards:

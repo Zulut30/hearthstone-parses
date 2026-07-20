@@ -674,12 +674,14 @@ def _validate_heartharena_tierlist(
     report = ValidationReport()
     classes = [row for row in (structured.get("classes") or []) if isinstance(row, dict)]
     total_cards = int(structured.get("total_cards") or 0)
-    with_tier = sum(
-        1
+    cards = [
+        card
         for class_row in classes
         for card in (class_row.get("cards") or [])
-        if isinstance(card, dict) and card.get("tier_id")
-    )
+        if isinstance(card, dict)
+    ]
+    with_tier = sum(1 for card in cards if card.get("tier_id"))
+    with_card_id = sum(1 for card in cards if card.get("card_id") or card.get("id"))
     minimum_classes, minimum_cards, minimum_tier_ids = effective_heartharena_thresholds(
         source_id,
         total_cards=total_cards,
@@ -689,6 +691,7 @@ def _validate_heartharena_tierlist(
             "classes": len(classes),
             "total_cards": total_cards,
             "cards_with_tier_id": with_tier,
+            "cards_with_card_id": with_card_id,
             "minimum_classes": minimum_classes,
             "minimum_cards": minimum_cards,
             "minimum_tier_ids": minimum_tier_ids,
@@ -712,15 +715,21 @@ def _validate_heartharena_tierlist(
             f"heartharena cards missing tier_id ({with_tier} < {minimum_tier_ids})",
             field="tier_id",
         )
-    report.score = round(
-        (
-            min(len(classes) / max(minimum_classes, 1), 1.0)
-            + min(total_cards / max(minimum_cards, 1), 1.0)
-            + min(with_tier / max(minimum_tier_ids, 1), 1.0)
+    policy = policy_for(source_id)
+    if policy is not None and with_card_id < minimum_tier_ids:
+        report.add_issue(
+            "heartharena_tierlist.missing_card_ids",
+            f"heartharena cards missing card ids ({with_card_id} < {minimum_tier_ids})",
+            field="card_id,id",
         )
-        / 3,
-        4,
-    )
+    score_parts = [
+        min(len(classes) / max(minimum_classes, 1), 1.0),
+        min(total_cards / max(minimum_cards, 1), 1.0),
+        min(with_tier / max(minimum_tier_ids, 1), 1.0),
+    ]
+    if policy is not None:
+        score_parts.append(min(with_card_id / max(minimum_tier_ids, 1), 1.0))
+    report.score = round(sum(score_parts) / len(score_parts), 4)
     return report
 
 
