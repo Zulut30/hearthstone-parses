@@ -18,6 +18,70 @@ class CliTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         refresh.assert_called_once_with(["hsguru_meta_wild_top_legend"], tier=None)
 
+    def test_refresh_require_all_ok_returns_failure_for_rejected_source(self) -> None:
+        results = [
+            {"source_id": "hsreplay_arena_cards_advanced", "state": "ok"},
+            {"source_id": "heartharena_tierlist", "state": "parse_error"},
+            {"source_id": "firestone_arena_cards_normal", "state": "ok"},
+        ]
+        with patch("app.cli.refresh_sources", return_value=results):
+            exit_code = cli.main(
+                [
+                    "refresh",
+                    "--source",
+                    "hsreplay_arena_cards_advanced",
+                    "--source",
+                    "heartharena_tierlist",
+                    "--source",
+                    "firestone_arena_cards_normal",
+                    "--require-all-ok",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+
+    def test_refresh_require_all_ok_rejects_cached_success(self) -> None:
+        results = [
+            {
+                "source_id": "hsreplay_arena_cards_advanced",
+                "state": "ok",
+                "serving_cached_dataset": True,
+            }
+        ]
+        with patch("app.cli.refresh_sources", return_value=results):
+            exit_code = cli.main(
+                [
+                    "refresh",
+                    "--source",
+                    "hsreplay_arena_cards_advanced",
+                    "--require-all-ok",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+
+    def test_refresh_require_all_ok_accepts_fresh_successes(self) -> None:
+        results = [
+            {"source_id": "hsreplay_arena_cards_advanced", "state": "ok"},
+            {"source_id": "heartharena_tierlist", "state": "ok"},
+            {"source_id": "firestone_arena_cards_normal", "state": "ok"},
+        ]
+        with patch("app.cli.refresh_sources", return_value=results):
+            exit_code = cli.main(
+                [
+                    "refresh",
+                    "--source",
+                    "hsreplay_arena_cards_advanced",
+                    "--source",
+                    "heartharena_tierlist",
+                    "--source",
+                    "firestone_arena_cards_normal",
+                    "--require-all-ok",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+
     def test_load_env_file_overrides_stale_hsguru_backend_export(self) -> None:
         with TemporaryDirectory() as td:
             env_path = Path(td) / "hs.env"

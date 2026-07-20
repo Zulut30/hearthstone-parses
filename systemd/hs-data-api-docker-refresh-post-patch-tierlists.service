@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh post-patch Arena tier lists in Docker
+Requires=hs-data-api-docker.service
+After=hs-data-api-docker.service network-online.target
+StartLimitIntervalSec=4h30min
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/hs-data-api
+ExecStart=/usr/bin/docker compose -f /srv/hs-data-api/docker-compose.yml run --rm -e HS_ARENA_POST_PATCH_ENABLED=true -e HS_ARENA_POST_PATCH_FROM=2026-07-21 -e HS_ARENA_POST_PATCH_UNTIL=2026-07-28 api python -m app.cli refresh --source hsreplay_arena_cards_advanced --source heartharena_tierlist --source firestone_arena_cards_normal --require-all-ok
+TimeoutStartSec=30min
+Restart=on-failure
+RestartSec=15min
+RestartPreventExitStatus=2

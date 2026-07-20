@@ -52,6 +52,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     refresh.add_argument("--all", action="store_true", help="Refresh every configured source.")
     refresh.add_argument("--source", action="append", default=[], help="Refresh one source id.")
     refresh.add_argument(
+        "--require-all-ok",
+        action="store_true",
+        help="Exit non-zero unless every selected source publishes a fresh dataset.",
+    )
+    refresh.add_argument(
         "--tier",
         choices=[
             "light_api",
@@ -585,6 +590,21 @@ def main(argv: list[str] | None = None) -> int:
             refresh_sources(source_ids, tier=args.tier)
         )
         print(json.dumps(results, ensure_ascii=False, indent=2))
+        if args.require_all_ok:
+            expected_ids = set(args.source)
+            fresh_ids = {
+                str(result.get("source_id") or "")
+                for result in results
+                if result.get("state") == "ok"
+                and not result.get("serving_cached_dataset")
+            }
+            if not results or (expected_ids and not expected_ids.issubset(fresh_ids)):
+                return 1
+            if any(
+                result.get("state") != "ok" or result.get("serving_cached_dataset")
+                for result in results
+            ):
+                return 1
         return 0
     return 2
 
