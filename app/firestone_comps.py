@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from .cards_index import card_from_id
+from .post_patch_policy import effective_firestone_minimum_sample
 from .refresh_log import log_action
 from .scrapers.proxy import httpx_client_kwargs
 from .sources import Source
@@ -429,8 +430,9 @@ async def fetch_firestone_arena(source: Source) -> dict[str, Any]:
         # Calculate rates
         decks_with_card = stats.get("decksWithCard") or stats.get("inStartingDeck") or 0
         
-        # Filter out extremely low play rate cards to remove statistical noise and anomalies (e.g. 100% winrate with 1 draft)
-        if decks_with_card < 30:
+        # Keep one-game anomalies out even during the temporary early post-patch window.
+        minimum_sample = effective_firestone_minimum_sample(source.id, 30)
+        if decks_with_card < minimum_sample:
             continue
             
         decks_with_card_then_win = stats.get("decksWithCardThenWin") or stats.get("wins") or 0

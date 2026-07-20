@@ -63,7 +63,8 @@ from .refresh_log import (
     runtime_version_info,
     set_refresh_context,
 )
-from .dataset_regression import check_dataset_regression
+from .dataset_regression import check_dataset_regression, estimate_metric_count
+from .post_patch_policy import build_provisional_metadata
 from .proxy_errors import ProxyPaymentRequiredError
 from .storage import load_dataset, load_status, save_dataset, save_status
 from .telegram_alerts import mark_alert_sent, should_send_alert
@@ -433,6 +434,28 @@ def _save_dataset_with_checks(
             extra=extra,
         )
         return reg, msg
+    previous_structured = (prev_data or {}).get("structured") or {}
+    previous_baseline = previous_structured.get("baseline_rows")
+    if previous_structured.get("provisional") and isinstance(previous_baseline, int):
+        baseline_rows = previous_baseline
+    else:
+        baseline_rows = estimate_metric_count(source, prev_data or {})
+    accepted_rows = estimate_metric_count(source, new_data)
+    try:
+        metadata_time = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    except ValueError:
+        metadata_time = None
+    provisional_metadata = build_provisional_metadata(
+        source.id,
+        accepted_rows=accepted_rows,
+        baseline_rows=baseline_rows or accepted_rows,
+        at=metadata_time,
+    )
+    if provisional_metadata:
+        for key in ("structured", "hsreplay_extracted"):
+            structured = new_data.get(key)
+            if isinstance(structured, dict):
+                structured.update(provisional_metadata)
     save_dataset(source.id, dataset)
     log_action(
         "dataset.save",

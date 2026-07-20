@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import dataset_regression_drop_ratio
+from .post_patch_policy import policy_for
 from .source_contracts import regression_drop_ratio_for_source
 from .sources import Source
 
@@ -183,6 +184,9 @@ def check_dataset_regression(
         "filled_after": new_filled,
         "drop_ratio": _drop_ratio_for_source(source),
     }
+    if policy_for(source.id) is not None:
+        extra["post_patch_regression_bypass"] = True
+        return False, None, extra
     if prev_count < 10:
         return False, None, extra
 

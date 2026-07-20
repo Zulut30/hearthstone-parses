@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import math
 import re
 from typing import Any, Callable
 
 from .parsing_normalize import parse_decimal, parse_percent
+from .post_patch_policy import (
+    effective_arena_card_minimum,
+    effective_heartharena_thresholds,
+    policy_for,
+)
 from .quality_thresholds import threshold_for
 
 
@@ -571,18 +577,34 @@ def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> Va
     report = ValidationReport()
     cards = [row for row in (structured.get("cards") or []) if isinstance(row, dict)]
     default_min = 20 if "legendary" in source_id else 100
-    minimum_cards = int(threshold_for(source_id, "arena_card_tiers_min", default_min))
+    configured_minimum = int(threshold_for(source_id, "arena_card_tiers_min", default_min))
+    minimum_cards = effective_arena_card_minimum(source_id, configured_minimum)
     has_tier_labels = "firestone" in source_id or any(
         row.get("tier")
         or row.get("win_rate") is not None
         or row.get("deck_winrate")
         for row in cards[:50]
     )
+    policy = policy_for(source_id)
+    unique_card_ids = {
+        str(row.get("card_id") or row.get("id") or "").strip()
+        for row in cards
+        if str(row.get("card_id") or row.get("id") or "").strip()
+    }
+    valid_winrates = sum(
+        1
+        for row in cards
+        if (value := parse_percent(row.get("deck_winrate") or row.get("win_rate")))
+        is not None
+        and 0.0 <= value <= 100.0
+    )
     report.metrics.update(
         {
             "cards": len(cards),
             "minimum_cards": minimum_cards,
             "has_tier_labels": has_tier_labels,
+            "unique_card_ids": len(unique_card_ids),
+            "valid_winrates": valid_winrates,
         }
     )
     if len(cards) < minimum_cards:
@@ -597,6 +619,47 @@ def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> Va
             "arena card tiers missing tier labels",
             field="tier,win_rate,deck_winrate",
         )
+    if policy is not None:
+        required_valid_rows = max(1, math.ceil(len(cards) * 0.80))
+        if len(unique_card_ids) < required_valid_rows:
+            report.add_issue(
+                "arena_card_tiers.low_id_diversity",
+                (
+                    "arena card tiers unique card ids too low "
+                    f"({len(unique_card_ids)} < {required_valid_rows})"
+                ),
+                field="card_id,id",
+            )
+        if valid_winrates < required_valid_rows:
+            report.add_issue(
+                "arena_card_tiers.invalid_winrates",
+                (
+                    "arena card tiers valid winrates too low "
+                    f"({valid_winrates} < {required_valid_rows})"
+                ),
+                field="deck_winrate,win_rate",
+            )
+        if source_id == "firestone_arena_cards_normal":
+            rows_with_sample = sum(
+                1
+                for row in cards
+                if (
+                    parse_decimal(row.get("total_games") or row.get("times_played"))
+                    or 0
+                )
+                >= policy.minimum_sample
+            )
+            report.metrics["rows_with_minimum_sample"] = rows_with_sample
+            report.metrics["minimum_sample"] = policy.minimum_sample
+            if rows_with_sample < required_valid_rows:
+                report.add_issue(
+                    "arena_card_tiers.low_sample",
+                    (
+                        "firestone arena rows with sufficient sample too low "
+                        f"({rows_with_sample} < {required_valid_rows})"
+                    ),
+                    field="total_games,times_played",
+                )
     report.score = round(
         (min(len(cards) / max(minimum_cards, 1), 1.0) + float(has_tier_labels)) / 2,
         4,
@@ -605,7 +668,7 @@ def _validate_arena_card_tiers(source_id: str, structured: dict[str, Any]) -> Va
 
 
 def _validate_heartharena_tierlist(
-    _source_id: str,
+    source_id: str,
     structured: dict[str, Any],
 ) -> ValidationReport:
     report = ValidationReport()
@@ -617,32 +680,43 @@ def _validate_heartharena_tierlist(
         for card in (class_row.get("cards") or [])
         if isinstance(card, dict) and card.get("tier_id")
     )
-    report.metrics.update(
-        {"classes": len(classes), "total_cards": total_cards, "cards_with_tier_id": with_tier}
+    minimum_classes, minimum_cards, minimum_tier_ids = effective_heartharena_thresholds(
+        source_id,
+        total_cards=total_cards,
     )
-    if len(classes) < 5:
+    report.metrics.update(
+        {
+            "classes": len(classes),
+            "total_cards": total_cards,
+            "cards_with_tier_id": with_tier,
+            "minimum_classes": minimum_classes,
+            "minimum_cards": minimum_cards,
+            "minimum_tier_ids": minimum_tier_ids,
+        }
+    )
+    if len(classes) < minimum_classes:
         report.add_issue(
             "heartharena_tierlist.too_few_classes",
-            f"heartharena classes too few ({len(classes)} < 5)",
+            f"heartharena classes too few ({len(classes)} < {minimum_classes})",
             field="classes",
         )
-    if total_cards < 300:
+    if total_cards < minimum_cards:
         report.add_issue(
             "heartharena_tierlist.too_few_cards",
-            f"heartharena cards too few ({total_cards} < 300)",
+            f"heartharena cards too few ({total_cards} < {minimum_cards})",
             field="total_cards",
         )
-    if with_tier < 200:
+    if with_tier < minimum_tier_ids:
         report.add_issue(
             "heartharena_tierlist.missing_tier_ids",
-            f"heartharena cards missing tier_id ({with_tier} < 200)",
+            f"heartharena cards missing tier_id ({with_tier} < {minimum_tier_ids})",
             field="tier_id",
         )
     report.score = round(
         (
-            min(len(classes) / 5.0, 1.0)
-            + min(total_cards / 300.0, 1.0)
-            + min(with_tier / 200.0, 1.0)
+            min(len(classes) / max(minimum_classes, 1), 1.0)
+            + min(total_cards / max(minimum_cards, 1), 1.0)
+            + min(with_tier / max(minimum_tier_ids, 1), 1.0)
         )
         / 3,
         4,

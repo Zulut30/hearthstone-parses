@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from .post_patch_policy import effective_contract_min_rows
+
 
 @dataclass(frozen=True)
 class SourceContract:
@@ -540,6 +542,7 @@ def contract_quality_report(
         "quality_score": None,
         "ok": True,
         "warnings": [],
+        "minimum_rows": None,
     }
     if contract is None:
         return report
@@ -548,9 +551,12 @@ def contract_quality_report(
         report["warnings"].append(
             f"expected structured type {contract.structured_type}, got {structured.get('type')}"
         )
-    if contract.min_rows is not None and len(rows) < contract.min_rows:
-        report["ok"] = False
-        report["warnings"].append(f"too few rows ({len(rows)} < {contract.min_rows})")
+    if contract.min_rows is not None:
+        minimum_rows = effective_contract_min_rows(source_id, contract.min_rows)
+        report["minimum_rows"] = minimum_rows
+        if len(rows) < minimum_rows:
+            report["ok"] = False
+            report["warnings"].append(f"too few rows ({len(rows)} < {minimum_rows})")
     rates: list[float] = []
     for field in contract.critical_fields:
         total = len(rows)
