@@ -79,6 +79,20 @@ def build_demo_view(source_id: str) -> dict[str, Any]:
             "message": "Нет кэшированного датасета",
         }
 
+    # Demo views are public consumers too (the arena frontend uses this route
+    # for HSReplay). Respect the same stable/early publication resolver as the
+    # raw dataset endpoint so a stable switch cannot leak provisional rows.
+    from .parser_control import resolve_public_dataset
+
+    dataset = resolve_public_dataset(source_id, dataset)
+    if dataset is None:
+        return {
+            "source_id": source_id,
+            "ok": False,
+            "status": status,
+            "message": "Стабильный датасет ещё не доступен",
+        }
+
     data = dataset.get("data") or {}
     structured = _structured_from_data(source, data)
 

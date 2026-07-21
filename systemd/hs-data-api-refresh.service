@@ -11,4 +11,4 @@ Environment=DISPLAY=:99
 ExecStartPre=/opt/hs-data-api/scripts/ensure-flaresolverr.sh
 ExecStartPre=/opt/hs-data-api/scripts/ensure-xvfb.sh
 ExecStartPre=/opt/hs-data-api/venv/bin/python -m app.cli preflight --strict
-ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --all
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --all --scheduled

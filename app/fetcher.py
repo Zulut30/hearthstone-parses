@@ -64,11 +64,19 @@ from .refresh_log import (
     set_refresh_context,
 )
 from .dataset_regression import check_dataset_regression, estimate_metric_count
-from .post_patch_policy import POST_PATCH_BASELINE_LABEL, build_provisional_metadata
+from .post_patch_policy import (
+    ARENA_EARLY_SOURCE_IDS,
+    POST_PATCH_BASELINE_LABEL,
+    STABLE_PUBLICATION_BASELINE_LABEL,
+    build_provisional_metadata,
+    capture_publication_policy,
+    early_policy_changed_since_capture,
+)
 from .proxy_errors import ProxyPaymentRequiredError
 from .storage import (
     load_dataset,
     load_status,
+    save_baseline,
     save_baseline_once,
     save_dataset,
     save_status,
@@ -455,6 +463,30 @@ def _save_dataset_with_checks(
     dataset.setdefault("runtime", runtime_version_info())
     prev_data = (previous or {}).get("data")
     new_data = dataset.get("data") or {}
+    policy_changed, captured_policy, current_policy = early_policy_changed_since_capture(
+        source.id
+    )
+    if policy_changed:
+        message = (
+            "Publication policy changed after early validation; candidate was not saved"
+        )
+        log_action(
+            "dataset.save.skip_policy_change",
+            source_id=source.id,
+            state=SourceState.PARTIAL,
+            level="warn",
+            detail=message,
+            extra={
+                "captured_mode": captured_policy.effective_mode if captured_policy else None,
+                "captured_revision": captured_policy.revision if captured_policy else None,
+                "captured_token": captured_policy.token if captured_policy else None,
+                "current_mode": (current_policy or {}).get("effectiveMode"),
+                "current_revision": (current_policy or {}).get("revision"),
+                "current_token": (current_policy or {}).get("token"),
+                "reason": "early_to_stable_race_guard",
+            },
+        )
+        return True, message, {}
     reg, msg, extra = check_dataset_regression(
         source, previous_data=prev_data, new_data=new_data
     )
@@ -500,6 +532,13 @@ def _save_dataset_with_checks(
     )
     if provisional_metadata:
         if previous is not None and not previous_structured.get("provisional"):
+            # Keep an always-current stable publication channel. The dated
+            # baseline remains for backwards compatibility and audit/history.
+            save_baseline(
+                source.id,
+                STABLE_PUBLICATION_BASELINE_LABEL,
+                previous,
+            )
             baseline_created = save_baseline_once(
                 source.id,
                 POST_PATCH_BASELINE_LABEL,
@@ -516,6 +555,15 @@ def _save_dataset_with_checks(
             structured = new_data.get(key)
             if isinstance(structured, dict):
                 structured.update(provisional_metadata)
+    elif source.id in ARENA_EARLY_SOURCE_IDS:
+        # Any fully validated non-provisional dataset becomes the new stable
+        # channel for sources that can publish provisional rows. Early
+        # snapshots never overwrite this file.
+        save_baseline(
+            source.id,
+            STABLE_PUBLICATION_BASELINE_LABEL,
+            dataset,
+        )
     save_dataset(source.id, dataset)
     log_extra = dict(extra)
     log_extra.update(provisional_metadata)
@@ -1075,7 +1123,11 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
     return None
 
 
-async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_on_auth_failure: bool = True) -> dict[str, Any]:
+async def _fetch_source_with_captured_policy(
+    client: httpx.AsyncClient | None,
+    source: Source,
+    retry_on_auth_failure: bool = True,
+) -> dict[str, Any]:
     started = time.monotonic()
     fetched_at = now_iso()
     previous = load_status(source.id) or {}
@@ -1546,6 +1598,22 @@ async def fetch_source(client: httpx.AsyncClient | None, source: Source, retry_o
     return _finish(status)
 
 
+async def fetch_source(
+    client: httpx.AsyncClient | None,
+    source: Source,
+    retry_on_auth_failure: bool = True,
+) -> dict[str, Any]:
+    # A single fetch validates and publishes against one immutable policy
+    # context. If an admin switches Early -> Stable before the write, the save
+    # gate detects the token change and leaves the stable channel untouched.
+    with capture_publication_policy(source.id):
+        return await _fetch_source_with_captured_policy(
+            client,
+            source,
+            retry_on_auth_failure=retry_on_auth_failure,
+        )
+
+
 def _attach_proxy_egress(status: dict[str, Any], proxy_info: dict[str, str]) -> dict[str, Any]:
     if proxy_info and status.get("state") == SourceState.OK and status.get("used_residential_proxy"):
         status["proxy_egress_ip"] = proxy_info.get("egress_ip")
@@ -1777,6 +1845,7 @@ async def _refresh_sources_unlocked(
     source_ids: list[str] | None = None,
     *,
     tier_filter: str | None = None,
+    respect_section_controls: bool = False,
 ) -> list[dict[str, Any]]:
     global _firecrawl_fallback_attempts
     _firecrawl_fallback_attempts = 0
@@ -1801,6 +1870,27 @@ async def _refresh_sources_unlocked(
     selected = list(SOURCES)
     if source_ids:
         selected = [SOURCE_BY_ID[source_id] for source_id in source_ids]
+
+    if respect_section_controls:
+        from .parser_control import enabled_section_ids
+        from .parser_control_registry import SOURCE_TO_SECTION
+
+        enabled_sections = enabled_section_ids()
+        disabled = [
+            source.id for source in selected
+            if SOURCE_TO_SECTION.get(source.id) not in enabled_sections
+        ]
+        selected = [
+            source for source in selected
+            if SOURCE_TO_SECTION.get(source.id) in enabled_sections
+        ]
+        if disabled:
+            log_action(
+                "refresh.skip_disabled_sections",
+                level="info",
+                detail="Sources disabled by parser control",
+                extra={"source_ids": disabled, "run_id": run_id},
+            )
 
     # kind="pipeline" sources are refreshed by dedicated systemd timers and
     # must never enter the scrape planner (they also have no tier mapping).
@@ -1983,9 +2073,14 @@ async def refresh_sources(
     source_ids: list[str] | None = None,
     *,
     tier: str | None = None,
+    respect_section_controls: bool = False,
 ) -> list[dict[str, Any]]:
     with RefreshLock():
-        return await _refresh_sources_unlocked(source_ids, tier_filter=tier)
+        return await _refresh_sources_unlocked(
+            source_ids,
+            tier_filter=tier,
+            respect_section_controls=respect_section_controls,
+        )
 
 
 async def _run_browser_phase(

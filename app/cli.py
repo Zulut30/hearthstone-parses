@@ -71,6 +71,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Use HS_FETCH_BACKENDS_LAB (includes cloakbrowser) for this run only.",
     )
+    refresh.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Honor per-section enable/disable controls for a scheduled run.",
+    )
+    scheduled_check = sub.add_parser(
+        "scheduled-check",
+        help="Exit 0 when a source's scheduled section is enabled, otherwise exit 1.",
+    )
+    scheduled_check.add_argument("--source", required=True, help="Configured source id.")
     sub.add_parser("proxy-check", help="Verify HS_FETCH_PROXY_URL egress IP.")
     sub.add_parser(
         "proxy-rotation-check",
@@ -113,9 +123,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     archetypes.add_argument("--deck-time-range", default="LAST_30_DAYS")
     archetypes.add_argument("--mulligan-time-range", default="LAST_30_DAYS")
     archetypes.add_argument("--limit", type=int, default=None, help="Debug: refresh only first N archetypes from the index.")
-    sub.add_parser(
+    archetypes.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Skip this scheduled pipeline when its admin section is disabled.",
+    )
+    bg_minions = sub.add_parser(
         "refresh-bg-minions-db",
         help="Refresh the local SQLite database with HSReplay Battlegrounds minion snapshots.",
+    )
+    bg_minions.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Skip this scheduled pipeline when its admin section is disabled.",
     )
     bg_hero_details = sub.add_parser(
         "refresh-bg-hero-details",
@@ -125,6 +145,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     bg_hero_details.add_argument("--concurrency", type=int, default=3)
     bg_hero_details.add_argument("--mmr", default="TOP_50_PERCENT")
     bg_hero_details.add_argument("--time-range", default="CURRENT_BATTLEGROUNDS_PATCH")
+    bg_hero_details.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Skip this scheduled pipeline when its admin section is disabled.",
+    )
     sub.add_parser(
         "capture-bg-compositions-screenshot",
         help="Capture a Firecrawl screenshot of HSReplay Battlegrounds compositions.",
@@ -153,6 +178,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     load_env_file()
     args = parse_args(argv or sys.argv[1:])
+    if args.command == "scheduled-check":
+        if args.source not in SOURCE_BY_ID:
+            print(json.dumps({
+                "ok": False,
+                "enabled": False,
+                "source_id": args.source,
+                "error": "unknown_source",
+            }, ensure_ascii=False, indent=2))
+            return 2
+        from .parser_control import is_source_scheduled_enabled
+        from .parser_control_registry import SOURCE_TO_SECTION
+
+        enabled = is_source_scheduled_enabled(args.source)
+        print(json.dumps({
+            "ok": True,
+            "enabled": enabled,
+            "source_id": args.source,
+            "section_id": SOURCE_TO_SECTION[args.source],
+        }, ensure_ascii=False, indent=2))
+        return 0 if enabled else 1
     if args.command == "proxy-check":
         from .scrapers.proxy import check_proxy_health
 
@@ -345,6 +390,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "refresh-hsreplay-archetypes":
+        if args.scheduled:
+            from .parser_control import is_source_scheduled_enabled
+
+            if not is_source_scheduled_enabled("hsreplay_archetypes"):
+                print(json.dumps({
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "section_disabled",
+                    "source_id": "hsreplay_archetypes",
+                }, ensure_ascii=False, indent=2))
+                return 0
         from .hsreplay_archetypes_db import (
             export_latest_archetypes_json,
             refresh_hsreplay_archetype_database,
@@ -365,12 +421,34 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "refresh-bg-minions-db":
+        if args.scheduled:
+            from .parser_control import is_source_scheduled_enabled
+
+            if not is_source_scheduled_enabled("hsreplay_battlegrounds_minions"):
+                print(json.dumps({
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "section_disabled",
+                    "source_id": "hsreplay_battlegrounds_minions",
+                }, ensure_ascii=False, indent=2))
+                return 0
         from .hsreplay_bg_minions_db import refresh_bg_minion_database_sync
 
         result = refresh_bg_minion_database_sync()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "refresh-bg-hero-details":
+        if args.scheduled:
+            from .parser_control import is_source_scheduled_enabled
+
+            if not is_source_scheduled_enabled("hsreplay_battlegrounds_hero_details"):
+                print(json.dumps({
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "section_disabled",
+                    "source_id": "hsreplay_battlegrounds_hero_details",
+                }, ensure_ascii=False, indent=2))
+                return 0
         from .hsreplay_bg_hero_details import refresh_bg_hero_details
 
         result = asyncio.run(
@@ -586,19 +664,36 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         source_ids = None if args.all else (args.source or None)
-        results = asyncio.run(
-            refresh_sources(source_ids, tier=args.tier)
-        )
+        if args.scheduled:
+            results = asyncio.run(
+                refresh_sources(
+                    source_ids,
+                    tier=args.tier,
+                    respect_section_controls=True,
+                )
+            )
+        else:
+            results = asyncio.run(refresh_sources(source_ids, tier=args.tier))
         print(json.dumps(results, ensure_ascii=False, indent=2))
         if args.require_all_ok:
             expected_ids = set(args.source)
+            if args.all:
+                expected_ids = {
+                    source_id
+                    for source_id, source in SOURCE_BY_ID.items()
+                    if source.kind == "scrape"
+                }
+            if args.scheduled and expected_ids:
+                from .parser_control import filter_scheduled_source_ids
+
+                expected_ids = set(filter_scheduled_source_ids(list(expected_ids)))
             fresh_ids = {
                 str(result.get("source_id") or "")
                 for result in results
                 if result.get("state") == "ok"
                 and not result.get("serving_cached_dataset")
             }
-            if not results or (expected_ids and not expected_ids.issubset(fresh_ids)):
+            if expected_ids and (not results or not expected_ids.issubset(fresh_ids)):
                 return 1
             if any(
                 result.get("state") != "ok" or result.get("serving_cached_dataset")

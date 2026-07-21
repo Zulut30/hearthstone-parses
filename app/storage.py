@@ -177,5 +177,12 @@ def save_baseline_once(source_id: str, label: str, payload: dict[str, Any]) -> b
     return True
 
 
+def save_baseline(source_id: str, label: str, payload: dict[str, Any]) -> None:
+    """Atomically replace a named baseline with a newly validated dataset."""
+    path = baseline_path(source_id, label)
+    with _dataset_write_lock:
+        write_json(path, payload)
+
+
 def load_baseline(source_id: str, label: str) -> dict[str, Any] | None:
     return read_json(baseline_path(source_id, label))

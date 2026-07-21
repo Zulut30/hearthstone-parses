@@ -33,7 +33,15 @@ def _dataset_timestamp(source_id: str) -> str | None:
     except (OSError, ValueError):
         return None
     value = dataset.get("fetched_at")
-    return str(value) if value else None
+    if not value:
+        return None
+    try:
+        from .parser_control import publication_cache_token
+
+        control_token = publication_cache_token(source_id)
+    except Exception:
+        control_token = ""
+    return f"{value}:{control_token}" if control_token else str(value)
 
 
 def _latest_dataset_timestamp() -> str | None:

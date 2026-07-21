@@ -45,7 +45,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
     allow_headers=["Accept", "Content-Type", "X-API-Key"],
 )
 app.add_middleware(PublicCacheMiddleware)
@@ -55,10 +55,23 @@ app.include_router(arena_v1_router)
 app.include_router(system_v1_router)
 
 
+@app.on_event("startup")
+def start_parser_control_worker() -> None:
+    # Queued runs are persisted in the data directory. Starting the worker as
+    # part of application startup resumes them after an API process restart.
+    from .parser_control import parser_run_worker
+
+    parser_run_worker().start()
+
+
 @app.middleware("http")
 async def no_cache_ui(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/ui"):
+    if request.url.path.startswith("/admin"):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    elif request.url.path.startswith("/ui"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -475,7 +488,169 @@ def get_dataset(source_id: str) -> dict:
             status_code=404,
             detail={"message": "No successful dataset cached yet", "status": status},
         )
-    return public_dataset_payload(source_id, dataset)
+    from .parser_control import resolve_public_dataset
+
+    published = resolve_public_dataset(source_id, dataset)
+    if published is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Stable dataset is not available yet",
+                "source_id": source_id,
+                "publication_mode": "stable",
+            },
+        )
+    return public_dataset_payload(source_id, published)
+
+
+def _control_expected_revision(payload: dict[str, Any]) -> int:
+    value = payload.get("expectedRevision")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise HTTPException(status_code=422, detail="expectedRevision must be a positive integer")
+    return value
+
+
+def _control_list_of_strings(payload: dict[str, Any], key: str) -> list[str]:
+    value = payload.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise HTTPException(status_code=422, detail=f"{key} must be an array of strings")
+    return [item.strip() for item in value if item.strip()]
+
+
+def _raise_parser_control_http_error(exc: Exception) -> None:
+    from .parser_control import (
+        InvalidControlRequest,
+        ParserControlStorageError,
+        RevisionConflict,
+    )
+
+    if isinstance(exc, RevisionConflict):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "REVISION_CONFLICT",
+                "message": str(exc),
+                "expectedRevision": exc.expected,
+                "currentRevision": exc.current,
+            },
+        ) from exc
+    if isinstance(exc, InvalidControlRequest):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "VALIDATION_ERROR", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, ParserControlStorageError):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "CONTROL_STORAGE_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+    raise exc
+
+
+@app.get("/admin/parser-control", dependencies=[Depends(require_admin)])
+def get_parser_control() -> dict[str, Any]:
+    from .parser_control import parser_control_store
+
+    try:
+        return parser_control_store().snapshot()
+    except Exception as exc:
+        _raise_parser_control_http_error(exc)
+        raise
+
+
+@app.patch("/admin/parser-control/policy", dependencies=[Depends(require_admin)])
+def update_parser_control_policy(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from .parser_control import parser_control_store
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Request body must be an object")
+    try:
+        return parser_control_store().update_policy(
+            expected_revision=_control_expected_revision(payload),
+            mode=str(payload.get("mode") or ""),
+            early_until=payload.get("earlyUntil"),
+            reason=payload.get("reason"),
+            updated_by=str(payload.get("updatedBy") or "admin-api"),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_parser_control_http_error(exc)
+        raise
+
+
+@app.patch("/admin/parser-control/sections", dependencies=[Depends(require_admin)])
+def update_parser_control_sections(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from .parser_control import parser_control_store
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Request body must be an object")
+    rows = payload.get("sections")
+    changes: dict[str, bool] = {}
+    if isinstance(rows, dict):
+        changes = dict(rows)
+    elif isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                raise HTTPException(
+                    status_code=422,
+                    detail="sections entries must contain id and enabled",
+                )
+            changes[row["id"]] = row.get("enabled")
+    else:
+        raise HTTPException(status_code=422, detail="sections must be an object or array")
+    try:
+        return parser_control_store().update_sections(
+            expected_revision=_control_expected_revision(payload),
+            changes=changes,
+            updated_by=str(payload.get("updatedBy") or "admin-api"),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_parser_control_http_error(exc)
+        raise
+
+
+@app.post(
+    "/admin/parser-runs",
+    dependencies=[Depends(require_admin)],
+    status_code=202,
+)
+def create_parser_run(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    from .parser_control import expand_run_selection, parser_run_worker
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Request body must be an object")
+    try:
+        selected = expand_run_selection(
+            source_ids=_control_list_of_strings(payload, "sourceIds"),
+            section_ids=_control_list_of_strings(payload, "sectionIds"),
+        )
+        run, deduplicated = parser_run_worker().enqueue(
+            source_ids=selected,
+            requested_by=str(payload.get("requestedBy") or "admin-api"),
+            reason=payload.get("reason"),
+        )
+        return {"run": run, "deduplicated": deduplicated}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_parser_control_http_error(exc)
+        raise
+
+
+@app.get("/admin/parser-runs", dependencies=[Depends(require_admin)])
+def list_parser_runs(limit: int = Query(20, ge=1, le=50)) -> dict[str, Any]:
+    from .parser_control import parser_control_store
+
+    try:
+        return parser_control_store().list_runs(limit=limit)
+    except Exception as exc:
+        _raise_parser_control_http_error(exc)
+        raise
 
 
 @app.post("/admin/refresh", dependencies=[Depends(require_admin)])

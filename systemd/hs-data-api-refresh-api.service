@@ -8,8 +8,8 @@ Type=oneshot
 WorkingDirectory=/opt/hs-data-api
 EnvironmentFile=/etc/hs-data-api.env
 ExecStartPre=/opt/hs-data-api/scripts/ensure-flaresolverr.sh
-ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --tier light_api
-ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --tier medium_api
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --tier light_api --scheduled
+ExecStart=/opt/hs-data-api/venv/bin/python -m app.cli refresh --tier medium_api --scheduled
 # Refresh runs as root, so restore data ownership for the API user.
 ExecStartPost=-/usr/bin/chown -R hs-data-api:hs-data-api /var/lib/hs-data-api
 

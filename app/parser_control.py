@@ -1,0 +1,1206 @@
+from __future__ import annotations
+
+import asyncio
+from contextlib import contextmanager
+from datetime import UTC, date, datetime, time as datetime_time
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import threading
+from typing import Any, Callable, Iterator
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from .config import data_dir
+from .parser_control_registry import (
+    EARLY_SOURCE_IDS,
+    SECTIONS,
+    SECTION_BY_ID,
+    SOURCE_TO_SECTION,
+    source_label,
+)
+from .sources import SOURCE_BY_ID
+
+
+CONTROL_FILENAME = "parser-control.json"
+CONTROL_LOCK_FILENAME = "parser-control.lock"
+MAX_RECENT_RUNS = 50
+MAX_PENDING_RUNS = 20
+MAX_RUN_SOURCES = len(SOURCE_BY_ID)
+ACTIVE_RUN_STATUSES = {"queued", "running"}
+RUN_STATUSES = ACTIVE_RUN_STATUSES | {"succeeded", "partial", "failed"}
+
+
+class ParserControlError(RuntimeError):
+    pass
+
+
+class InvalidControlRequest(ParserControlError):
+    pass
+
+
+class RevisionConflict(ParserControlError):
+    def __init__(self, expected: int, current: int) -> None:
+        super().__init__(f"Expected revision {expected}, current revision is {current}")
+        self.expected = expected
+        self.current = current
+
+
+class ParserControlStorageError(ParserControlError):
+    pass
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _iso(moment: datetime | None = None) -> str:
+    value = moment or _now()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise InvalidControlRequest("earlyUntil must be a valid ISO-8601 datetime") from exc
+    if parsed.tzinfo is None:
+        raise InvalidControlRequest("earlyUntil must include a timezone")
+    return parsed.astimezone(UTC)
+
+
+def _log_storage_fallback(
+    operation: str,
+    exc: Exception,
+    *,
+    fallback: str,
+) -> None:
+    try:
+        from .refresh_log import log_action
+
+        log_action(
+            "parser_control.storage_fallback",
+            level="error",
+            detail=f"{type(exc).__name__}: {str(exc)[:700]}",
+            extra={"operation": operation, "fallback": fallback},
+        )
+    except Exception:
+        # A control-file failure must never become a public-site outage merely
+        # because the secondary operational logger is also unavailable.
+        return
+
+
+def _default_state() -> dict[str, Any]:
+    return {
+        "schemaVersion": 2,
+        "revision": 1,
+        "policyConfigured": False,
+        "policy": {
+            "mode": "stable",
+            "earlyUntil": None,
+            "reason": None,
+            "updatedAt": None,
+            "updatedBy": None,
+        },
+        "sections": {section.id: True for section in SECTIONS},
+        "updatedAt": None,
+        "updatedBy": None,
+        "runs": [],
+    }
+
+
+def _normalise_state(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ParserControlStorageError("Parser control state must be a JSON object")
+    state = _default_state()
+    revision = raw.get("revision", 1)
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise ParserControlStorageError("Parser control revision is invalid")
+    state["revision"] = revision
+    # Normalising an older file upgrades the in-memory representation; the
+    # next mutation persists the current schema version.
+    state["schemaVersion"] = 2
+
+    policy = raw.get("policy") or {}
+    if not isinstance(policy, dict):
+        raise ParserControlStorageError("Parser control policy is invalid")
+    mode = policy.get("mode", "stable")
+    if mode not in {"stable", "early"}:
+        raise ParserControlStorageError("Parser control publication mode is invalid")
+    state["policy"] = {
+        "mode": mode,
+        "earlyUntil": policy.get("earlyUntil"),
+        "reason": policy.get("reason"),
+        "updatedAt": policy.get("updatedAt"),
+        "updatedBy": policy.get("updatedBy"),
+    }
+    # Files written by the first control-plane release did not have an
+    # explicit provenance bit. A policy with its own audit timestamp is an
+    # intentional admin choice; a default policy persisted only by a section
+    # edit or run enqueue is not.
+    inferred_policy_configured = bool(policy.get("updatedAt") or policy.get("updatedBy"))
+    configured = raw.get("policyConfigured", inferred_policy_configured)
+    if not isinstance(configured, bool):
+        raise ParserControlStorageError("Parser control policy provenance is invalid")
+    state["policyConfigured"] = configured
+
+    sections = raw.get("sections") or {}
+    if not isinstance(sections, dict):
+        raise ParserControlStorageError("Parser control sections are invalid")
+    invalid_section_flags = [
+        section.id
+        for section in SECTIONS
+        if section.id in sections and not isinstance(sections[section.id], bool)
+    ]
+    if invalid_section_flags:
+        raise ParserControlStorageError(
+            "Parser control section flags are invalid: " + ", ".join(invalid_section_flags)
+        )
+    state["sections"] = {
+        section.id: sections.get(section.id, True)
+        for section in SECTIONS
+    }
+    state["updatedAt"] = raw.get("updatedAt")
+    state["updatedBy"] = raw.get("updatedBy")
+
+    runs = raw.get("runs") or []
+    if not isinstance(runs, list):
+        raise ParserControlStorageError("Parser control runs are invalid")
+    state["runs"] = [run for run in runs if isinstance(run, dict)][-MAX_RECENT_RUNS:]
+    return state
+
+
+def _environment_policy(at: datetime) -> dict[str, Any] | None:
+    enabled = os.environ.get("HS_ARENA_POST_PATCH_ENABLED", "false").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return None
+    timezone = ZoneInfo("Europe/Warsaw")
+    local_day = at.astimezone(timezone).date()
+    try:
+        start = date.fromisoformat(
+            os.environ.get("HS_ARENA_POST_PATCH_FROM", "2026-07-21").strip()
+        )
+        until = date.fromisoformat(
+            os.environ.get("HS_ARENA_POST_PATCH_UNTIL", "2026-07-28").strip()
+        )
+    except ValueError:
+        return None
+    if not start <= local_day < until:
+        return None
+    until_at = datetime.combine(until, datetime_time.min, tzinfo=timezone).astimezone(UTC)
+    return {
+        "mode": "early",
+        "effectiveMode": "early",
+        "earlyUntil": _iso(until_at),
+        "reason": "Послепатчевый режим из настроек окружения",
+        "updatedAt": None,
+        "updatedBy": "environment",
+        "managedBy": "environment",
+    }
+
+
+def _policy_view(
+    state: dict[str, Any],
+    *,
+    persisted: bool,
+    at: datetime | None = None,
+) -> dict[str, Any]:
+    moment = at or _now()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    policy_configured = bool(state.get("policyConfigured"))
+    if not policy_configured:
+        environment = _environment_policy(moment)
+        if environment:
+            return {**environment, "policyConfigured": False}
+
+    policy = state["policy"]
+    mode = policy["mode"]
+    effective = mode
+    if mode == "early":
+        try:
+            until = _parse_datetime(policy.get("earlyUntil"))
+        except InvalidControlRequest:
+            until = None
+        if until is None or moment.astimezone(UTC) >= until:
+            effective = "stable"
+    return {
+        **policy,
+        "effectiveMode": effective,
+        "managedBy": "control" if policy_configured else "default",
+        "policyConfigured": policy_configured,
+    }
+
+
+def _run_public_view(run: dict[str, Any]) -> dict[str, Any]:
+    view = dict(run)
+    source_ids = [source_id for source_id in (run.get("sourceIds") or []) if source_id]
+    results = [row for row in (run.get("results") or []) if isinstance(row, dict)]
+    total = int(run.get("totalSources") or len(source_ids))
+    completed = int(run.get("completedSources") or len(results))
+    failed = run.get("failedSources")
+    if not isinstance(failed, int) or isinstance(failed, bool):
+        failed = sum(
+            row.get("state") != "ok" or bool(row.get("servingCachedDataset"))
+            for row in results
+        )
+    if run.get("status") == "failed" and not results and total:
+        completed = total
+        failed = total
+    view["totalSources"] = total
+    view["completedSources"] = min(completed, total)
+    view["failedSources"] = min(int(failed), total)
+    return view
+
+
+class ParserControlStore:
+    def __init__(self, root: Path | None = None) -> None:
+        self._root_override = Path(root) if root is not None else None
+        self._thread_lock = threading.RLock()
+
+    @property
+    def root(self) -> Path:
+        return self._root_override or data_dir()
+
+    @property
+    def state_path(self) -> Path:
+        return self.root / "control" / CONTROL_FILENAME
+
+    @property
+    def lock_path(self) -> Path:
+        return self.root / "control" / CONTROL_LOCK_FILENAME
+
+    @contextmanager
+    def _locked(self, *, exclusive: bool) -> Iterator[tuple[dict[str, Any], bool]]:
+        try:
+            directory = self.state_path.parent
+            directory.mkdir(parents=True, exist_ok=True)
+            with self._thread_lock, self.lock_path.open("a+", encoding="utf-8") as lock_handle:
+                fcntl.flock(
+                    lock_handle.fileno(),
+                    fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH,
+                )
+                try:
+                    persisted = self.state_path.exists()
+                    if persisted:
+                        try:
+                            raw = json.loads(self.state_path.read_text(encoding="utf-8"))
+                        except (OSError, json.JSONDecodeError) as exc:
+                            raise ParserControlStorageError(
+                                "Parser control state cannot be read safely"
+                            ) from exc
+                        state = _normalise_state(raw)
+                    else:
+                        state = _default_state()
+                    yield state, persisted
+                finally:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+        except ParserControlError:
+            raise
+        except OSError as exc:
+            raise ParserControlStorageError(
+                "Parser control storage is unavailable"
+            ) from exc
+
+    def _write_locked(self, state: dict[str, Any]) -> None:
+        path = self.state_path
+        temporary = path.with_name(
+            f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        temporary.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.chmod(0o640)
+        os.replace(temporary, path)
+
+    def read_state(self) -> tuple[dict[str, Any], bool]:
+        with self._locked(exclusive=False) as (state, persisted):
+            return state, persisted
+
+    def _read_source_json(self, directory: str, source_id: str) -> dict[str, Any] | None:
+        path = self.root / directory / f"{source_id}.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _read_baseline_json(self, source_id: str, label: str) -> dict[str, Any] | None:
+        path = self.root / "baselines" / f"{source_id}.{label}.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def stable_baseline(self, source_id: str) -> dict[str, Any] | None:
+        from .post_patch_policy import (
+            POST_PATCH_BASELINE_LABEL,
+            STABLE_PUBLICATION_BASELINE_LABEL,
+        )
+
+        return self._read_baseline_json(
+            source_id, STABLE_PUBLICATION_BASELINE_LABEL
+        ) or self._read_baseline_json(source_id, POST_PATCH_BASELINE_LABEL)
+
+    def snapshot(self, *, at: datetime | None = None) -> dict[str, Any]:
+        state, persisted = self.read_state()
+        policy_view = _policy_view(state, persisted=persisted, at=at)
+        sections: list[dict[str, Any]] = []
+        for section in SECTIONS:
+            sources: list[dict[str, Any]] = []
+            for source_id in section.source_ids:
+                source = SOURCE_BY_ID[source_id]
+                status = self._read_source_json("statuses", source_id) or {}
+                dataset = self._read_source_json("datasets", source_id) or {}
+                quality = status.get("quality") or {}
+                candidate_rows_total = status.get("rows_total")
+                if candidate_rows_total is None and isinstance(quality, dict):
+                    candidate_rows_total = quality.get("rows_total")
+                candidate_fetched_at = dataset.get("fetched_at")
+                stable_baseline = self.stable_baseline(source_id)
+                effective_mode = (
+                    str(policy_view["effectiveMode"])
+                    if source_id in EARLY_SOURCE_IDS
+                    else "stable"
+                )
+                published = resolve_public_dataset(
+                    source_id,
+                    dataset,
+                    at=at,
+                    store=self,
+                    effective_mode=effective_mode,
+                ) if dataset else None
+                published_fetched_at = (published or {}).get("fetched_at")
+                if published is None:
+                    publication_channel = "unavailable"
+                elif _is_provisional_dataset(published):
+                    publication_channel = "early"
+                elif published is dataset:
+                    publication_channel = "stable"
+                else:
+                    publication_channel = "stable_baseline"
+                published_rows_total: int | None = None
+                if published:
+                    try:
+                        from .dataset_regression import estimate_metric_count
+
+                        published_rows_total = estimate_metric_count(
+                            source,
+                            (published.get("data") or {}),
+                        )
+                    except Exception:
+                        published_rows_total = None
+                    if not published_rows_total:
+                        public_data = published.get("data") or {}
+                        structured = public_data.get("structured") or {}
+                        for container in (structured, public_data):
+                            if not isinstance(container, dict):
+                                continue
+                            row_list = next(
+                                (
+                                    container[key]
+                                    for key in (
+                                        "cards",
+                                        "rows",
+                                        "items",
+                                        "minions",
+                                        "heroes",
+                                        "decks",
+                                        "archetypes",
+                                    )
+                                    if isinstance(container.get(key), list)
+                                ),
+                                None,
+                            )
+                            if row_list is not None:
+                                published_rows_total = len(row_list)
+                                break
+                if published_rows_total is None and published is dataset:
+                    published_rows_total = candidate_rows_total
+
+                source_state = str(
+                    status.get("state") or ("ready" if dataset else "missing")
+                )
+                serving_cached = bool(status.get("serving_cached_dataset"))
+                if serving_cached or source_state == "partial":
+                    health = "warning"
+                elif source_state in {"ok", "ready"}:
+                    health = "ok"
+                elif source_state == "missing":
+                    health = "missing"
+                else:
+                    health = "error"
+                last_attempt_at = (
+                    status.get("last_refresh_at")
+                    if serving_cached
+                    else status.get("fetched_at")
+                )
+                last_error = None
+                if serving_cached:
+                    last_error = status.get("last_refresh_error")
+                elif health == "error":
+                    last_error = status.get("error") or status.get("detail")
+                sources.append(
+                    {
+                        "id": source_id,
+                        "label": source_label(source_id),
+                        "kind": source.kind,
+                        "state": health,
+                        "health": health,
+                        "sourceState": source_state,
+                        "lastSuccessAt": published_fetched_at,
+                        "lastAttemptAt": last_attempt_at,
+                        "lastError": last_error,
+                        "datasetFetchedAt": candidate_fetched_at,
+                        "candidateFetchedAt": candidate_fetched_at,
+                        "publishedFetchedAt": published_fetched_at,
+                        "publicationChannel": publication_channel,
+                        "stableBaselineAvailable": stable_baseline is not None,
+                        "rowsTotal": published_rows_total,
+                        "candidateRowsTotal": candidate_rows_total,
+                        "supportsEarly": source_id in EARLY_SOURCE_IDS,
+                        "canRunManually": True,
+                        "schedule": None,
+                        "nextRunAt": None,
+                    }
+                )
+            sections.append(
+                {
+                    "id": section.id,
+                    "label": section.label,
+                    "group": section.group,
+                    "description": section.description,
+                    "enabled": state["sections"].get(section.id, True),
+                    "supportsEarly": section.supports_early,
+                    "sourceCount": len(sources),
+                    "sources": sources,
+                }
+            )
+        runs = [
+            _run_public_view(run)
+            for run in sorted(
+                state["runs"], key=lambda run: str(run.get("createdAt") or ""), reverse=True
+            )
+        ]
+        active_run = next(
+            (run for run in runs if run.get("status") in ACTIVE_RUN_STATUSES), None
+        )
+        return {
+            "revision": state["revision"],
+            "policy": policy_view,
+            "policyConfigured": bool(state.get("policyConfigured")),
+            "sections": sections,
+            "activeRun": active_run,
+            "recentRuns": runs[:10],
+            "updatedAt": state.get("updatedAt"),
+            "updatedBy": state.get("updatedBy"),
+        }
+
+    def update_policy(
+        self,
+        *,
+        expected_revision: int,
+        mode: str,
+        early_until: str | None,
+        reason: str | None,
+        updated_by: str,
+    ) -> dict[str, Any]:
+        if mode not in {"stable", "early"}:
+            raise InvalidControlRequest("mode must be stable or early")
+        actor = str(updated_by or "admin-api").strip()[:120] or "admin-api"
+        clean_reason = str(reason or "").strip()[:500] or None
+        until: datetime | None = None
+        if mode == "early":
+            if not clean_reason:
+                raise InvalidControlRequest("reason is required for early mode")
+            until = _parse_datetime(early_until)
+            if until is None:
+                raise InvalidControlRequest("earlyUntil is required for early mode")
+            if until <= _now():
+                raise InvalidControlRequest("earlyUntil must be in the future")
+        timestamp = _iso()
+        with self._locked(exclusive=True) as (state, _persisted):
+            if state["revision"] != expected_revision:
+                raise RevisionConflict(expected_revision, state["revision"])
+            state["revision"] += 1
+            state["policyConfigured"] = True
+            state["policy"] = {
+                "mode": mode,
+                "earlyUntil": _iso(until) if until else None,
+                "reason": clean_reason,
+                "updatedAt": timestamp,
+                "updatedBy": actor,
+            }
+            state["updatedAt"] = timestamp
+            state["updatedBy"] = actor
+            self._write_locked(state)
+        return self.snapshot()
+
+    def update_sections(
+        self,
+        *,
+        expected_revision: int,
+        changes: dict[str, bool],
+        updated_by: str,
+    ) -> dict[str, Any]:
+        if not changes:
+            raise InvalidControlRequest("At least one section change is required")
+        unknown = sorted(set(changes) - set(SECTION_BY_ID))
+        if unknown:
+            raise InvalidControlRequest("Unknown sections: " + ", ".join(unknown))
+        if any(not isinstance(value, bool) for value in changes.values()):
+            raise InvalidControlRequest("Section enabled values must be boolean")
+        actor = str(updated_by or "admin-api").strip()[:120] or "admin-api"
+        timestamp = _iso()
+        with self._locked(exclusive=True) as (state, _persisted):
+            if state["revision"] != expected_revision:
+                raise RevisionConflict(expected_revision, state["revision"])
+            state["revision"] += 1
+            state["sections"].update(changes)
+            state["updatedAt"] = timestamp
+            state["updatedBy"] = actor
+            self._write_locked(state)
+        return self.snapshot()
+
+    def enqueue_run(
+        self,
+        *,
+        source_ids: list[str],
+        requested_by: str,
+        reason: str | None,
+    ) -> tuple[dict[str, Any], bool]:
+        normalised = sorted(set(source_ids))
+        if not normalised:
+            raise InvalidControlRequest("At least one source is required")
+        if len(normalised) > MAX_RUN_SOURCES:
+            raise InvalidControlRequest("Too many sources in one run")
+        unknown = sorted(set(normalised) - set(SOURCE_BY_ID))
+        if unknown:
+            raise InvalidControlRequest("Unknown sources: " + ", ".join(unknown))
+        actor = str(requested_by or "admin-api").strip()[:120] or "admin-api"
+        clean_reason = str(reason or "").strip()[:500] or None
+        with self._locked(exclusive=True) as (state, _persisted):
+            active = [
+                run for run in state["runs"]
+                if run.get("status") in ACTIVE_RUN_STATUSES
+            ]
+            active_sources: set[str] = set()
+            for run in active:
+                completed = {
+                    str(result.get("sourceId") or result.get("source_id") or "")
+                    for result in (run.get("results") or [])
+                    if isinstance(result, dict)
+                }
+                active_sources.update(
+                    source_id
+                    for source_id in (run.get("sourceIds") or [])
+                    if source_id not in completed
+                )
+            deduplicated_source_ids = sorted(set(normalised) & active_sources)
+            uncovered_source_ids = sorted(set(normalised) - active_sources)
+            if not uncovered_source_ids:
+                covering = next(
+                    (
+                        run
+                        for run in active
+                        if set(normalised).issubset(set(run.get("sourceIds") or []))
+                    ),
+                    active[0],
+                )
+                view = _run_public_view(covering)
+                view["requestedSourceIds"] = normalised
+                view["deduplicatedSourceIds"] = deduplicated_source_ids
+                return view, True
+            if len(active) >= MAX_PENDING_RUNS:
+                raise InvalidControlRequest("Parser run queue is full")
+            run = {
+                "id": uuid4().hex,
+                "status": "queued",
+                "sourceIds": uncovered_source_ids,
+                "requestedSourceIds": normalised,
+                "deduplicatedSourceIds": deduplicated_source_ids,
+                "requestedBy": actor,
+                "reason": clean_reason,
+                "createdAt": _iso(),
+                "startedAt": None,
+                "finishedAt": None,
+                "results": [],
+                "error": None,
+                "totalSources": len(uncovered_source_ids),
+                "completedSources": 0,
+                "failedSources": 0,
+            }
+            state["runs"].append(run)
+            state["runs"] = state["runs"][-MAX_RECENT_RUNS:]
+            self._write_locked(state)
+            return _run_public_view(run), bool(deduplicated_source_ids)
+
+    def list_runs(self, *, limit: int = 20) -> dict[str, Any]:
+        state, _persisted = self.read_state()
+        runs = [
+            _run_public_view(run)
+            for run in sorted(
+                state["runs"], key=lambda run: str(run.get("createdAt") or ""), reverse=True
+            )[: max(1, min(limit, MAX_RECENT_RUNS))]
+        ]
+        active = next(
+            (run for run in runs if run.get("status") in ACTIVE_RUN_STATUSES), None
+        )
+        return {"activeRun": active, "runs": runs}
+
+    def recover_interrupted_runs(self) -> int:
+        recovered = 0
+        with self._locked(exclusive=True) as (state, persisted):
+            if not persisted:
+                return 0
+            for run in state["runs"]:
+                if run.get("status") == "running":
+                    run["status"] = "queued"
+                    run["startedAt"] = None
+                    run["error"] = "Запуск восстановлен после перезапуска сервиса"
+                    recovered += 1
+            if recovered:
+                self._write_locked(state)
+        return recovered
+
+    def claim_next_run(self) -> dict[str, Any] | None:
+        with self._locked(exclusive=True) as (state, persisted):
+            if not persisted:
+                return None
+            queued = sorted(
+                (run for run in state["runs"] if run.get("status") == "queued"),
+                key=lambda run: str(run.get("createdAt") or ""),
+            )
+            if not queued:
+                return None
+            run = queued[0]
+            run["status"] = "running"
+            run["startedAt"] = _iso()
+            run["error"] = None
+            self._write_locked(state)
+            return dict(run)
+
+    def record_run_result(
+        self,
+        run_id: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Checkpoint one source result so a restart can resume safely."""
+        source_id = str(result.get("sourceId") or result.get("source_id") or "")
+        if not source_id:
+            raise ValueError("Parser run result must contain sourceId")
+        with self._locked(exclusive=True) as (state, _persisted):
+            run = next((row for row in state["runs"] if row.get("id") == run_id), None)
+            if run is None:
+                return None
+            if source_id not in set(run.get("sourceIds") or []):
+                raise ValueError("Parser run result source is not part of the run")
+            results = [
+                dict(row)
+                for row in (run.get("results") or [])
+                if isinstance(row, dict)
+                and str(row.get("sourceId") or row.get("source_id") or "") != source_id
+            ]
+            persisted_result = dict(result)
+            persisted_result["sourceId"] = source_id
+            persisted_result.pop("source_id", None)
+            results.append(persisted_result)
+            source_order = {
+                value: index for index, value in enumerate(run.get("sourceIds") or [])
+            }
+            results.sort(
+                key=lambda row: source_order.get(str(row.get("sourceId")), 10**9)
+            )
+            run["results"] = results
+            run["completedSources"] = len(results)
+            run["failedSources"] = sum(
+                row.get("state") != "ok" or bool(row.get("servingCachedDataset"))
+                for row in results
+            )
+            run["lastProgressAt"] = _iso()
+            self._write_locked(state)
+            return _run_public_view(run)
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        state, _persisted = self.read_state()
+        run = next((row for row in state["runs"] if row.get("id") == run_id), None)
+        return _run_public_view(run) if run is not None else None
+
+    def finish_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        results: list[dict[str, Any]],
+        error: str | None = None,
+    ) -> None:
+        if status not in RUN_STATUSES - ACTIVE_RUN_STATUSES:
+            raise ValueError("Invalid terminal parser run status")
+        with self._locked(exclusive=True) as (state, _persisted):
+            run = next((row for row in state["runs"] if row.get("id") == run_id), None)
+            if run is None:
+                return
+            run["status"] = status
+            run["finishedAt"] = _iso()
+            run["results"] = results
+            run["error"] = str(error)[:1000] if error else None
+            total = len(run.get("sourceIds") or [])
+            failed = sum(
+                result.get("state") != "ok" or bool(result.get("servingCachedDataset"))
+                for result in results
+            )
+            failed += max(0, total - len(results))
+            if status == "failed" and not results:
+                failed = total
+            run["totalSources"] = total
+            run["completedSources"] = total
+            run["failedSources"] = failed
+            self._write_locked(state)
+
+
+_STORE = ParserControlStore()
+
+
+def parser_control_store() -> ParserControlStore:
+    return _STORE
+
+
+def _state_policy(
+    *, at: datetime | None = None, store: ParserControlStore | None = None
+) -> dict[str, Any]:
+    target = store or parser_control_store()
+    try:
+        state, persisted = target.read_state()
+    except ParserControlStorageError as exc:
+        # Publication remains operational if the control file is unreadable;
+        # the legacy date-bounded environment policy is the explicit fallback.
+        # The admin snapshot itself still surfaces the storage failure.
+        _log_storage_fallback(
+            "publication_policy",
+            exc,
+            fallback="environment_or_stable_default",
+        )
+        state, persisted = _default_state(), False
+    return _policy_view(state, persisted=persisted, at=at)
+
+
+def publication_policy_context(
+    source_id: str,
+    *,
+    at: datetime | None = None,
+    store: ParserControlStore | None = None,
+) -> dict[str, Any]:
+    target = store or parser_control_store()
+    try:
+        state, persisted = target.read_state()
+    except ParserControlStorageError as exc:
+        _log_storage_fallback(
+            "capture_publication_policy",
+            exc,
+            fallback="environment_or_stable_default",
+        )
+        state, persisted = _default_state(), False
+    view = _policy_view(state, persisted=persisted, at=at)
+    effective_mode = (
+        str(view.get("effectiveMode") or "stable")
+        if source_id in EARLY_SOURCE_IDS
+        else "stable"
+    )
+    managed_by = str(view.get("managedBy") or "default")
+    window: dict[str, Any] | None = None
+    if effective_mode == "early":
+        if managed_by == "environment":
+            window = {
+                "from": os.environ.get("HS_ARENA_POST_PATCH_FROM", "2026-07-21"),
+                "until": os.environ.get("HS_ARENA_POST_PATCH_UNTIL", "2026-07-28"),
+                "timezone": "Europe/Warsaw",
+            }
+        else:
+            window = {
+                "from": view.get("updatedAt"),
+                "until": view.get("earlyUntil"),
+                "timezone": "UTC",
+            }
+    token_payload = {
+        "sourceId": source_id,
+        "effectiveMode": effective_mode,
+        "managedBy": managed_by,
+        "policyConfigured": bool(view.get("policyConfigured")),
+        "earlyUntil": view.get("earlyUntil"),
+        "updatedAt": view.get("updatedAt"),
+    }
+    token = hashlib.sha256(
+        json.dumps(token_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:24]
+    return {
+        **token_payload,
+        "revision": state["revision"] if persisted else None,
+        "token": token,
+        "capturedAt": _iso(at),
+        "window": window,
+    }
+
+
+def effective_publication_mode(
+    source_id: str,
+    *,
+    at: datetime | None = None,
+    store: ParserControlStore | None = None,
+) -> str:
+    if source_id not in EARLY_SOURCE_IDS:
+        return "stable"
+    return str(_state_policy(at=at, store=store)["effectiveMode"])
+
+
+def effective_early_window(
+    source_id: str,
+    *,
+    at: datetime | None = None,
+    store: ParserControlStore | None = None,
+) -> dict[str, Any] | None:
+    if effective_publication_mode(source_id, at=at, store=store) != "early":
+        return None
+    policy = _state_policy(at=at, store=store)
+    if policy.get("managedBy") == "environment":
+        return {
+            "from": os.environ.get("HS_ARENA_POST_PATCH_FROM", "2026-07-21"),
+            "until": os.environ.get("HS_ARENA_POST_PATCH_UNTIL", "2026-07-28"),
+            "timezone": "Europe/Warsaw",
+            "managedBy": "environment",
+        }
+    return {
+        "from": policy.get("updatedAt"),
+        "until": policy.get("earlyUntil"),
+        "timezone": "UTC" if policy.get("managedBy") == "control" else "Europe/Warsaw",
+        "managedBy": policy.get("managedBy"),
+    }
+
+
+def publication_cache_token(source_id: str, *, at: datetime | None = None) -> str:
+    """Return a cheap token that changes whenever public channel selection changes."""
+    if source_id not in EARLY_SOURCE_IDS:
+        return ""
+    context = publication_policy_context(source_id, at=at)
+    return f"{context.get('revision') or 'env'}:{context['token']}"
+
+
+def enabled_section_ids(*, store: ParserControlStore | None = None) -> set[str]:
+    target = store or parser_control_store()
+    try:
+        state, _persisted = target.read_state()
+    except ParserControlStorageError as exc:
+        _log_storage_fallback(
+            "scheduled_sections",
+            exc,
+            fallback="all_sections_enabled",
+        )
+        return set(SECTION_BY_ID)
+    return {
+        section_id
+        for section_id, enabled in state["sections"].items()
+        if enabled
+    }
+
+
+def is_source_scheduled_enabled(
+    source_id: str, *, store: ParserControlStore | None = None
+) -> bool:
+    section_id = SOURCE_TO_SECTION.get(source_id)
+    return bool(section_id and section_id in enabled_section_ids(store=store))
+
+
+def filter_scheduled_source_ids(
+    source_ids: list[str] | None,
+    *,
+    store: ParserControlStore | None = None,
+) -> list[str]:
+    enabled = enabled_section_ids(store=store)
+    candidates = list(source_ids) if source_ids is not None else list(SOURCE_BY_ID)
+    return [
+        source_id
+        for source_id in candidates
+        if SOURCE_TO_SECTION.get(source_id) in enabled
+    ]
+
+
+def _is_provisional_dataset(dataset: dict[str, Any]) -> bool:
+    data = dataset.get("data") or {}
+    return any(
+        isinstance(data.get(key), dict) and bool(data[key].get("provisional"))
+        for key in ("structured", "hsreplay_extracted")
+    )
+
+
+def resolve_public_dataset(
+    source_id: str,
+    dataset: dict[str, Any],
+    *,
+    at: datetime | None = None,
+    store: ParserControlStore | None = None,
+    effective_mode: str | None = None,
+) -> dict[str, Any] | None:
+    if not _is_provisional_dataset(dataset):
+        return dataset
+    mode = effective_mode or effective_publication_mode(
+        source_id, at=at, store=store
+    )
+    if mode == "early":
+        return dataset
+    baseline = (store or parser_control_store()).stable_baseline(source_id)
+    if baseline is None or _is_provisional_dataset(baseline):
+        return None
+    return baseline
+
+
+def expand_run_selection(
+    *, source_ids: list[str] | None, section_ids: list[str] | None
+) -> list[str]:
+    selected = list(source_ids or [])
+    unknown_sections = sorted(set(section_ids or []) - set(SECTION_BY_ID))
+    if unknown_sections:
+        raise InvalidControlRequest("Unknown sections: " + ", ".join(unknown_sections))
+    for section_id in section_ids or []:
+        selected.extend(SECTION_BY_ID[section_id].source_ids)
+    return sorted(set(selected))
+
+
+def _run_result_summary(result: dict[str, Any]) -> dict[str, Any]:
+    source_id = str(result.get("source_id") or result.get("sourceId") or "")
+    return {
+        "sourceId": source_id,
+        "label": source_label(source_id) if source_id in SOURCE_BY_ID else source_id,
+        "state": result.get("state") or ("ok" if result.get("ok") else "error"),
+        "fetchedAt": result.get("fetched_at") or result.get("fetchedAt"),
+        "detail": result.get("detail") or result.get("error"),
+        "errors": result.get("errors") if isinstance(result.get("errors"), list) else [],
+        "servingCachedDataset": bool(
+            result.get("serving_cached_dataset") or result.get("servingCachedDataset")
+        ),
+    }
+
+
+async def _run_pipeline_source(source_id: str) -> dict[str, Any]:
+    if source_id == "hsreplay_archetypes":
+        from .hsreplay_archetypes_db import (
+            export_latest_archetypes_json,
+            refresh_hsreplay_archetype_database,
+        )
+
+        result = await refresh_hsreplay_archetype_database()
+        result["export_path"] = str(export_latest_archetypes_json())
+    elif source_id == "hsreplay_battlegrounds_hero_details":
+        from .hsreplay_bg_hero_details import refresh_bg_hero_details
+
+        result = await refresh_bg_hero_details()
+    elif source_id == "hsreplay_battlegrounds_minions":
+        from .hsreplay_bg_minions_db import refresh_bg_minion_database_sync
+
+        result = await asyncio.to_thread(refresh_bg_minion_database_sync)
+    else:
+        raise InvalidControlRequest(f"Unsupported pipeline source: {source_id}")
+    upstream_state = str(
+        result.get("state") or ("ok" if result.get("ok", True) else "error")
+    )
+    errors = result.get("errors")
+    detail = result.get("error") or result.get("detail")
+    if not detail and isinstance(errors, list) and errors:
+        detail = "; ".join(str(error) for error in errors[:5])
+    return {
+        "source_id": source_id,
+        "state": upstream_state,
+        "detail": detail,
+        "errors": errors if isinstance(errors, list) else [],
+        "serving_cached_dataset": bool(
+            result.get("serving_cached_dataset")
+            or result.get("servingCachedDataset")
+        ),
+        "fetched_at": result.get("fetched_at") or _iso(),
+    }
+
+
+async def execute_parser_run(source_ids: list[str]) -> list[dict[str, Any]]:
+    from .fetcher import refresh_sources
+
+    scrape_ids = [source_id for source_id in source_ids if SOURCE_BY_ID[source_id].kind == "scrape"]
+    pipeline_ids = [source_id for source_id in source_ids if SOURCE_BY_ID[source_id].kind == "pipeline"]
+    results: list[dict[str, Any]] = []
+    if scrape_ids:
+        results.extend(await refresh_sources(scrape_ids))
+    for source_id in pipeline_ids:
+        results.append(await _run_pipeline_source(source_id))
+    # This source has two public products: the cached source dataset and the
+    # SQLite-backed /v1/bg/minions API. One manual control-plane action updates
+    # both and reports a single aggregate source result.
+    bg_minions_id = "hsreplay_battlegrounds_minions"
+    if bg_minions_id in source_ids:
+        database_result = await _run_pipeline_source(bg_minions_id)
+        base = next(
+            (
+                result
+                for result in results
+                if str(result.get("source_id") or result.get("sourceId") or "")
+                == bg_minions_id
+            ),
+            None,
+        )
+        if base is None:
+            results.append(database_result)
+        else:
+            base_ok = (
+                base.get("state") == "ok"
+                and not base.get("serving_cached_dataset")
+            )
+            database_ok = database_result.get("state") == "ok"
+            base["state"] = (
+                "ok" if base_ok and database_ok
+                else "partial" if base_ok or database_ok
+                else "error"
+            )
+            details = [
+                str(detail)
+                for detail in (base.get("detail"), database_result.get("detail"))
+                if detail
+            ]
+            base["detail"] = "; ".join(details) or None
+            base["database_state"] = database_result.get("state")
+    return results
+
+
+class ParserRunWorker:
+    def __init__(
+        self,
+        store: ParserControlStore,
+        *,
+        executor: Callable[[list[str]], Any] = execute_parser_run,
+    ) -> None:
+        self.store = store
+        self.executor = executor
+        self._thread: threading.Thread | None = None
+        self._wake = threading.Event()
+        self._start_lock = threading.Lock()
+
+    def start(self) -> None:
+        with self._start_lock:
+            if self._thread and self._thread.is_alive():
+                return
+            try:
+                self.store.recover_interrupted_runs()
+            except ParserControlStorageError as exc:
+                _log_storage_fallback(
+                    "parser_run_worker_start",
+                    exc,
+                    fallback="worker_inactive",
+                )
+                return
+            self._thread = threading.Thread(
+                target=self._loop,
+                name="parser-control-worker",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def enqueue(
+        self,
+        *,
+        source_ids: list[str],
+        requested_by: str,
+        reason: str | None,
+    ) -> tuple[dict[str, Any], bool]:
+        run, deduplicated = self.store.enqueue_run(
+            source_ids=source_ids,
+            requested_by=requested_by,
+            reason=reason,
+        )
+        self.start()
+        self._wake.set()
+        return run, deduplicated
+
+    def process_next(self) -> bool:
+        """Process one durable run and persist progress after every source."""
+        run = self.store.claim_next_run()
+        if run is None:
+            return False
+        run_id = str(run["id"])
+        completed = {
+            str(result.get("sourceId") or result.get("source_id") or "")
+            for result in (run.get("results") or [])
+            if isinstance(result, dict)
+        }
+        for source_id in run.get("sourceIds") or []:
+            if source_id in completed:
+                continue
+            try:
+                raw_results = asyncio.run(self.executor([source_id]))
+                raw_result = next(
+                    (
+                        row
+                        for row in raw_results
+                        if str(row.get("source_id") or row.get("sourceId") or "")
+                        == source_id
+                    ),
+                    raw_results[0] if raw_results else None,
+                )
+                if raw_result is None:
+                    raise RuntimeError("Parser returned no result for the source")
+                summary = _run_result_summary(raw_result)
+                summary["sourceId"] = source_id
+            except Exception as exc:
+                summary = {
+                    "sourceId": source_id,
+                    "label": source_label(source_id),
+                    "state": "error",
+                    "fetchedAt": None,
+                    "detail": f"{type(exc).__name__}: {str(exc)[:900]}",
+                    "servingCachedDataset": False,
+                }
+            self.store.record_run_result(run_id, summary)
+
+        persisted = self.store.get_run(run_id) or _run_public_view(run)
+        summaries = list(persisted.get("results") or [])
+        ok_count = sum(
+            result.get("state") == "ok" and not result.get("servingCachedDataset")
+            for result in summaries
+        )
+        expected_count = len(run.get("sourceIds") or [])
+        if summaries and len(summaries) == expected_count and ok_count == expected_count:
+            terminal = "succeeded"
+        elif ok_count:
+            terminal = "partial"
+        else:
+            terminal = "failed"
+        self.store.finish_run(run_id, status=terminal, results=summaries)
+        return True
+
+    def _loop(self) -> None:
+        while True:
+            try:
+                processed = self.process_next()
+            except ParserControlStorageError as exc:
+                _log_storage_fallback(
+                    "parser_run_worker_loop",
+                    exc,
+                    fallback="retry_after_backoff",
+                )
+                processed = False
+            if not processed:
+                self._wake.wait(timeout=30.0)
+                self._wake.clear()
+
+
+_RUN_WORKER = ParserRunWorker(_STORE)
+
+
+def parser_run_worker() -> ParserRunWorker:
+    return _RUN_WORKER
