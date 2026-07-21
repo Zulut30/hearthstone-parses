@@ -273,14 +273,28 @@ def _active_trinkets_only(structured: dict[str, Any]) -> dict[str, Any]:
 
 
 def public_dataset_payload(source_id: str, dataset: dict[str, Any]) -> dict[str, Any]:
-    if source_id not in ACTIVE_TRINKET_SOURCE_IDS:
-        return dataset
     payload = dict(dataset)
-    data = dict(payload.get("data") or {})
-    for key in ("structured", "hsreplay_extracted"):
-        if isinstance(data.get(key), dict):
-            data[key] = _active_trinkets_only(data[key])
-    payload["data"] = data
+    if source_id in ACTIVE_TRINKET_SOURCE_IDS:
+        data = dict(payload.get("data") or {})
+        for key in ("structured", "hsreplay_extracted"):
+            if isinstance(data.get(key), dict):
+                data[key] = _active_trinkets_only(data[key])
+        payload["data"] = data
+
+    # This metadata describes the exact document selected by
+    # resolve_public_dataset(), not the current mutable admin policy. Consumers
+    # can therefore distinguish an early publication from a stable baseline
+    # without a race against a later mode switch.
+    from .parser_control import dataset_publication_mode
+
+    mode = dataset_publication_mode(dataset)
+    payload["publication"] = {
+        "schema_version": 1,
+        "source_id": source_id,
+        "mode": mode,
+        "channel": mode,
+        "published_at": dataset.get("fetched_at"),
+    }
     return payload
 
 

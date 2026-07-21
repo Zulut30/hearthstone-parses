@@ -1230,6 +1230,11 @@ def _is_provisional_dataset(dataset: dict[str, Any]) -> bool:
     )
 
 
+def dataset_publication_mode(dataset: dict[str, Any]) -> str:
+    """Return the immutable mode carried by an already selected publication."""
+    return "early" if _is_provisional_dataset(dataset) else "stable"
+
+
 def resolve_public_dataset(
     source_id: str,
     dataset: dict[str, Any],

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, public_dataset_payload
 from app.parser_control import ParserControlStore, resolve_public_dataset
 from app.post_patch_policy import (
     POST_PATCH_BASELINE_LABEL,
@@ -21,6 +21,42 @@ from app.storage import dataset_path, save_baseline_once, write_json
 
 
 class ParserControlPublishingTest(unittest.TestCase):
+    def test_public_payload_carries_authoritative_stable_publication_metadata(self) -> None:
+        source_id = "hsguru_meta_standard_legend"
+        stable = {
+            "fetched_at": "2026-07-21T10:00:00+00:00",
+            "data": {"structured": {"strategies": [{"name": "Stable"}]}},
+        }
+
+        payload = public_dataset_payload(source_id, stable)
+
+        self.assertEqual(payload["publication"], {
+            "schema_version": 1,
+            "source_id": source_id,
+            "mode": "stable",
+            "channel": "stable",
+            "published_at": stable["fetched_at"],
+        })
+        self.assertNotIn("publication", stable, "response metadata must not mutate stored snapshots")
+
+    def test_public_payload_carries_authoritative_early_publication_metadata(self) -> None:
+        source_id = "hsreplay_arena_cards_advanced"
+        early = {
+            "fetched_at": "2026-07-21T11:00:00+00:00",
+            "data": {
+                "structured": {
+                    "cards": [{"card_id": "EARLY"}],
+                    "provisional": True,
+                    "data_phase": "post_patch_early",
+                }
+            },
+        }
+
+        payload = public_dataset_payload(source_id, early)
+
+        self.assertEqual(payload["publication"]["mode"], "early")
+        self.assertEqual(payload["publication"]["published_at"], early["fetched_at"])
+
     def test_early_candidate_is_not_saved_if_admin_switches_to_stable_mid_fetch(self) -> None:
         source_id = "hsreplay_arena_cards_advanced"
         candidate = {
