@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -72,6 +73,165 @@ def _iso(moment: datetime | None = None) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat()
+
+
+def _monotonic_ms() -> float:
+    """Return a monotonic timestamp in milliseconds for run duration accounting."""
+
+    return time.monotonic_ns() / 1_000_000
+
+
+def _non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+MAX_PUBLIC_RUN_ERRORS = 50
+
+
+def _normalise_run_errors_with_metadata(value: Any) -> tuple[list[str], int, bool]:
+    """Convert heterogeneous upstream errors into safe, stable JSON strings."""
+
+    if not isinstance(value, list):
+        return [], 0, False
+    normalised: list[str] = []
+    seen: set[str] = set()
+    errors_total = 0
+    context_keys = {
+        "archetype_id",
+        "card_id",
+        "cardId",
+        "dbfId",
+        "deck_id",
+        "deckId",
+        "index",
+        "row",
+        "source_id",
+        "sourceId",
+    }
+    scalar_types = (str, int, float, bool)
+    for item in value:
+        text = ""
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            message = next(
+                (
+                    str(item[key]).strip()
+                    for key in ("error", "message", "detail")
+                    if isinstance(item.get(key), scalar_types)
+                    and str(item[key]).strip()
+                ),
+                "",
+            )
+            safe_keys = sorted(
+                (key for key in item if isinstance(key, str)), key=str
+            )
+            context = [
+                f"{key}={item[key]}"
+                for key in safe_keys
+                if key in context_keys
+                and isinstance(item[key], scalar_types)
+                and str(item[key]).strip()
+            ]
+            if message:
+                text = f"{', '.join(context)}: {message}" if context else message
+            else:
+                safe_item = {
+                    key: item[key]
+                    for key in safe_keys
+                    if key in context_keys
+                    and (isinstance(item[key], scalar_types) or item[key] is None)
+                }
+                text = (
+                    json.dumps(safe_item, ensure_ascii=False, sort_keys=True)
+                    if safe_item
+                    else "Структурированная ошибка парсера"
+                )
+        elif isinstance(item, (int, float, bool)):
+            text = str(item)
+        elif item is not None:
+            # Never serialize an arbitrary object's repr: it may contain secrets,
+            # addresses, or otherwise unstable implementation details.
+            text = "Неизвестная ошибка парсера"
+        text = text.strip()[:1000]
+        if text and text not in seen:
+            seen.add(text)
+            errors_total += 1
+            if len(normalised) < MAX_PUBLIC_RUN_ERRORS:
+                normalised.append(text)
+    return normalised, errors_total, errors_total > len(normalised)
+
+
+def _normalise_run_errors(value: Any) -> list[str]:
+    normalised, _errors_total, _errors_truncated = (
+        _normalise_run_errors_with_metadata(value)
+    )
+    return normalised
+
+
+def _result_errors(result: dict[str, Any]) -> tuple[list[str], int, bool]:
+    errors, derived_total, derived_truncated = _normalise_run_errors_with_metadata(
+        result.get("errors")
+    )
+    supplied_total = next(
+        (
+            normalised
+            for key in ("errorsTotal", "errors_total")
+            if (normalised := _non_negative_int(result.get(key))) is not None
+        ),
+        None,
+    )
+    errors_total = max(derived_total, supplied_total or 0)
+    supplied_truncated = any(
+        result.get(key) is True for key in ("errorsTruncated", "errors_truncated")
+    )
+    return (
+        errors,
+        errors_total,
+        derived_truncated or supplied_truncated or errors_total > len(errors),
+    )
+
+
+def _merge_result_errors(
+    first: dict[str, Any], second: dict[str, Any]
+) -> tuple[list[str], int, bool]:
+    """Merge aggregate-source errors without discarding truncation metadata."""
+
+    first_errors, first_total, first_truncated = _result_errors(first)
+    second_errors, second_total, second_truncated = _result_errors(second)
+    errors, visible_total, visible_truncated = _normalise_run_errors_with_metadata(
+        [*first_errors, *second_errors]
+    )
+    first_visible = set(first_errors)
+    second_visible = set(second_errors)
+    # Hidden errors from a truncated input may overlap the other input. Report
+    # the smallest total guaranteed by the visible values and supplied totals.
+    errors_total = max(
+        visible_total,
+        first_total + len(second_visible - first_visible),
+        second_total + len(first_visible - second_visible),
+    )
+    return (
+        errors,
+        errors_total,
+        first_truncated
+        or second_truncated
+        or visible_truncated
+        or errors_total > len(errors),
+    )
+
+
+def _result_rows_total(result: dict[str, Any]) -> int | None:
+    for value in (result.get("rows_total"), result.get("rowsTotal")):
+        rows_total = _non_negative_int(value)
+        if rows_total is not None:
+            return rows_total
+    quality = result.get("quality")
+    if isinstance(quality, dict):
+        return _non_negative_int(quality.get("rows_total"))
+    return None
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -296,7 +456,38 @@ def _policy_view(
 def _run_public_view(run: dict[str, Any]) -> dict[str, Any]:
     view = dict(run)
     source_ids = [source_id for source_id in (run.get("sourceIds") or []) if source_id]
-    results = [row for row in (run.get("results") or []) if isinstance(row, dict)]
+    results: list[dict[str, Any]] = []
+    for row in run.get("results") or []:
+        if not isinstance(row, dict):
+            continue
+        result = dict(row)
+        errors, errors_total, errors_truncated = _result_errors(row)
+        result["errors"] = errors
+        result["errorsTotal"] = errors_total
+        result["errorsTruncated"] = errors_truncated
+        result.pop("errors_total", None)
+        result.pop("errors_truncated", None)
+        for key, aliases in {
+            "rowsTotal": ("rowsTotal", "rows_total"),
+            "durationMs": ("durationMs", "duration_ms"),
+        }.items():
+            value = next(
+                (
+                    normalised
+                    for alias in aliases
+                    if (normalised := _non_negative_int(row.get(alias))) is not None
+                ),
+                None,
+            )
+            for alias in aliases:
+                if alias != key:
+                    result.pop(alias, None)
+            if value is None:
+                result.pop(key, None)
+            else:
+                result[key] = value
+        results.append(result)
+    view["results"] = results
     total = int(run.get("totalSources") or len(source_ids))
     completed = int(run.get("completedSources") or len(results))
     failed = run.get("failedSources")
@@ -1074,17 +1265,24 @@ def expand_run_selection(
 
 def _run_result_summary(result: dict[str, Any]) -> dict[str, Any]:
     source_id = str(result.get("source_id") or result.get("sourceId") or "")
-    return {
+    errors, errors_total, errors_truncated = _result_errors(result)
+    summary = {
         "sourceId": source_id,
         "label": source_label(source_id) if source_id in SOURCE_BY_ID else source_id,
         "state": result.get("state") or ("ok" if result.get("ok") else "error"),
         "fetchedAt": result.get("fetched_at") or result.get("fetchedAt"),
         "detail": result.get("detail") or result.get("error"),
-        "errors": result.get("errors") if isinstance(result.get("errors"), list) else [],
+        "errors": errors,
+        "errorsTotal": errors_total,
+        "errorsTruncated": errors_truncated,
         "servingCachedDataset": bool(
             result.get("serving_cached_dataset") or result.get("servingCachedDataset")
         ),
     }
+    rows_total = _result_rows_total(result)
+    if rows_total is not None:
+        summary["rowsTotal"] = rows_total
+    return summary
 
 
 async def _run_pipeline_source(source_id: str) -> dict[str, Any]:
@@ -1109,21 +1307,48 @@ async def _run_pipeline_source(source_id: str) -> dict[str, Any]:
     upstream_state = str(
         result.get("state") or ("ok" if result.get("ok", True) else "error")
     )
-    errors = result.get("errors")
+    upstream_errors: list[Any] = []
+    for key in ("errors", "quality_errors"):
+        value = result.get(key)
+        if isinstance(value, list):
+            upstream_errors.extend(value)
+    errors, errors_total, errors_truncated = _normalise_run_errors_with_metadata(
+        upstream_errors
+    )
     detail = result.get("error") or result.get("detail")
-    if not detail and isinstance(errors, list) and errors:
-        detail = "; ".join(str(error) for error in errors[:5])
-    return {
+    if not detail and errors:
+        detail = "; ".join(errors[:5])
+    pipeline_result = {
         "source_id": source_id,
         "state": upstream_state,
         "detail": detail,
-        "errors": errors if isinstance(errors, list) else [],
+        "errors": errors,
+        "errors_total": errors_total,
+        "errors_truncated": errors_truncated,
         "serving_cached_dataset": bool(
             result.get("serving_cached_dataset")
             or result.get("servingCachedDataset")
         ),
         "fetched_at": result.get("fetched_at") or _iso(),
     }
+    rows_total = _result_rows_total(result)
+    if rows_total is None:
+        pipeline_row_fields = {
+            "hsreplay_archetypes": ("archetypes_ok",),
+            "hsreplay_battlegrounds_hero_details": ("heroes",),
+            "hsreplay_battlegrounds_minions": ("minions_ok", "minions_total"),
+        }
+        rows_total = next(
+            (
+                value
+                for field in pipeline_row_fields.get(source_id, ())
+                if (value := _non_negative_int(result.get(field))) is not None
+            ),
+            None,
+        )
+    if rows_total is not None:
+        pipeline_result["rows_total"] = rows_total
+    return pipeline_result
 
 
 async def execute_parser_run(source_ids: list[str]) -> list[dict[str, Any]]:
@@ -1171,6 +1396,16 @@ async def execute_parser_run(source_ids: list[str]) -> list[dict[str, Any]]:
             ]
             base["detail"] = "; ".join(details) or None
             base["database_state"] = database_result.get("state")
+            errors, errors_total, errors_truncated = _merge_result_errors(
+                base, database_result
+            )
+            base["errors"] = errors
+            base["errors_total"] = errors_total
+            base["errors_truncated"] = errors_truncated
+            if _result_rows_total(base) is None:
+                database_rows_total = _result_rows_total(database_result)
+                if database_rows_total is not None:
+                    base["rows_total"] = database_rows_total
     return results
 
 
@@ -1237,6 +1472,7 @@ class ParserRunWorker:
         for source_id in run.get("sourceIds") or []:
             if source_id in completed:
                 continue
+            source_started_ms = _monotonic_ms()
             try:
                 raw_results = asyncio.run(self.executor([source_id]))
                 raw_result = next(
@@ -1253,14 +1489,19 @@ class ParserRunWorker:
                 summary = _run_result_summary(raw_result)
                 summary["sourceId"] = source_id
             except Exception as exc:
+                detail = f"{type(exc).__name__}: {str(exc)[:900]}"
                 summary = {
                     "sourceId": source_id,
                     "label": source_label(source_id),
                     "state": "error",
                     "fetchedAt": None,
-                    "detail": f"{type(exc).__name__}: {str(exc)[:900]}",
+                    "detail": detail,
+                    "errors": [detail],
                     "servingCachedDataset": False,
                 }
+            summary["durationMs"] = max(
+                0, int(round(_monotonic_ms() - source_started_ms))
+            )
             self.store.record_run_result(run_id, summary)
 
         persisted = self.store.get_run(run_id) or _run_public_view(run)

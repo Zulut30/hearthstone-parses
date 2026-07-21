@@ -12,6 +12,7 @@ from app.parser_control import (
     ParserRunWorker,
     RevisionConflict,
     enabled_section_ids,
+    execute_parser_run,
     effective_publication_mode,
     filter_scheduled_source_ids,
     _run_pipeline_source,
@@ -268,6 +269,34 @@ class ParserControlStoreTest(unittest.TestCase):
                 {"heartharena_tierlist", "hsreplay_arena_cards_advanced"},
             )
 
+    def test_worker_records_duration_and_errors_when_executor_raises(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ParserControlStore(Path(directory))
+            store.enqueue_run(
+                source_ids=["heartharena_tierlist"],
+                requested_by="admin:7",
+                reason="Проверка ошибки",
+            )
+
+            async def executor(_source_ids: list[str]) -> list[dict[str, object]]:
+                raise RuntimeError("origin exploded")
+
+            worker = ParserRunWorker(store, executor=executor)
+            with patch(
+                "app.parser_control._monotonic_ms", side_effect=[2_000.0, 2_075.2]
+            ):
+                self.assertTrue(worker.process_next())
+
+            finished = store.list_runs()["runs"][0]
+            result = finished["results"][0]
+            self.assertEqual(finished["status"], "failed")
+            self.assertEqual(result["durationMs"], 75)
+            self.assertEqual(result["errors"], ["RuntimeError: origin exploded"])
+            self.assertEqual(result["errorsTotal"], 1)
+            self.assertFalse(result["errorsTruncated"])
+            self.assertEqual(result["detail"], "RuntimeError: origin exploded")
+            self.assertNotIn("rowsTotal", result)
+
     def test_terminal_run_counts_missing_results_as_failed(self) -> None:
         with TemporaryDirectory() as directory:
             store = ParserControlStore(Path(directory))
@@ -365,6 +394,114 @@ class ParserControlStoreTest(unittest.TestCase):
 
 
 class ParserPipelineStateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_bg_minion_aggregate_preserves_database_diagnostics(self) -> None:
+        source_id = "hsreplay_battlegrounds_minions"
+        base_result = {
+            "source_id": source_id,
+            "state": "ok",
+            "detail": "source dataset updated",
+            "errors": ["source warning"],
+        }
+        database_result = {
+            "source_id": source_id,
+            "state": "partial",
+            "detail": "database rows incomplete",
+            "errors": ["database warning"],
+            "errors_total": 3,
+            "errors_truncated": True,
+            "rows_total": 173,
+        }
+        with patch(
+            "app.fetcher.refresh_sources",
+            new=AsyncMock(return_value=[base_result]),
+        ), patch(
+            "app.parser_control._run_pipeline_source",
+            new=AsyncMock(return_value=database_result),
+        ):
+            results = await execute_parser_run([source_id])
+
+        self.assertEqual(len(results), 1)
+        result = results[0]
+        self.assertEqual(result["state"], "partial")
+        self.assertEqual(
+            result["detail"], "source dataset updated; database rows incomplete"
+        )
+        self.assertEqual(result["errors"], ["source warning", "database warning"])
+        self.assertEqual(result["errors_total"], 4)
+        self.assertTrue(result["errors_truncated"])
+        self.assertEqual(result["rows_total"], 173)
+
+    async def test_bg_minion_aggregate_keeps_scrape_rows_total(self) -> None:
+        source_id = "hsreplay_battlegrounds_minions"
+        base_result = {
+            "source_id": source_id,
+            "state": "ok",
+            "rows_total": 180,
+        }
+        database_result = {
+            "source_id": source_id,
+            "state": "ok",
+            "rows_total": 173,
+        }
+        with patch(
+            "app.fetcher.refresh_sources",
+            new=AsyncMock(return_value=[base_result]),
+        ), patch(
+            "app.parser_control._run_pipeline_source",
+            new=AsyncMock(return_value=database_result),
+        ):
+            results = await execute_parser_run([source_id])
+
+        self.assertEqual(results[0]["rows_total"], 180)
+
+    async def test_pipeline_reports_processed_rows_and_normalizes_structured_errors(self) -> None:
+        upstream = {
+            "ok": False,
+            "state": "partial",
+            "heroes": 91,
+            "errors": [{"dbfId": 42, "error": "origin timeout"}],
+            "serving_cached_dataset": True,
+        }
+        with patch(
+            "app.hsreplay_bg_hero_details.refresh_bg_hero_details",
+            new=AsyncMock(return_value=upstream),
+        ):
+            result = await _run_pipeline_source(
+                "hsreplay_battlegrounds_hero_details"
+            )
+
+        self.assertEqual(result["rows_total"], 91)
+        self.assertEqual(result["errors"], ["dbfId=42: origin timeout"])
+        self.assertEqual(result["errors_total"], 1)
+        self.assertFalse(result["errors_truncated"])
+        self.assertEqual(result["detail"], "dbfId=42: origin timeout")
+
+    async def test_bg_minion_pipeline_maps_quality_result_contract(self) -> None:
+        upstream = {
+            "ok": False,
+            "state": "partial",
+            "minions_total": 180,
+            "minions_ok": 173,
+            "quality_errors": [
+                "BG minion rows stored incompletely (173/180)",
+                "BG minion stats fill too low (120/180; 66.7%)",
+            ],
+        }
+        with patch(
+            "app.hsreplay_bg_minions_db.refresh_bg_minion_database_sync",
+            return_value=upstream,
+        ):
+            result = await _run_pipeline_source(
+                "hsreplay_battlegrounds_minions"
+            )
+
+        self.assertEqual(result["state"], "partial")
+        self.assertEqual(result["rows_total"], 173)
+        self.assertEqual(result["errors"], upstream["quality_errors"])
+        self.assertEqual(result["errors_total"], 2)
+        self.assertFalse(result["errors_truncated"])
+        self.assertIn("stored incompletely", result["detail"])
+
     async def test_pipeline_preserves_partial_state_errors_and_cached_flag(self) -> None:
         upstream = {
             "ok": True,

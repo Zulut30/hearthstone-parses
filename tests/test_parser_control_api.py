@@ -14,6 +14,112 @@ from app.parser_control import ParserControlStore, ParserRunWorker
 
 
 class ParserControlApiTest(unittest.TestCase):
+    def test_parser_runs_exposes_normalized_source_result_contract(self) -> None:
+        class SecretError:
+            def __repr__(self) -> str:
+                return "SECRET_TOKEN_MUST_NOT_LEAK"
+
+        with TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"HS_API_DATA_DIR": directory, "HS_API_KEY": "secret"},
+            clear=False,
+        ):
+            store = ParserControlStore(Path(directory))
+            store.enqueue_run(
+                source_ids=["heartharena_tierlist"],
+                requested_by="admin:7",
+                reason="Проверка контракта",
+            )
+
+            async def executor(_source_ids: list[str]) -> list[dict[str, object]]:
+                return [
+                    {
+                        "source_id": "heartharena_tierlist",
+                        "state": "partial",
+                        "fetched_at": "2026-07-21T12:00:00+00:00",
+                        "detail": "Один источник недоступен",
+                        "errors": [
+                            {
+                                "archetype_id": 17,
+                                "access_token": "SECRET_DICT_TOKEN_MUST_NOT_LEAK",
+                                "error": "origin timeout",
+                            },
+                            "  publisher returned stale data  ",
+                            {"access_token": "SECRET_ONLY_TOKEN_MUST_NOT_LEAK"},
+                            SecretError(),
+                            "",
+                            None,
+                        ],
+                        "rows_total": 137,
+                        "serving_cached_dataset": True,
+                    }
+                ]
+
+            worker = ParserRunWorker(store, executor=executor)
+            with patch(
+                "app.parser_control._monotonic_ms", side_effect=[1_000.0, 1_250.4]
+            ):
+                self.assertTrue(worker.process_next())
+
+            with patch("app.parser_control._STORE", store), patch(
+                "app.parser_control._RUN_WORKER"
+            ), TestClient(app) as client:
+                response = client.get(
+                    "/admin/parser-runs", headers={"X-API-Key": "secret"}
+                )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()["runs"][0]["results"][0]
+            self.assertEqual(
+                result,
+                {
+                    "sourceId": "heartharena_tierlist",
+                    "label": "HearthArena · тир-лист карт",
+                    "state": "partial",
+                    "fetchedAt": "2026-07-21T12:00:00+00:00",
+                    "detail": "Один источник недоступен",
+                    "errors": [
+                        "archetype_id=17: origin timeout",
+                        "publisher returned stale data",
+                        "Структурированная ошибка парсера",
+                        "Неизвестная ошибка парсера",
+                    ],
+                    "errorsTotal": 4,
+                    "errorsTruncated": False,
+                    "servingCachedDataset": True,
+                    "rowsTotal": 137,
+                    "durationMs": 250,
+                },
+            )
+            self.assertNotIn("SECRET_TOKEN_MUST_NOT_LEAK", response.text)
+            self.assertNotIn("SECRET_DICT_TOKEN_MUST_NOT_LEAK", response.text)
+            self.assertNotIn("SECRET_ONLY_TOKEN_MUST_NOT_LEAK", response.text)
+
+    def test_parser_runs_limits_public_errors_and_reports_truncation(self) -> None:
+        with TemporaryDirectory() as directory:
+            store = ParserControlStore(Path(directory))
+            run, _deduplicated = store.enqueue_run(
+                source_ids=["heartharena_tierlist"],
+                requested_by="admin:7",
+                reason="Проверка ограничения ошибок",
+            )
+            store.record_run_result(
+                run["id"],
+                {
+                    "sourceId": "heartharena_tierlist",
+                    "state": "partial",
+                    "errors": [f"error-{index:03d}" for index in range(75)],
+                },
+            )
+
+            result = store.get_run(run["id"])["results"][0]
+
+            self.assertEqual(len(result["errors"]), 50)
+            self.assertEqual(result["errors"][0], "error-000")
+            self.assertEqual(result["errors"][-1], "error-049")
+            self.assertEqual(result["errorsTotal"], 75)
+            self.assertTrue(result["errorsTruncated"])
+
     def test_control_plane_requires_admin_key_and_rejects_stale_revision(self) -> None:
         with TemporaryDirectory() as directory, patch.dict(
             os.environ,
