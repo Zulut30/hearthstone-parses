@@ -1008,12 +1008,41 @@ def latest_run() -> dict[str, Any] | None:
 
 def export_latest_archetypes_json(path: Path | None = None) -> Path:
     path = path or (Path(data_dir()) / "datasets" / "hsreplay_archetypes_db_latest.json")
+    generated_at = _now()
+    latest = latest_run()
+    page = list_archetype_snapshots(limit=500)
     payload = {
         "type": "hsreplay_archetype_database",
-        "generated_at": _now(),
-        "latest_run": latest_run(),
-        "archetypes": list_archetype_snapshots(limit=500)["archetypes"],
+        "generated_at": generated_at,
+        "latest_run": latest,
+        "archetypes": page["archetypes"],
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    structured = {
+        "type": payload["type"],
+        "latest_run": latest,
+        **page,
+    }
+
+    # Pipeline sources participate in the same canonical dataset contract as
+    # scraper-backed sources.  Publishing only the legacy ``*_db_latest``
+    # export left ``stale_monitor`` reading an older
+    # ``datasets/hsreplay_archetypes.json`` forever, even after a successful
+    # SQLite refresh.  Keep the compatibility export, but atomically advance
+    # the registered source snapshot as part of the same publication step.
+    from .storage import save_dataset, write_json
+
+    save_dataset(
+        SOURCE,
+        {
+            "source_id": SOURCE,
+            "site": "hsreplay",
+            "category": "meta",
+            "url": "https://hsreplay.net/meta/",
+            "final_url": "https://hsreplay.net/meta/",
+            "fetched_at": generated_at,
+            "backend": "hsreplay_api",
+            "data": {"structured": structured},
+        },
+    )
+    write_json(path, payload)
     return path
