@@ -23,6 +23,7 @@ from .routers.bg import router as bg_v1_router
 from .routers.arena import router as arena_v1_router
 from .routers.system import router as system_v1_router
 from .public_cache import PublicCacheMiddleware
+from .http_observability import RequestObservabilityMiddleware, generic_server_error
 
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -46,7 +47,8 @@ app.add_middleware(
     allow_origins=cors_allowed_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
-    allow_headers=["Accept", "Content-Type", "X-API-Key"],
+    allow_headers=["Accept", "Content-Type", "X-API-Key", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
 )
 app.add_middleware(PublicCacheMiddleware)
 app.include_router(constructed_v1_router)
@@ -76,6 +78,12 @@ async def no_cache_ui(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
+
+
+# Keep request correlation outside CORS, cache, and UI cache-control middleware
+# so every HTTP response, including preflights and handled errors, gets an ID.
+app.add_middleware(RequestObservabilityMiddleware)
+app.add_exception_handler(Exception, generic_server_error)
 
 
 if WEB_DIR.is_dir():

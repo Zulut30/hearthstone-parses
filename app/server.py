@@ -6,7 +6,13 @@ from .config import bind_host, bind_port
 
 
 def main() -> None:
-    uvicorn.run("app.main:app", host=bind_host(), port=bind_port(), proxy_headers=True)
+    uvicorn.run(
+        "app.main:app",
+        host=bind_host(),
+        port=bind_port(),
+        proxy_headers=True,
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":
