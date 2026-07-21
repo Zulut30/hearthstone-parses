@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, time as datetime_time
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import threading
@@ -31,6 +32,16 @@ MAX_PENDING_RUNS = 20
 MAX_RUN_SOURCES = len(SOURCE_BY_ID)
 ACTIVE_RUN_STATUSES = {"queued", "running"}
 RUN_STATUSES = ACTIVE_RUN_STATUSES | {"succeeded", "partial", "failed"}
+_logger = logging.getLogger(__name__)
+
+
+AUDIT_WRITE_WARNING = {
+    "code": "AUDIT_WRITE_FAILED",
+    "message": (
+        "Настройка сохранена, но запись в журнал аудита не удалась. "
+        "Проверьте журнал сервиса."
+    ),
+}
 
 
 class ParserControlError(RuntimeError):
@@ -94,6 +105,50 @@ def _log_storage_fallback(
         # A control-file failure must never become a public-site outage merely
         # because the secondary operational logger is also unavailable.
         return
+
+
+def _record_control_audit(
+    action: str,
+    *,
+    actor: str,
+    revision: int,
+    details: dict[str, Any],
+) -> dict[str, str] | None:
+    """Persist a mutation audit without invalidating an already committed write."""
+
+    try:
+        from .refresh_log import log_action
+
+        log_action(
+            action,
+            extra={
+                "actor": actor,
+                "revision": revision,
+                **details,
+            },
+        )
+    except Exception:
+        # The policy file is already durable at this point. Returning an error
+        # would invite the caller to retry a mutation that actually succeeded.
+        _logger.exception(
+            "Parser control audit write failed after committed mutation "
+            "action=%s revision=%s actor=%s",
+            action,
+            revision,
+            actor,
+        )
+        return {**AUDIT_WRITE_WARNING, "auditAction": action}
+    return None
+
+
+def _with_warning(
+    payload: dict[str, Any], warning: dict[str, str] | None
+) -> dict[str, Any]:
+    if warning is None:
+        return payload
+    existing = payload.get("warnings")
+    warnings = list(existing) if isinstance(existing, list) else []
+    return {**payload, "warnings": [*warnings, warning]}
 
 
 def _default_state() -> dict[str, Any]:
@@ -356,12 +411,22 @@ class ParserControlStore:
 
     def snapshot(self, *, at: datetime | None = None) -> dict[str, Any]:
         state, persisted = self.read_state()
-        policy_view = _policy_view(state, persisted=persisted, at=at)
+        moment = at or _now()
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        moment = moment.astimezone(UTC)
+        policy_view = _policy_view(state, persisted=persisted, at=moment)
+        from .parser_control_schedule import build_schedule_inventory
+
+        schedule_inventory = build_schedule_inventory(at=moment)
         sections: list[dict[str, Any]] = []
         for section in SECTIONS:
+            section_enabled = state["sections"].get(section.id, True)
+            section_schedule = schedule_inventory["sections"][section.id]
             sources: list[dict[str, Any]] = []
             for source_id in section.source_ids:
                 source = SOURCE_BY_ID[source_id]
+                source_schedule = schedule_inventory["sources"][source_id]
                 status = self._read_source_json("statuses", source_id) or {}
                 dataset = self._read_source_json("datasets", source_id) or {}
                 quality = status.get("quality") or {}
@@ -472,8 +537,12 @@ class ParserControlStore:
                         "candidateRowsTotal": candidate_rows_total,
                         "supportsEarly": source_id in EARLY_SOURCE_IDS,
                         "canRunManually": True,
-                        "schedule": None,
-                        "nextRunAt": None,
+                        "enabled": section_enabled,
+                        "scheduleIds": source_schedule["scheduleIds"],
+                        "schedule": source_schedule["schedule"],
+                        "nextRunAt": (
+                            source_schedule["nextRunAt"] if section_enabled else None
+                        ),
                     }
                 )
             sections.append(
@@ -482,9 +551,14 @@ class ParserControlStore:
                     "label": section.label,
                     "group": section.group,
                     "description": section.description,
-                    "enabled": state["sections"].get(section.id, True),
+                    "enabled": section_enabled,
                     "supportsEarly": section.supports_early,
                     "sourceCount": len(sources),
+                    "scheduleIds": section_schedule["scheduleIds"],
+                    "schedule": section_schedule["schedule"],
+                    "nextRunAt": (
+                        section_schedule["nextRunAt"] if section_enabled else None
+                    ),
                     "sources": sources,
                 }
             )
@@ -498,9 +572,11 @@ class ParserControlStore:
             (run for run in runs if run.get("status") in ACTIVE_RUN_STATUSES), None
         )
         return {
+            "generatedAt": _iso(moment),
             "revision": state["revision"],
             "policy": policy_view,
             "policyConfigured": bool(state.get("policyConfigured")),
+            "scheduleInventory": schedule_inventory,
             "sections": sections,
             "activeRun": active_run,
             "recentRuns": runs[:10],
@@ -531,10 +607,12 @@ class ParserControlStore:
             if until <= _now():
                 raise InvalidControlRequest("earlyUntil must be in the future")
         timestamp = _iso()
+        committed_revision: int
         with self._locked(exclusive=True) as (state, _persisted):
             if state["revision"] != expected_revision:
                 raise RevisionConflict(expected_revision, state["revision"])
             state["revision"] += 1
+            committed_revision = state["revision"]
             state["policyConfigured"] = True
             state["policy"] = {
                 "mode": mode,
@@ -546,7 +624,17 @@ class ParserControlStore:
             state["updatedAt"] = timestamp
             state["updatedBy"] = actor
             self._write_locked(state)
-        return self.snapshot()
+        warning = _record_control_audit(
+            "parser_control.policy.update",
+            actor=actor,
+            revision=committed_revision,
+            details={
+                "mode": mode,
+                "earlyUntil": _iso(until) if until else None,
+                "reason": clean_reason,
+            },
+        )
+        return _with_warning(self.snapshot(), warning)
 
     def update_sections(
         self,
@@ -564,15 +652,23 @@ class ParserControlStore:
             raise InvalidControlRequest("Section enabled values must be boolean")
         actor = str(updated_by or "admin-api").strip()[:120] or "admin-api"
         timestamp = _iso()
+        committed_revision: int
         with self._locked(exclusive=True) as (state, _persisted):
             if state["revision"] != expected_revision:
                 raise RevisionConflict(expected_revision, state["revision"])
             state["revision"] += 1
+            committed_revision = state["revision"]
             state["sections"].update(changes)
             state["updatedAt"] = timestamp
             state["updatedBy"] = actor
             self._write_locked(state)
-        return self.snapshot()
+        warning = _record_control_audit(
+            "parser_control.sections.update",
+            actor=actor,
+            revision=committed_revision,
+            details={"sections": dict(sorted(changes.items()))},
+        )
+        return _with_warning(self.snapshot(), warning)
 
     def enqueue_run(
         self,

@@ -29,6 +29,7 @@ class ParserControlApiTest(unittest.TestCase):
             payload = initial.json()
             self.assertEqual(payload["revision"], 1)
             self.assertIn("sections", payload)
+            self.assertEqual(payload["scheduleInventory"]["schemaVersion"], 1)
 
             changed = client.patch(
                 "/admin/parser-control/policy",
@@ -82,6 +83,66 @@ class ParserControlApiTest(unittest.TestCase):
                     for call in log_action.call_args_list
                 )
             )
+
+    def test_saved_control_mutations_return_warning_when_audit_write_fails(self) -> None:
+        with TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"HS_API_DATA_DIR": directory, "HS_API_KEY": "secret"},
+            clear=False,
+        ), TestClient(app) as client:
+            headers = {"X-API-Key": "secret"}
+            with patch(
+                "app.refresh_log.log_action",
+                side_effect=OSError("audit volume is read-only"),
+            ), self.assertLogs("app.parser_control", level="ERROR") as policy_logs:
+                policy = client.patch(
+                    "/admin/parser-control/policy",
+                    headers=headers,
+                    json={
+                        "expectedRevision": 1,
+                        "mode": "stable",
+                        "reason": "Достаточная выборка",
+                        "updatedBy": "admin:7",
+                    },
+                )
+
+            self.assertEqual(policy.status_code, 200, policy.text)
+            self.assertEqual(policy.json()["revision"], 2)
+            self.assertEqual(policy.json()["warnings"][0]["code"], "AUDIT_WRITE_FAILED")
+            self.assertIn("parser_control.policy.update", " ".join(policy_logs.output))
+
+            with patch(
+                "app.refresh_log.log_action",
+                side_effect=OSError("audit volume is read-only"),
+            ), self.assertLogs("app.parser_control", level="ERROR") as section_logs:
+                sections = client.patch(
+                    "/admin/parser-control/sections",
+                    headers=headers,
+                    json={
+                        "expectedRevision": 2,
+                        "sections": [
+                            {"id": "arena-tier-list", "enabled": False}
+                        ],
+                        "updatedBy": "admin:7",
+                    },
+                )
+
+            self.assertEqual(sections.status_code, 200, sections.text)
+            self.assertEqual(sections.json()["revision"], 3)
+            self.assertEqual(
+                sections.json()["warnings"][0]["code"], "AUDIT_WRITE_FAILED"
+            )
+            self.assertIn("parser_control.sections.update", " ".join(section_logs.output))
+
+            persisted = client.get("/admin/parser-control", headers=headers)
+            self.assertEqual(persisted.status_code, 200, persisted.text)
+            self.assertEqual(persisted.json()["revision"], 3)
+            arena = next(
+                row
+                for row in persisted.json()["sections"]
+                if row["id"] == "arena-tier-list"
+            )
+            self.assertFalse(arena["enabled"])
 
 
 if __name__ == "__main__":
