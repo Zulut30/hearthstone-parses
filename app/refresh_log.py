@@ -332,15 +332,20 @@ def activate_source_trace(
     tok_trace = _current_trace_id.set(trace_id)
     tok_source = _current_source_id.set(source_id)
     tok_step = _step_counter.set(0)
-    log_action(
-        "source.begin",
-        level="info",
-        source_id=source_id,
-        trace_id=trace_id,
-        tier=tier,
-        url=url,
-        step=1,
-    )
+    try:
+        log_action(
+            "source.begin",
+            level="info",
+            source_id=source_id,
+            trace_id=trace_id,
+            tier=tier,
+            url=url,
+            step=1,
+        )
+    except Exception as exc:
+        # Context tokens have already been installed. Source-begin telemetry is
+        # best effort so callers can always receive and reset those tokens.
+        _logger.debug("Source trace begin telemetry failed for %s: %s", source_id, exc)
     return trace_id, tok_trace, tok_source, tok_step
 
 

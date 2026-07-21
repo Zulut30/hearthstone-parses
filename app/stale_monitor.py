@@ -34,13 +34,22 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
 
     for source in SOURCES:
         limit_h = getattr(source, "stale_hours", None) or default_limit_h
-        st = load_status(source.id) or {}
+        corrupt_parts: list[str] = []
+        try:
+            st = load_status(source.id) or {}
+        except (OSError, UnicodeError, ValueError):
+            st = {}
+            corrupt_parts.append("status")
         state = st.get("state") or SourceState.NEVER_FETCHED
         if state == SourceState.OK and not include_ok:
             continue
 
         fetched_at = st.get("fetched_at")
-        ds = load_dataset(source.id)
+        try:
+            ds = load_dataset(source.id)
+        except (OSError, UnicodeError, ValueError):
+            ds = None
+            corrupt_parts.append("dataset")
         ds_fetched = ds.get("fetched_at") if ds else None
         age_status = _age_hours(fetched_at)
         age_dataset = _age_hours(ds_fetched)
@@ -48,6 +57,19 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
         if age_dataset is not None and (age_h is None or age_dataset > age_h):
             age_h = age_dataset
             fetched_at = ds_fetched
+
+        if corrupt_parts:
+            stale.append(
+                {
+                    "source_id": source.id,
+                    "state": state,
+                    "dataset_age_hours": round(age_h, 1) if age_h is not None else None,
+                    "fetched_at": fetched_at,
+                    "checked_at": now_label,
+                    "reason": f"{'_and_'.join(corrupt_parts)}_corrupt",
+                }
+            )
+            continue
 
         if age_h is None or age_h < limit_h:
             continue
@@ -88,7 +110,20 @@ def find_stale_sources(*, include_ok: bool = True) -> list[dict[str, Any]]:
             sid = path.stem
             if sid in configured:
                 continue
-            st = load_status(sid) or {}
+            try:
+                st = load_status(sid) or {}
+            except (OSError, UnicodeError, ValueError):
+                stale.append(
+                    {
+                        "source_id": sid,
+                        "state": "orphan",
+                        "dataset_age_hours": None,
+                        "fetched_at": None,
+                        "checked_at": now_label,
+                        "reason": "orphan_status_corrupt",
+                    }
+                )
+                continue
             age_h = _age_hours(st.get("fetched_at"))
             if age_h is not None and age_h >= default_limit_h:
                 stale.append(

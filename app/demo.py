@@ -69,8 +69,36 @@ def _active_trinkets_view(view: dict[str, Any]) -> dict[str, Any]:
 
 def build_demo_view(source_id: str) -> dict[str, Any]:
     source = SOURCE_BY_ID[source_id]
-    status = load_status(source_id)
-    dataset = load_dataset(source_id)
+    status_fallback_reason: str | None = None
+    try:
+        status = load_status(source_id)
+    except (OSError, UnicodeError, ValueError):
+        status = None
+        status_fallback_reason = "status_corrupt"
+    if status is None and status_fallback_reason is None:
+        status_fallback_reason = "status_missing"
+    publication_read = None
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        PublicationUnavailable,
+        STANDARD_CARDS_SOURCE_ID,
+    )
+
+    if source_id == STANDARD_CARDS_SOURCE_ID:
+        try:
+            publication_read = DatasetPublicationStore().read_published(source_id)
+            dataset = publication_read.dataset
+        except PublicationUnavailable as exc:
+            return {
+                "source_id": source_id,
+                "ok": False,
+                "unavailable": True,
+                "status": status,
+                "reason": exc.reason,
+                "message": "Опубликованная статистика карт временно недоступна",
+            }
+    else:
+        dataset = load_dataset(source_id)
     if dataset is None:
         return {
             "source_id": source_id,
@@ -79,19 +107,20 @@ def build_demo_view(source_id: str) -> dict[str, Any]:
             "message": "Нет кэшированного датасета",
         }
 
-    # Demo views are public consumers too (the arena frontend uses this route
-    # for HSReplay). Respect the same stable/early publication resolver as the
-    # raw dataset endpoint so a stable switch cannot leak provisional rows.
-    from .parser_control import resolve_public_dataset
+    if source_id != STANDARD_CARDS_SOURCE_ID:
+        # Sources explicitly registered for early publication still use the
+        # stable/early resolver. Standard cards reject provisional candidates
+        # before publication, so its LKG is already the exact public document.
+        from .parser_control import resolve_public_dataset
 
-    dataset = resolve_public_dataset(source_id, dataset)
-    if dataset is None:
-        return {
-            "source_id": source_id,
-            "ok": False,
-            "status": status,
-            "message": "Стабильный датасет ещё не доступен",
-        }
+        dataset = resolve_public_dataset(source_id, dataset)
+        if dataset is None:
+            return {
+                "source_id": source_id,
+                "ok": False,
+                "status": status,
+                "message": "Стабильный датасет ещё не доступен",
+            }
 
     data = dataset.get("data") or {}
     structured = _structured_from_data(source, data)
@@ -106,7 +135,7 @@ def build_demo_view(source_id: str) -> dict[str, Any]:
         view = _active_trinkets_view(view)
     view["type"] = view.get("type") or view.get("kind")
 
-    return {
+    result = {
         "source_id": source_id,
         "ok": True,
         "site": source.site,
@@ -117,6 +146,23 @@ def build_demo_view(source_id: str) -> dict[str, Any]:
         "status": status,
         "view": view,
     }
+    if publication_read is not None:
+        from .parser_control import dataset_publication_mode
+
+        mode = dataset_publication_mode(dataset)
+        result["publication"] = {
+            "mode": mode,
+            "channel": mode,
+            "storage_channel": "published_lkg",
+            "dataset_version": publication_read.dataset_version,
+            "published_at": publication_read.published_at,
+            "stale": publication_read.stale or status_fallback_reason is not None,
+            "fallback_reason": (
+                publication_read.fallback_reason or status_fallback_reason
+            ),
+            "age_hours": publication_read.age_hours,
+        }
+    return result
 
 
 def build_overview() -> dict[str, Any]:

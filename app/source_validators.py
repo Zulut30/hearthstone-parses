@@ -827,7 +827,49 @@ def _validate_heartharena_tierlist(
     return report
 
 
-def _validate_card_stats(_source_id: str, structured: dict[str, Any]) -> ValidationReport:
+STANDARD_CARD_PERCENT_FIELDS = (
+    "deck_winrate",
+    "deck_popularity",
+    "winrate_when_played",
+    "winrate_when_drawn",
+    "keep_percentage",
+    "opening_hand_winrate",
+)
+
+
+def validate_standard_card_aliases(data: dict[str, Any]) -> ValidationReport:
+    """Require the two public Standard-card aliases to be the same snapshot."""
+
+    report = ValidationReport()
+    structured = data.get("structured")
+    extracted = data.get("hsreplay_extracted")
+    report.metrics.update(
+        {
+            "structured_present": isinstance(structured, dict),
+            "hsreplay_extracted_present": isinstance(extracted, dict),
+            "aliases_equal": (
+                isinstance(structured, dict)
+                and isinstance(extracted, dict)
+                and structured == extracted
+            ),
+        }
+    )
+    if not isinstance(structured, dict) or not isinstance(extracted, dict):
+        report.add_issue(
+            "card_stats.aliases_missing",
+            "standard card aliases structured/hsreplay_extracted are both required",
+            field="structured,hsreplay_extracted",
+        )
+    elif structured != extracted:
+        report.add_issue(
+            "card_stats.aliases_disagree",
+            "standard card aliases structured/hsreplay_extracted disagree",
+            field="structured,hsreplay_extracted",
+        )
+    return report
+
+
+def _validate_card_stats(source_id: str, structured: dict[str, Any]) -> ValidationReport:
     report = ValidationReport()
     cards = [row for row in (structured.get("cards") or []) if isinstance(row, dict)]
     with_metrics = sum(
@@ -855,6 +897,116 @@ def _validate_card_stats(_source_id: str, structured: dict[str, Any]) -> Validat
             f"card stats missing metrics ({with_metrics}/{len(cards)}; minimum 20)",
             field="deck_winrate,deck_popularity",
         )
+    if source_id == "hsreplay_cards_legend_1d":
+        # HSReplay Standard statistics currently contain roughly one thousand
+        # rows.  A much larger payload is not an early-meta expansion: it is a
+        # format/filter failure (usually Wild/all-cards data under the Standard
+        # source id).  Keep the ceiling configurable for future rotations, but
+        # enforce it during every semantic validation so an orphan immutable
+        # snapshot cannot become the bootstrap regression baseline merely
+        # because its checksum and timestamp are valid.
+        maximum_cards = int(threshold_for(source_id, "cards_max", 1_800))
+        if structured.get("provisional") is True or (
+            structured.get("data_phase") == "post_patch_early"
+        ):
+            report.add_issue(
+                "card_stats.provisional_not_supported",
+                (
+                    "provisional/post-patch-early publication is not supported "
+                    "for Standard card statistics"
+                ),
+                field="provisional,data_phase",
+            )
+        ids = [str(row.get("id") or "").strip() for row in cards]
+        dbf_ids = [str(row.get("dbfId") or "").strip() for row in cards]
+        duplicate_ids = len([value for value in ids if value]) - len(
+            {value for value in ids if value}
+        )
+        duplicate_dbf_ids = len([value for value in dbf_ids if value]) - len(
+            {value for value in dbf_ids if value}
+        )
+        missing_identity = sum(
+            1
+            for card_id, dbf_id in zip(ids, dbf_ids, strict=True)
+            if not card_id and not dbf_id
+        )
+        invalid_percentages: list[dict[str, Any]] = []
+        popularity_cascade = 0
+        for index, row in enumerate(cards):
+            for field_name in STANDARD_CARD_PERCENT_FIELDS:
+                raw_value = row.get(field_name)
+                if raw_value is None or raw_value == "":
+                    continue
+                parsed_value = _parse_arena_percent(raw_value)
+                if parsed_value is None or not 0.0 <= parsed_value <= 100.0:
+                    if len(invalid_percentages) < 20:
+                        invalid_percentages.append(
+                            {
+                                "index": index,
+                                "field": field_name,
+                                "value": str(raw_value)[:80],
+                            }
+                        )
+            popularity = _parse_arena_percent(row.get("deck_popularity"))
+            if popularity is not None and popularity >= 80.0:
+                popularity_cascade += 1
+
+        report.metrics.update(
+            {
+                "maximum_cards": maximum_cards,
+                "duplicate_card_ids": duplicate_ids,
+                "duplicate_dbf_ids": duplicate_dbf_ids,
+                "missing_card_identity": missing_identity,
+                "invalid_percentage_values": len(invalid_percentages),
+                "invalid_percentage_examples": invalid_percentages,
+                "deck_popularity_at_least_80": popularity_cascade,
+            }
+        )
+        if len(cards) > maximum_cards:
+            report.add_issue(
+                "card_stats.too_many_standard_cards",
+                (
+                    "standard card stats contain too many rows "
+                    f"({len(cards)} > {maximum_cards}); probable format/filter leak"
+                ),
+                field="cards",
+            )
+        if duplicate_ids:
+            report.add_issue(
+                "card_stats.duplicate_card_id",
+                f"standard card stats contain duplicate card ids ({duplicate_ids})",
+                field="id",
+            )
+        if duplicate_dbf_ids:
+            report.add_issue(
+                "card_stats.duplicate_dbf_id",
+                f"standard card stats contain duplicate dbfIds ({duplicate_dbf_ids})",
+                field="dbfId",
+            )
+        if missing_identity:
+            report.add_issue(
+                "card_stats.missing_card_identity",
+                f"standard card stats contain rows without id/dbfId ({missing_identity})",
+                field="id,dbfId",
+            )
+        if invalid_percentages:
+            report.add_issue(
+                "card_stats.percent_out_of_range",
+                (
+                    "standard card stats contain invalid percentage values outside "
+                    f"0..100 ({len(invalid_percentages)})"
+                ),
+                field=",".join(STANDARD_CARD_PERCENT_FIELDS),
+            )
+        if popularity_cascade >= 10:
+            report.add_issue(
+                "card_stats.systemic_popularity_cascade",
+                (
+                    "systemic standard-card popularity cascade detected: "
+                    f"{popularity_cascade} cards have deck_popularity >= 80%"
+                ),
+                field="deck_popularity",
+            )
     report.score = round(
         (
             float(not blocked or len(cards) >= 10)

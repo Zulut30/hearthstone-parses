@@ -8,6 +8,7 @@ import os
 import random
 import time
 from collections import Counter
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
@@ -88,10 +89,26 @@ _firecrawl_fallback_attempts = 0
 # Fairness cap: один сбойный источник не должен съедать весь глобальный
 # бюджет fallback-попыток (он же бюджет Firecrawl-кредитов) за refresh.
 _firecrawl_fallback_attempts_by_source: dict[str, int] = {}
+_standard_publication_attempt: ContextVar[Any | None] = ContextVar(
+    "standard_publication_attempt", default=None
+)
 
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _best_effort_log_action(action: str, **kwargs: Any) -> None:
+    """Keep post-commit telemetry from changing a durable fetch outcome."""
+
+    try:
+        log_action(action, **kwargs)
+    except Exception as exc:
+        logger.debug(
+            "Refresh telemetry failed after commit for %s: %s",
+            action,
+            exc,
+        )
 
 
 PROVISIONAL_STATUS_KEYS = (
@@ -288,7 +305,42 @@ def _preserve_cached_ok_status(source: Source, failed_status: dict[str, Any]) ->
     return status
 
 
-def _save_failure_status(source: Source, status: dict[str, Any]) -> dict[str, Any]:
+def _save_failure_status(
+    source: Source,
+    status: dict[str, Any],
+    *,
+    publication_attempt: Any | None = None,
+) -> dict[str, Any]:
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        PublicationUnavailable,
+        STANDARD_CARDS_SOURCE_ID,
+    )
+
+    if source.id == STANDARD_CARDS_SOURCE_ID:
+        attempt = publication_attempt or _standard_publication_attempt.get()
+        try:
+            reconciliation = DatasetPublicationStore().reconcile_current_publication(
+                source.id,
+                candidate_dataset_version=None,
+                expected_dataset_version=None,
+                status=status,
+                attempt_generation=(attempt.generation if attempt else None),
+                attempt_id=(attempt.attempt_id if attempt else None),
+                attempt_started_at=(attempt.started_at if attempt else None),
+            )
+            return reconciliation.status
+        except PublicationUnavailable:
+            # Cold start has no LKG to reconcile; retain the ordinary failure
+            # status until the first successful publication exists. The second
+            # manifest check and status generation CAS share the same lock.
+            return DatasetPublicationStore().record_status_without_publication(
+                source.id,
+                status=status,
+                attempt_generation=(attempt.generation if attempt else None),
+                attempt_id=(attempt.attempt_id if attempt else None),
+                attempt_started_at=(attempt.started_at if attempt else None),
+            )
     preserved = _preserve_cached_ok_status(source, status)
     if preserved is not None:
         return preserved
@@ -1123,31 +1175,39 @@ async def _fetch_hsreplay_api_source(source: Source) -> dict[str, Any] | None:
     return None
 
 
-async def _fetch_source_with_captured_policy(
+async def _fetch_source_with_active_lifecycle(
     client: httpx.AsyncClient | None,
     source: Source,
-    retry_on_auth_failure: bool = True,
+    retry_on_auth_failure: bool,
+    *,
+    started: float,
+    fetched_at: str,
+    publication_attempt: Any | None,
+    previous: dict[str, Any],
+    preferred_backend: str,
+    source_tier: str,
+    trace_id: str,
 ) -> dict[str, Any]:
-    started = time.monotonic()
-    fetched_at = now_iso()
-    previous = load_status(source.id) or {}
-    from .scrapers.preferred_backend import preferred_browser_backend
-
-    preferred_backend = preferred_browser_backend(previous)
-    source_tier = tier_for(source.id).value
-    _trace_id, _tok_trace, _tok_source, _tok_step = activate_source_trace(
-        source.id, tier=source_tier, url=source.fetch_url
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        STANDARD_CARDS_SOURCE_ID,
     )
 
     def _finish(status: dict[str, Any]) -> dict[str, Any]:
-        complete_source_trace(
-            source.id,
-            status,
-            tier=source_tier,
-            started_monotonic=started,
-            trace_id=_trace_id,
-        )
-        deactivate_source_trace((_tok_trace, _tok_source, _tok_step))
+        try:
+            complete_source_trace(
+                source.id,
+                status,
+                tier=source_tier,
+                started_monotonic=started,
+                trace_id=trace_id,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Source completion telemetry failed for %s: %s",
+                source.id,
+                exc,
+            )
         return status
 
     if fetch_require_proxy() and not fetch_proxy_url():
@@ -1184,29 +1244,54 @@ async def _fetch_source_with_captured_policy(
             parsed = await _fetch_hsreplay_api_source(source)
             if parsed is not None:
                 backend = parsed.pop("_backend", "hsreplay_api")
-                gate = validate_candidate_for_publish(source, parsed, backend=backend)
-                ok, reason = gate.ok, gate.reason
                 content_length = parsed.get("counts", {}).get("api_bytes", 0)
+                dataset = {
+                    "source_id": source.id,
+                    "fetched_at": fetched_at,
+                    "data": parsed,
+                    "backend": backend,
+                    "content_length": content_length,
+                    "used_residential_proxy": _source_uses_residential_proxy(source, backend),
+                    "runtime": runtime_version_info(),
+                }
+                publication_decision = None
+                from .dataset_publication_store import (
+                    DatasetPublicationStore,
+                    STANDARD_CARDS_SOURCE_ID,
+                    validate_and_publish_standard_cards_candidate,
+                )
+
+                if source.id == STANDARD_CARDS_SOURCE_ID:
+                    publication_decision = validate_and_publish_standard_cards_candidate(
+                        source,
+                        dataset,
+                        publication_attempt=publication_attempt,
+                    )
+                    ok = publication_decision.accepted
+                    reason = publication_decision.reason
+                    gate_extra = publication_decision.diagnostics
+                else:
+                    gate = validate_candidate_for_publish(source, parsed, backend=backend)
+                    ok, reason = gate.ok, gate.reason
+                    gate_extra = gate.extra
                 qmetrics = quality_metrics(source, parsed)
                 if ok:
-                    log_action(
-                        "api.validate.ok",
-                        source_id=source.id,
-                        backend=backend,
-                        bytes_out=content_length,
-                        extra={"quality_metrics": qmetrics},
-                    )
-                    dataset = {
+                    validation_log = {
                         "source_id": source.id,
-                        "fetched_at": fetched_at,
-                        "data": parsed,
                         "backend": backend,
-                        "content_length": content_length,
-                        "used_residential_proxy": _source_uses_residential_proxy(source, backend),
+                        "bytes_out": content_length,
+                        "extra": {"quality_metrics": qmetrics},
                     }
-                    reg, reg_msg, provisional_metadata = _save_dataset_with_checks(
-                        source, dataset, fetched_at=fetched_at
-                    )
+                    if publication_decision is not None:
+                        _best_effort_log_action("api.validate.ok", **validation_log)
+                    else:
+                        log_action("api.validate.ok", **validation_log)
+                    if publication_decision is not None:
+                        reg, reg_msg, provisional_metadata = False, None, {}
+                    else:
+                        reg, reg_msg, provisional_metadata = _save_dataset_with_checks(
+                            source, dataset, fetched_at=fetched_at
+                        )
                     state = SourceState.PARTIAL if reg else SourceState.OK
                     status = _status_payload(
                         source,
@@ -1223,17 +1308,83 @@ async def _fetch_source_with_captured_policy(
                     _attach_provisional_status(status, provisional_metadata)
                     if reg:
                         status = _save_failure_status(source, status)
+                    elif publication_decision is not None:
+                        try:
+                            reconciliation = DatasetPublicationStore().reconcile_current_publication(
+                                source.id,
+                                candidate_dataset_version=publication_decision.dataset_version,
+                                expected_dataset_version=publication_decision.dataset_version,
+                                status=status,
+                                attempt_generation=(
+                                    publication_attempt.generation
+                                    if publication_attempt
+                                    else None
+                                ),
+                                attempt_id=(
+                                    publication_attempt.attempt_id
+                                    if publication_attempt
+                                    else None
+                                ),
+                                attempt_started_at=(
+                                    publication_attempt.started_at
+                                    if publication_attempt
+                                    else None
+                                ),
+                            )
+                            status = reconciliation.status
+                        except Exception as exc:
+                            sync_error = f"{type(exc).__name__}: {exc}"[:1000]
+                            try:
+                                authoritative_version = DatasetPublicationStore().pointer_dataset_version(
+                                    source.id
+                                )
+                            except Exception:
+                                authoritative_version = publication_decision.dataset_version
+                            status.update(
+                                {
+                                    "state": SourceState.OK,
+                                    "serving_cached_dataset": True,
+                                    "effective_state": EFFECTIVE_OK_CACHED,
+                                    "last_refresh_state": "cache_sync_error",
+                                    "last_refresh_at": fetched_at,
+                                    "last_refresh_error": sync_error,
+                                    "candidate_dataset_version": publication_decision.dataset_version,
+                                    "published_dataset_version": authoritative_version,
+                                    "dataset_version": authoritative_version,
+                                    "cache_synced": False,
+                                    "status_synced": False,
+                                    "warnings": [sync_error],
+                                }
+                            )
+                            try:
+                                log_action(
+                                    "dataset.publication.sync.fail",
+                                    source_id=source.id,
+                                    state=SourceState.OK,
+                                    backend=backend,
+                                    level="error",
+                                    detail=sync_error,
+                                    extra={
+                                        "published_dataset_version": authoritative_version,
+                                        "operation": "fetcher",
+                                    },
+                                )
+                            except Exception:
+                                pass
                     else:
                         save_status(source.id, status)
-                    log_action(
-                        "api.route.ok",
-                        source_id=source.id,
-                        state=state,
-                        backend=backend,
-                        tier=source_tier,
-                        bytes_out=content_length,
-                        extra=provisional_metadata or None,
-                    )
+                    route_log = {
+                        "source_id": source.id,
+                        "state": state,
+                        "backend": backend,
+                        "tier": source_tier,
+                        "bytes_out": content_length,
+                        "extra": provisional_metadata or None,
+                    }
+                    if publication_decision is not None:
+                        _best_effort_log_action("api.route.ok", **route_log)
+                    else:
+                        log_action("api.route.ok", **route_log)
                     if reg and reg_msg:
                         await send_telegram_alert(
                             source.id, "dataset_regression", reg_msg, source.url
@@ -1247,7 +1398,6 @@ async def _fetch_source_with_captured_policy(
                     from .hsreplay_auth import force_relogin_hsreplay, hsreplay_email, hsreplay_password
 
                     if hsreplay_email() and hsreplay_password() and await force_relogin_hsreplay():
-                        deactivate_source_trace((_tok_trace, _tok_source, _tok_step))
                         return await fetch_source(client, source, retry_on_auth_failure=False)
                 if source.id in firecrawl_fallback_source_ids():
                     firecrawl_status = await _try_firecrawl_html(
@@ -1257,9 +1407,15 @@ async def _fetch_source_with_captured_policy(
                     )
                     if firecrawl_status is not None:
                         return _finish(firecrawl_status)
+                rejected_state = (
+                    SourceState.PARTIAL
+                    if publication_decision is not None
+                    and publication_decision.rejection_kind == "regression"
+                    else SourceState.QUALITY_ERROR
+                )
                 status = _status_payload(
                     source,
-                    SourceState.QUALITY_ERROR,
+                    rejected_state,
                     fetched_at=fetched_at,
                     http_status=200,
                     final_url=source.url,
@@ -1269,19 +1425,69 @@ async def _fetch_source_with_captured_policy(
                     used_residential_proxy=_source_uses_residential_proxy(source, backend),
                     quality=qmetrics,
                 )
-                status = _save_failure_status(source, status)
+                if publication_decision is not None:
+                    try:
+                        reconciliation = DatasetPublicationStore().reconcile_current_publication(
+                            source.id,
+                            candidate_dataset_version=publication_decision.dataset_version,
+                            expected_dataset_version=None,
+                            status=status,
+                            attempt_generation=(
+                                publication_attempt.generation
+                                if publication_attempt
+                                else None
+                            ),
+                            attempt_id=(
+                                publication_attempt.attempt_id
+                                if publication_attempt
+                                else None
+                            ),
+                            attempt_started_at=(
+                                publication_attempt.started_at
+                                if publication_attempt
+                                else None
+                            ),
+                        )
+                        status = reconciliation.status
+                    except Exception:
+                        status["candidate_dataset_version"] = (
+                            publication_decision.dataset_version
+                        )
+                        status["published_dataset_version"] = None
+                        status.pop("dataset_version", None)
+                        status = DatasetPublicationStore().record_status_without_publication(
+                            source.id,
+                            status=status,
+                            attempt_generation=(
+                                publication_attempt.generation
+                                if publication_attempt
+                                else None
+                            ),
+                            attempt_id=(
+                                publication_attempt.attempt_id
+                                if publication_attempt
+                                else None
+                            ),
+                            attempt_started_at=(
+                                publication_attempt.started_at
+                                if publication_attempt
+                                else None
+                            ),
+                        )
+                else:
+                    status = _save_failure_status(source, status)
                 log_action(
                     "api.validate.fail",
                     source_id=source.id,
-                    state=SourceState.QUALITY_ERROR,
+                    state=rejected_state,
                     backend=backend,
                     detail=reason,
                     tier=source_tier,
                     level="warn",
-                    extra={"quality_metrics": qmetrics, "publish_gate": gate.extra},
+                    extra={"quality_metrics": qmetrics, "publish_gate": gate_extra},
                 )
                 if status.get("state") != SourceState.OK:
-                    await send_telegram_alert(source.id, SourceState.QUALITY_ERROR, status["detail"], source.url)
+                    await send_telegram_alert(source.id, rejected_state, status["detail"], source.url)
                 return _finish(status)
             log_action(
                 "api.route.skip",
@@ -1291,7 +1497,6 @@ async def _fetch_source_with_captured_policy(
                 level="warn",
             )
         except ProxyPaymentRequiredError:
-            deactivate_source_trace((_tok_trace, _tok_source, _tok_step))
             raise
         except Exception as exc:
             import logging
@@ -1305,7 +1510,6 @@ async def _fetch_source_with_captured_policy(
                 from .hsreplay_auth import force_relogin_hsreplay, hsreplay_email, hsreplay_password
 
                 if hsreplay_email() and hsreplay_password() and await force_relogin_hsreplay():
-                    deactivate_source_trace((_tok_trace, _tok_source, _tok_step))
                     return await fetch_source(client, source, retry_on_auth_failure=False)
             log_action(
                 "api.route.fail",
@@ -1388,7 +1592,6 @@ async def _fetch_source_with_captured_policy(
             backend = result.backend
             page_snapshot = result.snapshot
     except ProxyPaymentRequiredError:
-        deactivate_source_trace((_tok_trace, _tok_source, _tok_step))
         raise
     except Exception as exc:
         log_action(
@@ -1529,7 +1732,6 @@ async def _fetch_source_with_captured_policy(
                 relogin_success = await force_relogin_hsreplay()
                 if relogin_success:
                     logging.getLogger(__name__).info("Relogin successful, retrying fetch for %s...", source.id)
-                    deactivate_source_trace((_tok_trace, _tok_source, _tok_step))
                     return await fetch_source(client, source, retry_on_auth_failure=False)
 
         firecrawl_status = await _try_firecrawl_html(
@@ -1596,6 +1798,83 @@ async def _fetch_source_with_captured_policy(
     if reg and reg_msg:
         await send_telegram_alert(source.id, "dataset_regression", reg_msg, source.url)
     return _finish(status)
+
+
+async def _fetch_source_with_captured_policy(
+    client: httpx.AsyncClient | None,
+    source: Source,
+    retry_on_auth_failure: bool = True,
+) -> dict[str, Any]:
+    """Own every per-fetch ContextVar/trace token for the whole lifecycle."""
+
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        STANDARD_CARDS_SOURCE_ID,
+    )
+    from .scrapers.preferred_backend import preferred_browser_backend
+
+    started = time.monotonic()
+    fetched_at = now_iso()
+    previous_attempt_context = _standard_publication_attempt.get()
+    publication_attempt = None
+    publication_attempt_token = None
+    trace_tokens = None
+    trace_id = ""
+    try:
+        if source.id == STANDARD_CARDS_SOURCE_ID:
+            publication_attempt = DatasetPublicationStore().begin_publication_attempt(
+                source.id
+            )
+        publication_attempt_token = _standard_publication_attempt.set(
+            publication_attempt
+        )
+        try:
+            previous = load_status(source.id) or {}
+        except (OSError, UnicodeError, ValueError):
+            if source.id != STANDARD_CARDS_SOURCE_ID:
+                raise
+            # A damaged mutable status is telemetry/cache metadata, never a
+            # reason to abort a fully validated durable publication attempt.
+            previous = {}
+
+        preferred_backend = preferred_browser_backend(previous)
+        source_tier = tier_for(source.id).value
+        trace_id, tok_trace, tok_source, tok_step = activate_source_trace(
+            source.id,
+            tier=source_tier,
+            url=source.fetch_url,
+        )
+        trace_tokens = (tok_trace, tok_source, tok_step)
+        return await _fetch_source_with_active_lifecycle(
+            client,
+            source,
+            retry_on_auth_failure,
+            started=started,
+            fetched_at=fetched_at,
+            publication_attempt=publication_attempt,
+            previous=previous,
+            preferred_backend=preferred_backend,
+            source_tier=source_tier,
+            trace_id=trace_id,
+        )
+    finally:
+        if trace_tokens is not None:
+            try:
+                deactivate_source_trace(trace_tokens)
+            except Exception as exc:
+                logger.debug(
+                    "Source trace cleanup failed for %s: %s",
+                    source.id,
+                    exc,
+                )
+        if publication_attempt_token is not None:
+            try:
+                _standard_publication_attempt.reset(publication_attempt_token)
+            except Exception:
+                # A reset should only fail after cross-context misuse. Restore
+                # the entry value explicitly so the next fetch cannot inherit
+                # this attempt even under injected telemetry failures.
+                _standard_publication_attempt.set(previous_attempt_context)
 
 
 async def fetch_source(

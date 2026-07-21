@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,6 +35,11 @@ _HEALTH_CACHE_SECONDS = 15.0
 _health_cache_lock = threading.Lock()
 _health_cache_at = 0.0
 _health_cache_payload: dict[str, Any] | None = None
+_STANDARD_PUBLICATION_REVISION_HEADER = "X-HS-Publication-Representation"
+_PUBLICATION_UNAVAILABLE_HEADERS = {
+    "Retry-After": "60",
+    "Cache-Control": "no-store",
+}
 
 app = FastAPI(
     title="Hearthstone Data API",
@@ -66,9 +71,218 @@ def start_parser_control_worker() -> None:
     parser_run_worker().start()
 
 
+@app.on_event("startup")
+def bootstrap_standard_cards_publication() -> None:
+    """Create the protected publication channel from an existing valid cache.
+
+    This one-time compatibility bridge avoids a public outage on the first
+    deployment of the publication store. It never publishes an unvalidated
+    legacy snapshot and never replaces an already healthy published LKG.
+    """
+
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        PublicationUnavailable,
+        STANDARD_CARDS_SOURCE_ID,
+        validate_and_publish_standard_cards_candidate,
+        validate_standard_cards_snapshot,
+    )
+    from .refresh_log import log_action
+
+    store = DatasetPublicationStore()
+
+    def audit(action: str, **kwargs: Any) -> None:
+        try:
+            log_action(action, source_id=STANDARD_CARDS_SOURCE_ID, **kwargs)
+        except Exception:
+            # Recovery has its own durable manifest. Telemetry is best effort
+            # and cannot invert or crash a completed startup repair.
+            pass
+
+    publication_failure_reason: str | None = None
+    try:
+        store.read_published(STANDARD_CARDS_SOURCE_ID)
+        return
+    except PublicationUnavailable as exc:
+        publication_failure_reason = exc.reason
+        audit(
+            "dataset.publication.bootstrap.repair",
+            level="warn",
+            detail=exc.reason,
+        )
+    try:
+        intact_pointer = store.pointer_dataset_version(STANDARD_CARDS_SOURCE_ID)
+    except PublicationUnavailable:
+        intact_pointer = None
+    if (
+        intact_pointer is not None
+        and publication_failure_reason == "published_corrupt"
+    ):
+        # A valid manifest whose selected immutable file is damaged requires an
+        # explicit administrator rollback. Startup must not silently select N-1.
+        audit(
+            "dataset.publication.bootstrap.skip",
+            level="warn",
+            detail="manifest pointer is intact; administrator recovery required",
+            extra={"dataset_version": intact_pointer},
+        )
+        return
+
+    source = SOURCE_BY_ID[STANDARD_CARDS_SOURCE_ID]
+    recovery_candidates: list[tuple[str, str, dict[str, Any]]] = []
+    for version, immutable in store.immutable_recovery_candidates(
+        STANDARD_CARDS_SOURCE_ID
+    ):
+        recovery_candidates.append(("immutable", version, immutable))
+    try:
+        mutable = load_dataset(STANDARD_CARDS_SOURCE_ID)
+    except Exception as exc:
+        audit(
+            "dataset.publication.bootstrap.skip",
+            level="warn",
+            detail=f"legacy cache unreadable: {type(exc).__name__}",
+        )
+        mutable = None
+    if isinstance(mutable, dict):
+        from .dataset_publication_store import dataset_version
+
+        recovery_candidates.append(("mutable", dataset_version(mutable), mutable))
+
+    valid_candidates: list[tuple[float, int, str, dict[str, Any]]] = []
+    seen_versions: set[str] = set()
+    for origin, version, candidate_dataset in recovery_candidates:
+        if version in seen_versions:
+            continue
+        seen_versions.add(version)
+        validation = validate_standard_cards_snapshot(source, candidate_dataset)
+        if not validation.accepted:
+            continue
+        try:
+            candidate_time = datetime.fromisoformat(
+                str(candidate_dataset.get("fetched_at") or "").replace("Z", "+00:00")
+            )
+            if candidate_time.tzinfo is None:
+                candidate_time = candidate_time.replace(tzinfo=UTC)
+            timestamp = candidate_time.astimezone(UTC).timestamp()
+        except (TypeError, ValueError):
+            continue
+        valid_candidates.append(
+            (timestamp, 1 if origin == "immutable" else 0, origin, candidate_dataset)
+        )
+    if not valid_candidates:
+        audit(
+            "dataset.publication.bootstrap.skip",
+            level="warn",
+            detail="no fully valid recovery candidate",
+        )
+        return
+    valid_candidates.sort(reverse=True, key=lambda row: (row[0], row[1]))
+    selected_timestamp, _immutable_preference, _origin, legacy = valid_candidates[0]
+    # Ordering/regression checks during recovery may only use a snapshot that
+    # passed the same full semantic and temporal validation as the selected one.
+    # A checksum-valid but semantically broken immutable file must never become
+    # the baseline that rejects a good repair candidate.
+    validated_previous = next(
+        (
+            candidate_dataset
+            for timestamp, _preference, _candidate_origin, candidate_dataset in valid_candidates[1:]
+            if timestamp < selected_timestamp
+        ),
+        None,
+    )
+
+    if (
+        intact_pointer is not None
+        and publication_failure_reason != "published_from_future"
+    ):
+        try:
+            current = store.read_published_unbounded(STANDARD_CARDS_SOURCE_ID)
+            current_time = datetime.fromisoformat(
+                str((current or {}).get("fetched_at") or "").replace("Z", "+00:00")
+            )
+            if current_time.tzinfo is None:
+                current_time = current_time.replace(tzinfo=UTC)
+            if selected_timestamp <= current_time.astimezone(UTC).timestamp():
+                audit(
+                    "dataset.publication.bootstrap.skip",
+                    level="warn",
+                    detail="no newer fully valid recovery candidate",
+                    extra={"dataset_version": intact_pointer},
+                )
+                return
+        except (PublicationUnavailable, TypeError, ValueError):
+            pass
+    try:
+        decision = validate_and_publish_standard_cards_candidate(
+            source,
+            legacy,
+            store=store,
+            validated_previous=validated_previous,
+        )
+    except Exception as exc:
+        audit(
+            "dataset.publication.bootstrap.fail",
+            level="error",
+            detail=str(exc)[:1000],
+            error_type=type(exc).__name__,
+        )
+        return
+    audit(
+        "dataset.publication.bootstrap.ok"
+        if decision.accepted
+        else "dataset.publication.bootstrap.reject",
+        level="info" if decision.accepted else "warn",
+        detail=decision.reason,
+        extra={"dataset_version": decision.dataset_version},
+    )
+
+
 @app.middleware("http")
 async def no_cache_ui(request: Request, call_next):
-    response = await call_next(request)
+    standard_dataset_path = f"/datasets/hsreplay_cards_legend_1d"
+    exact_publication_cache = (
+        request.method in {"GET", "HEAD"}
+        and request.url.path == standard_dataset_path
+    )
+    requested_etag = request.headers.get("if-none-match")
+    forwarded_request = request
+    if exact_publication_cache and requested_etag:
+        # The generic cache middleware derives revisions from the mutable
+        # ingestion cache. Strip the conditional header for this one protected
+        # route, then evaluate it below against the exact LKG response revision.
+        scope = dict(request.scope)
+        scope["headers"] = [
+            (name, value)
+            for name, value in request.scope.get("headers", [])
+            if name.lower() != b"if-none-match"
+        ]
+        forwarded_request = Request(scope, receive=request.receive)
+
+    response = await call_next(forwarded_request)
+    if exact_publication_cache:
+        revision = response.headers.get(_STANDARD_PUBLICATION_REVISION_HEADER)
+        if _STANDARD_PUBLICATION_REVISION_HEADER in response.headers:
+            del response.headers[_STANDARD_PUBLICATION_REVISION_HEADER]
+        if revision and 200 <= response.status_code < 300:
+            from .public_cache import PUBLIC_CACHE_CONTROL, build_etag
+
+            etag = build_etag(
+                request.url.path,
+                request.scope.get("query_string") or b"",
+                revision,
+            )
+            response.headers["ETag"] = etag
+            response.headers["Cache-Control"] = PUBLIC_CACHE_CONTROL
+            normalized = etag.removeprefix("W/")
+            matches = bool(requested_etag) and any(
+                candidate.strip().removeprefix("W/") in {"*", normalized}
+                for candidate in requested_etag.split(",")
+            )
+            if matches:
+                headers = dict(response.headers)
+                headers.pop("content-length", None)
+                headers.pop("content-type", None)
+                return Response(status_code=304, headers=headers)
     if request.url.path.startswith("/admin"):
         response.headers["Cache-Control"] = "private, no-store"
         response.headers["Pragma"] = "no-cache"
@@ -192,7 +406,18 @@ def demo_overview() -> dict:
 def demo_view(source_id: str) -> dict:
     if source_id not in SOURCE_BY_ID:
         raise HTTPException(status_code=404, detail="Unknown source")
-    return build_demo_view(source_id)
+    result = build_demo_view(source_id)
+    if result.get("unavailable"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": result.get("message"),
+                "source_id": source_id,
+                "reason": result.get("reason"),
+            },
+            headers=_PUBLICATION_UNAVAILABLE_HEADERS,
+        )
+    return result
 
 
 def source_payload(source_id: str) -> dict:
@@ -272,7 +497,12 @@ def _active_trinkets_only(structured: dict[str, Any]) -> dict[str, Any]:
     return filtered
 
 
-def public_dataset_payload(source_id: str, dataset: dict[str, Any]) -> dict[str, Any]:
+def public_dataset_payload(
+    source_id: str,
+    dataset: dict[str, Any],
+    *,
+    publication_read: Any | None = None,
+) -> dict[str, Any]:
     payload = dict(dataset)
     if source_id in ACTIVE_TRINKET_SOURCE_IDS:
         data = dict(payload.get("data") or {})
@@ -295,6 +525,16 @@ def public_dataset_payload(source_id: str, dataset: dict[str, Any]) -> dict[str,
         "channel": mode,
         "published_at": dataset.get("fetched_at"),
     }
+    if publication_read is not None:
+        payload["publication"].update(
+            {
+                "storage_channel": "published_lkg",
+                "published_at": publication_read.published_at,
+                "dataset_version": publication_read.dataset_version,
+                "stale": publication_read.stale,
+                "fallback_reason": publication_read.fallback_reason,
+            }
+        )
     return payload
 
 
@@ -392,23 +632,83 @@ def health() -> dict:
 
 
 def build_health_diagnostics() -> dict:
-    statuses = [load_status(source.id) for source in SOURCES]
+    statuses: list[dict[str, Any] | None] = []
+    status_errors: list[Exception | None] = []
+    for source in SOURCES:
+        try:
+            statuses.append(load_status(source.id))
+            status_errors.append(None)
+        except (OSError, UnicodeError, ValueError) as exc:
+            statuses.append(None)
+            status_errors.append(exc)
     states: dict[str, int] = {}
     cached_sources: list[str] = []
     cached_after_failure_sources: list[str] = []
     hard_failed_sources: list[str] = []
     semantic_failed_sources: list[str] = []
     semantic_failures: list[dict[str, Any]] = []
-    for source, status in zip(SOURCES, statuses, strict=True):
+    publication_failed_sources: list[str] = []
+    publication_failures: list[dict[str, Any]] = []
+    publication_stale_sources: list[str] = []
+    publication_stale_details: list[dict[str, Any]] = []
+    for source, status, status_error in zip(
+        SOURCES, statuses, status_errors, strict=True
+    ):
+        dataset_error: Exception | None = None
+        try:
+            dataset = load_dataset(source.id)
+        except (OSError, UnicodeError, ValueError) as exc:
+            dataset = None
+            dataset_error = exc
         state = status["state"] if status else SourceState.NEVER_FETCHED
         states[state] = states.get(state, 0) + 1
         if status and status.get("serving_cached_dataset"):
             cached_sources.append(source.id)
             if status.get("last_refresh_state") not in (None, SourceState.OK):
                 cached_after_failure_sources.append(source.id)
-        if state != SourceState.OK:
+        served_dataset = dataset
+        standard_publication_usable = False
+        if source.id == "hsreplay_cards_legend_1d":
+            from .dataset_publication_store import (
+                DatasetPublicationStore,
+                PublicationUnavailable,
+            )
+
+            try:
+                publication_read = DatasetPublicationStore().read_published(
+                    source.id,
+                    current_dataset=dataset,
+                    current_error=dataset_error,
+                    status=status,
+                )
+                standard_publication_usable = True
+                served_dataset = publication_read.dataset
+                fallback_reason = publication_read.fallback_reason
+                if fallback_reason is None and status_error is not None:
+                    fallback_reason = "status_corrupt"
+                elif fallback_reason is None and status is None:
+                    fallback_reason = "status_missing"
+                if fallback_reason is not None:
+                    publication_stale_sources.append(source.id)
+                    publication_stale_details.append(
+                        {
+                            "source_id": source.id,
+                            "fallback_reason": fallback_reason,
+                            "dataset_version": publication_read.dataset_version,
+                        }
+                    )
+            except PublicationUnavailable as exc:
+                publication_failed_sources.append(source.id)
+                publication_failures.append(
+                    {
+                        "source_id": source.id,
+                        "reason": exc.reason,
+                        "detail": exc.detail,
+                    }
+                )
+        if state != SourceState.OK and not standard_publication_usable:
             hard_failed_sources.append(source.id)
-        semantic_quality = _semantic_dataset_quality(source.id, load_dataset(source.id))
+        semantic_quality = _semantic_dataset_quality(source.id, served_dataset)
         if semantic_quality and not semantic_quality["ok"]:
             semantic_failed_sources.append(source.id)
             semantic_failures.append(
@@ -422,10 +722,29 @@ def build_health_diagnostics() -> dict:
 
     from .stale_monitor import find_stale_sources
 
-    stale_sources = find_stale_sources(include_ok=True)
+    freshness_monitor_errors: list[str] = []
+    try:
+        stale_sources = find_stale_sources(include_ok=True)
+    except Exception as exc:
+        # The source loop above already loaded every file defensively. The
+        # legacy monitor re-reads them, so a corrupt compatibility file must
+        # degrade freshness diagnostics rather than crash the health route.
+        stale_sources = []
+        freshness_monitor_errors.append(
+            f"{type(exc).__name__}: {exc}"[:1000]
+        )
     stale_ids = [str(item["source_id"]) for item in stale_sources]
-    serving_ok = not hard_failed_sources and not semantic_failed_sources
-    freshness_ok = not stale_ids and not cached_sources
+    serving_ok = (
+        not hard_failed_sources
+        and not semantic_failed_sources
+        and not publication_failed_sources
+    )
+    freshness_ok = (
+        not stale_ids
+        and not cached_sources
+        and not publication_stale_sources
+        and not freshness_monitor_errors
+    )
     return {
         "ok": serving_ok,
         "serving_ok": serving_ok,
@@ -437,10 +756,15 @@ def build_health_diagnostics() -> dict:
         "hard_failed_sources": hard_failed_sources,
         "semantic_failed_sources": semantic_failed_sources,
         "semantic_failures": semantic_failures,
+        "publication_failed_sources": publication_failed_sources,
+        "publication_failures": publication_failures,
+        "publication_stale_sources": publication_stale_sources,
+        "publication_stale_details": publication_stale_details,
         "cached_sources": cached_sources,
         "cached_after_failure_sources": cached_after_failure_sources,
         "stale_sources": stale_ids,
         "stale_count": len(stale_ids),
+        "freshness_monitor_errors": freshness_monitor_errors,
         "cached_count": len(cached_sources),
         "cached_after_failure_count": len(cached_after_failure_sources),
     }
@@ -499,10 +823,39 @@ def list_datasets() -> dict:
     }
 
 
+@app.head("/datasets/{source_id}", include_in_schema=False)
 @app.get("/datasets/{source_id}")
-def get_dataset(source_id: str) -> dict:
+def get_dataset(source_id: str, response: Response) -> dict:
     if source_id not in SOURCE_BY_ID:
         raise HTTPException(status_code=404, detail="Unknown source")
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        PublicationUnavailable,
+        STANDARD_CARDS_SOURCE_ID,
+    )
+
+    if source_id == STANDARD_CARDS_SOURCE_ID:
+        try:
+            publication_read = DatasetPublicationStore().read_published(source_id)
+        except PublicationUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "message": "Published Standard card statistics are unavailable",
+                    "source_id": source_id,
+                    "reason": exc.reason,
+                },
+                headers=_PUBLICATION_UNAVAILABLE_HEADERS,
+            ) from exc
+        dataset = publication_read.dataset
+        response.headers[_STANDARD_PUBLICATION_REVISION_HEADER] = (
+            publication_read.representation_revision
+        )
+        return public_dataset_payload(
+            source_id,
+            dataset,
+            publication_read=publication_read,
+        )
     dataset = load_dataset(source_id)
     if dataset is None:
         status = load_status(source_id)
@@ -745,6 +1098,233 @@ async def capture_bg_compositions_screenshot() -> dict:
     return await capture_compositions_screenshot()
 
 
+@app.get(
+    "/admin/datasets/{source_id}/quarantine",
+    dependencies=[Depends(require_admin)],
+)
+def dataset_quarantine(
+    source_id: str,
+    limit: int = Query(20, ge=1, le=100),
+) -> dict[str, Any]:
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        STANDARD_CARDS_SOURCE_ID,
+    )
+
+    if source_id not in SOURCE_BY_ID:
+        raise HTTPException(status_code=404, detail="Unknown source")
+    if source_id != STANDARD_CARDS_SOURCE_ID:
+        raise HTTPException(
+            status_code=404,
+            detail="Quarantine channel is not enabled for this source",
+        )
+    return {
+        "source_id": source_id,
+        "quarantine": DatasetPublicationStore().list_quarantine(
+            source_id, limit=limit
+        ),
+    }
+
+
+@app.post(
+    "/admin/datasets/{source_id}/publication/rollback",
+    dependencies=[Depends(require_admin)],
+)
+def rollback_dataset_publication(
+    source_id: str,
+    payload: Annotated[dict[str, Any], Body()],
+) -> dict[str, Any]:
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        PublicationUnavailable,
+        STANDARD_CARDS_SOURCE_ID,
+        validate_standard_cards_snapshot,
+    )
+    from .refresh_log import log_action
+
+    if source_id not in SOURCE_BY_ID:
+        raise HTTPException(status_code=404, detail="Unknown source")
+    if source_id != STANDARD_CARDS_SOURCE_ID:
+        raise HTTPException(
+            status_code=404,
+            detail="Publication rollback is not enabled for this source",
+        )
+    requested = payload.get("datasetVersion") if isinstance(payload, dict) else None
+    if requested is not None and not isinstance(requested, str):
+        raise HTTPException(status_code=422, detail="datasetVersion must be a string")
+
+    store = DatasetPublicationStore()
+    previous_current: str | None = None
+    target_version: str | None = None
+    reconciliation = None
+    committed = False
+    postcommit_sync_error: str | None = None
+
+    def audit_rejection(reason: str, target: str | None) -> str | None:
+        try:
+            log_action(
+                "dataset.publication.rollback.reject",
+                source_id=source_id,
+                level="warn",
+                detail=reason[:1000],
+                extra={
+                    "from_dataset_version": previous_current,
+                    "to_dataset_version": target,
+                    "actor": "admin_api_key",
+                },
+            )
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"[:1000]
+        return None
+
+    try:
+        with store.publication_transaction(source_id):
+            publication_attempt = store.begin_publication_attempt(source_id)
+            previous_current = store.pointer_dataset_version(source_id)
+            target_version = store.rollback_target_version(
+                source_id,
+                requested.strip() if isinstance(requested, str) else None,
+            )
+            target_dataset = store.read_version_dataset(source_id, target_version)
+            decision = validate_standard_cards_snapshot(
+                SOURCE_BY_ID[source_id], target_dataset
+            )
+            if not decision.accepted:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": "Retained publication failed revalidation",
+                        "source_id": source_id,
+                        "reason": decision.reason,
+                        "dataset_version": target_version,
+                    },
+                )
+            store.rollback_to_version(
+                source_id,
+                target_version,
+                validation={
+                    "ok": True,
+                    "reason": "admin rollback revalidation passed",
+                    "diagnostics": decision.diagnostics,
+                },
+            )
+            committed = True
+            try:
+                try:
+                    status = load_status(source_id)
+                except (OSError, UnicodeError, ValueError):
+                    status = None
+                status = status or {
+                    "source_id": source_id,
+                    "site": SOURCE_BY_ID[source_id].site,
+                    "category": SOURCE_BY_ID[source_id].category,
+                    "url": SOURCE_BY_ID[source_id].url,
+                }
+                status.update(
+                    {
+                        "state": SourceState.OK,
+                        "fetched_at": target_dataset.get("fetched_at"),
+                    }
+                )
+                reconciliation = store.reconcile_current_publication(
+                    source_id,
+                    candidate_dataset_version=target_version,
+                    expected_dataset_version=target_version,
+                    status=status,
+                    attempt_generation=publication_attempt.generation,
+                    attempt_id=publication_attempt.attempt_id,
+                    attempt_started_at=publication_attempt.started_at,
+                )
+            except Exception as exc:
+                postcommit_sync_error = f"{type(exc).__name__}: {exc}"[:1000]
+    except HTTPException as exc:
+        detail = exc.detail
+        reason = (
+            str(detail.get("reason") or detail.get("message") or "rollback rejected")
+            if isinstance(detail, dict)
+            else str(detail)
+        )
+        audit_error = audit_rejection(
+            reason,
+            target_version
+            or (requested if isinstance(requested, str) else None),
+        )
+        if audit_error and isinstance(detail, dict):
+            detail["audit_recorded"] = False
+            detail.setdefault("warnings", []).append(audit_error)
+        raise
+    except (PublicationUnavailable, ValueError) as exc:
+        reason = exc.reason if isinstance(exc, PublicationUnavailable) else "invalid_version"
+        audit_error = audit_rejection(
+            reason,
+            target_version
+            or (requested if isinstance(requested, str) else None),
+        )
+        detail = {
+            "message": "Publication rollback is unavailable",
+            "source_id": source_id,
+            "reason": reason,
+        }
+        if audit_error:
+            detail["audit_recorded"] = False
+            detail["warnings"] = [audit_error]
+        raise HTTPException(
+            status_code=409,
+            detail=detail,
+        ) from exc
+
+    if not committed or target_version is None:
+        raise HTTPException(status_code=500, detail="Rollback did not commit")
+    cache_synced = reconciliation.cache_synced if reconciliation else False
+    status_synced = reconciliation.status_synced if reconciliation else False
+    cache_error = (
+        next(iter(reconciliation.warnings), None)
+        if reconciliation and not cache_synced
+        else postcommit_sync_error
+    )
+    status_error = (
+        reconciliation.warnings[-1]
+        if reconciliation and not status_synced and reconciliation.warnings
+        else postcommit_sync_error if not status_synced else None
+    )
+    audit_recorded = True
+    audit_error: str | None = None
+    try:
+        log_action(
+            "dataset.publication.rollback",
+            source_id=source_id,
+            level="warn",
+            detail="Administrator rolled back the Standard-card publication",
+            extra={
+                "from_dataset_version": previous_current,
+                "to_dataset_version": target_version,
+                "cache_synced": cache_synced,
+                "cache_error": cache_error,
+                "status_synced": status_synced,
+                "status_error": status_error,
+            },
+        )
+    except Exception as exc:
+        audit_recorded = False
+        audit_error = f"{type(exc).__name__}: {exc}"[:1000]
+    return {
+        "ok": True,
+        "source_id": source_id,
+        "dataset_version": (
+            reconciliation.dataset_version if reconciliation else target_version
+        ),
+        "previous_dataset_version": previous_current,
+        "cache_synced": cache_synced,
+        "status_synced": status_synced,
+        "audit_recorded": audit_recorded,
+        "warnings": [
+            warning
+            for warning in (cache_error, status_error, audit_error)
+            if warning
+        ],
+    }
+
+
 @app.put("/admin/datasets/{source_id}", dependencies=[Depends(require_admin)])
 def upload_dataset(
     source_id: str,
@@ -756,12 +1336,17 @@ def upload_dataset(
     fetched_at = datetime.now(UTC).isoformat()
     dataset = {
         "state": SourceState.OK,
+        "source_id": source.id,
         "fetched_at": fetched_at,
         "http_status": None,
         "final_url": source.url,
         "content_length": None,
+        "backend": "admin_upload",
         "data": payload,
     }
+    from .refresh_log import log_action, runtime_version_info
+
+    dataset["runtime"] = runtime_version_info()
     status = {
         "source_id": source.id,
         "site": source.site,
@@ -776,7 +1361,184 @@ def upload_dataset(
         "error": None,
         "detail": "Uploaded through the admin ingestion endpoint.",
         "content_length": None,
+        "backend": "admin_upload",
     }
+    from .dataset_publication_store import (
+        DatasetPublicationStore,
+        STANDARD_CARDS_SOURCE_ID,
+        validate_and_publish_standard_cards_candidate,
+    )
+
+    if source_id == STANDARD_CARDS_SOURCE_ID:
+        store = DatasetPublicationStore()
+
+        def audit_upload(
+            action: str,
+            *,
+            reason: str,
+            published_version: str | None,
+            cache_synced: bool,
+            status_synced: bool,
+        ) -> str | None:
+            try:
+                log_action(
+                    action,
+                    source_id=source_id,
+                    level="info" if action.endswith(".accept") else "warn",
+                    detail=reason[:1000],
+                    extra={
+                        "actor": "admin_api_key",
+                        "candidate_dataset_version": decision.dataset_version,
+                        "published_dataset_version": published_version,
+                        "cache_synced": cache_synced,
+                        "status_synced": status_synced,
+                    },
+                )
+            except Exception as exc:
+                return f"{type(exc).__name__}: {exc}"[:1000]
+            return None
+
+        publication_attempt = store.begin_publication_attempt(source_id)
+        decision = validate_and_publish_standard_cards_candidate(
+            source,
+            dataset,
+            store=store,
+            publication_attempt=publication_attempt,
+        )
+        if not decision.accepted:
+            status["state"] = (
+                SourceState.PARTIAL
+                if decision.rejection_kind == "regression"
+                else SourceState.QUALITY_ERROR
+            )
+            status["detail"] = decision.reason
+            rejection_cache_synced = False
+            rejection_status_synced = False
+            published_version: str | None = None
+            try:
+                reconciliation = store.reconcile_current_publication(
+                    source_id,
+                    candidate_dataset_version=decision.dataset_version,
+                    expected_dataset_version=None,
+                    status=status,
+                    attempt_generation=publication_attempt.generation,
+                    attempt_id=publication_attempt.attempt_id,
+                    attempt_started_at=publication_attempt.started_at,
+                )
+                rejection_cache_synced = reconciliation.cache_synced
+                rejection_status_synced = reconciliation.status_synced
+                published_version = reconciliation.dataset_version
+            except Exception:
+                status["candidate_dataset_version"] = decision.dataset_version
+                status["published_dataset_version"] = None
+                status.pop("dataset_version", None)
+                status = store.record_status_without_publication(
+                    source_id,
+                    status=status,
+                    attempt_generation=publication_attempt.generation,
+                    attempt_id=publication_attempt.attempt_id,
+                    attempt_started_at=publication_attempt.started_at,
+                )
+            audit_error = audit_upload(
+                "dataset.publication.admin_upload.reject",
+                reason=decision.reason,
+                published_version=published_version,
+                cache_synced=rejection_cache_synced,
+                status_synced=rejection_status_synced,
+            )
+            detail = {
+                "message": "Dataset candidate rejected",
+                "source_id": source_id,
+                "reason": decision.reason,
+                "dataset_version": decision.dataset_version,
+                "rejection_kind": decision.rejection_kind,
+                "audit_recorded": audit_error is None,
+            }
+            if audit_error:
+                detail["warnings"] = [audit_error]
+            raise HTTPException(
+                status_code=422,
+                detail=detail,
+            )
+        try:
+            reconciliation = store.reconcile_current_publication(
+                source_id,
+                candidate_dataset_version=decision.dataset_version,
+                expected_dataset_version=decision.dataset_version,
+                status=status,
+                attempt_generation=publication_attempt.generation,
+                attempt_id=publication_attempt.attempt_id,
+                attempt_started_at=publication_attempt.started_at,
+            )
+        except Exception as exc:
+            sync_error = f"{type(exc).__name__}: {exc}"[:1000]
+            try:
+                authoritative_version = (
+                    store.pointer_dataset_version(source_id)
+                    or decision.dataset_version
+                )
+            except Exception:
+                authoritative_version = decision.dataset_version
+            try:
+                log_action(
+                    "dataset.publication.sync.fail",
+                    source_id=source_id,
+                    level="error",
+                    detail=sync_error,
+                    extra={
+                        "candidate_dataset_version": decision.dataset_version,
+                        "published_dataset_version": authoritative_version,
+                        "operation": "admin_upload",
+                    },
+                )
+            except Exception:
+                pass
+            audit_error = audit_upload(
+                "dataset.publication.admin_upload.accept",
+                reason="published; mutable reconciliation degraded",
+                published_version=authoritative_version,
+                cache_synced=False,
+                status_synced=False,
+            )
+            return {
+                "ok": True,
+                "degraded": True,
+                "source_id": source_id,
+                "fetched_at": fetched_at,
+                "candidate_dataset_version": decision.dataset_version,
+                "dataset_version": authoritative_version,
+                "publication_superseded": (
+                    authoritative_version != decision.dataset_version
+                ),
+                "cache_synced": False,
+                "status_synced": False,
+                "audit_recorded": audit_error is None,
+                "warnings": [
+                    warning for warning in (sync_error, audit_error) if warning
+                ],
+            }
+        audit_error = audit_upload(
+            "dataset.publication.admin_upload.accept",
+            reason="published and reconciled",
+            published_version=reconciliation.dataset_version,
+            cache_synced=reconciliation.cache_synced,
+            status_synced=reconciliation.status_synced,
+        )
+        return {
+            "ok": True,
+            "source_id": source_id,
+            "fetched_at": fetched_at,
+            "candidate_dataset_version": decision.dataset_version,
+            "dataset_version": reconciliation.dataset_version,
+            "publication_superseded": reconciliation.superseded,
+            "cache_synced": reconciliation.cache_synced,
+            "status_synced": reconciliation.status_synced,
+            "audit_recorded": audit_error is None,
+            "warnings": [
+                *reconciliation.warnings,
+                *([audit_error] if audit_error else []),
+            ],
+        }
     save_dataset(source_id, dataset)
     save_status(source_id, status)
     return {"ok": True, "source_id": source_id, "fetched_at": fetched_at}
