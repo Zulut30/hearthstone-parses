@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh hs-data-api host systemd timer state snapshot
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=hs-data-api-docker-export-timer-state.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,27 @@
+[Unit]
+Description=Export hs-data-api host systemd timer state for the API container
+ConditionPathIsDirectory=/run/systemd/system
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=debian
+Group=debian
+WorkingDirectory=/srv/hs-data-api
+ExecStart=/usr/bin/python3 -m app.systemd_timer_export
+UMask=0022
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+LockPersonality=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/srv/hs-data-api/data
+InaccessiblePaths=-/run/docker.sock
+RestrictAddressFamilies=AF_UNIX

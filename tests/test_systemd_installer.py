@@ -51,6 +51,14 @@ def test_docker_systemd_installer_covers_every_timer(tmp_path: Path) -> None:
     assert "/custom/hs-api/docker-compose.yml" in (
         staged_systemd / "hs-data-api-docker-refresh-bg-hero-details.service"
     ).read_text(encoding="utf-8")
+    exporter_service = (
+        staged_systemd / "hs-data-api-docker-export-timer-state.service"
+    )
+    assert exporter_service.is_file()
+    exporter_text = exporter_service.read_text(encoding="utf-8")
+    assert "WorkingDirectory=/custom/hs-api" in exporter_text
+    assert "ReadWritePaths=/custom/hs-api/data" in exporter_text
+    assert "python3 -m app.systemd_timer_export" in exporter_text
     vicious_service = staged_systemd / "hs-data-api-docker-refresh-vicious-syndicate.service"
     assert vicious_service.is_file()
     assert "vicious_syndicate_live_beta" in vicious_service.read_text(encoding="utf-8")

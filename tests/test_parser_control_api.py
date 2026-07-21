@@ -135,7 +135,7 @@ class ParserControlApiTest(unittest.TestCase):
             payload = initial.json()
             self.assertEqual(payload["revision"], 1)
             self.assertIn("sections", payload)
-            self.assertEqual(payload["scheduleInventory"]["schemaVersion"], 1)
+            self.assertEqual(payload["scheduleInventory"]["schemaVersion"], 2)
 
             changed = client.patch(
                 "/admin/parser-control/policy",

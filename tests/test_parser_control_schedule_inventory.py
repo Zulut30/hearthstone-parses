@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from app.parser_control import ParserControlStore
 from app.parser_control_schedule import (
@@ -22,10 +23,11 @@ def _schedule(inventory: dict[str, object], schedule_id: str) -> dict[str, objec
 
 def test_schedule_inventory_is_versioned_and_covers_every_parser_source_and_section() -> None:
     inventory = build_schedule_inventory(
-        at=datetime(2026, 7, 21, 0, 0, tzinfo=UTC)
+        at=datetime(2026, 7, 21, 0, 0, tzinfo=UTC),
+        include_runtime=False,
     )
 
-    assert inventory["schemaVersion"] == SCHEDULE_INVENTORY_SCHEMA_VERSION == 1
+    assert inventory["schemaVersion"] == SCHEDULE_INVENTORY_SCHEMA_VERSION == 2
     assert inventory["inventoryVersion"] == SCHEDULE_INVENTORY_VERSION
     assert inventory["generatedAt"] == "2026-07-21T00:00:00+00:00"
     assert inventory["timeSemantics"] == "nominal"
@@ -51,7 +53,8 @@ def test_schedule_inventory_is_versioned_and_covers_every_parser_source_and_sect
 
 def test_schedule_inventory_calculates_nominal_next_runs_in_utc() -> None:
     inventory = build_schedule_inventory(
-        at=datetime(2026, 7, 21, 0, 0, tzinfo=UTC)
+        at=datetime(2026, 7, 21, 0, 0, tzinfo=UTC),
+        include_runtime=False,
     )
 
     assert _schedule(inventory, "refresh-all-daily")["nextRunAt"] == (
@@ -84,7 +87,8 @@ def test_schedule_inventory_calculates_nominal_next_runs_in_utc() -> None:
 
 def test_expired_bounded_schedule_remains_in_inventory_without_a_next_run() -> None:
     inventory = build_schedule_inventory(
-        at=datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+        at=datetime(2026, 7, 28, 0, 0, tzinfo=UTC),
+        include_runtime=False,
     )
 
     bounded = _schedule(inventory, "refresh-post-patch-tierlists")
@@ -95,7 +99,8 @@ def test_expired_bounded_schedule_remains_in_inventory_without_a_next_run() -> N
 
 def test_every_inventory_unit_is_a_versioned_docker_timer() -> None:
     inventory = build_schedule_inventory(
-        at=datetime(2026, 7, 21, 0, 0, tzinfo=UTC)
+        at=datetime(2026, 7, 21, 0, 0, tzinfo=UTC),
+        include_runtime=False,
     )
 
     for schedule in inventory["schedules"]:
@@ -109,7 +114,19 @@ def test_every_inventory_unit_is_a_versioned_docker_timer() -> None:
 
 def test_parser_control_snapshot_exposes_effective_section_and_source_schedule() -> None:
     at = datetime(2026, 7, 21, 0, 0, tzinfo=UTC)
-    with TemporaryDirectory() as directory:
+    unavailable_runtime = {
+        "provider": "test",
+        "checkedAt": at.isoformat(),
+        "available": False,
+        "status": "unavailable",
+        "reason": "test",
+        "timingAvailable": False,
+        "units": {},
+    }
+    with TemporaryDirectory() as directory, patch(
+        "app.parser_control_schedule._probe_systemd_timer_states",
+        return_value=unavailable_runtime,
+    ):
         store = ParserControlStore(Path(directory))
 
         snapshot = store.snapshot(at=at)
@@ -125,7 +142,7 @@ def test_parser_control_snapshot_exposes_effective_section_and_source_schedule()
         )
 
         assert snapshot["generatedAt"] == "2026-07-21T00:00:00+00:00"
-        assert snapshot["scheduleInventory"]["schemaVersion"] == 1
+        assert snapshot["scheduleInventory"]["schemaVersion"] == 2
         assert arena["scheduleIds"]
         assert arena["schedule"]
         assert arena["nextRunAt"] == "2026-07-21T03:20:00+00:00"

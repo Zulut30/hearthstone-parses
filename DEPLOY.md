@@ -125,6 +125,14 @@ Production refresh schedule:
 - `scripts/install-docker-systemd.sh`: автоматически устанавливает и включает все
   `hs-data-api-docker-*.timer`, поэтому новый pipeline timer не останется только
   в репозитории после следующего деплоя.
+- `hs-data-api-docker-export-timer-state.timer`: раз в минуту атомарно экспортирует
+  фактические `enabled/active/last/next/result` таймеров и их services в общий
+  `data/parser-control-systemd.json`. Контейнер принимает snapshot только пока он
+  моложе трёх минут; при остановке exporter админка возвращается к номинальному
+  расписанию и не выдаёт устаревшее состояние за runtime. Это единственный
+  host-side Python-модуль: он использует только стандартную библиотеку, запускается
+  непривилегированным пользователем `debian` под Python 3.11+ и имеет отдельный
+  CI smoke на 3.11; основной API и parser jobs остаются на Python 3.12 в Docker.
 - `hs-data-api-protected-recovery.service`: conditional fallback launched by failed freshness audit; refreshes only stale/cached-after-failure `browser_protected` sources.
 - `hs-data-api-refresh-protected.timer`: disabled by default; the morning full run already includes protected sources. Use `systemctl start hs-data-api-refresh-protected.service` only for manual recovery.
 
@@ -138,6 +146,9 @@ curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/health/premium | jq 
 curl -s -H "X-API-Key: ${HS_API_KEY}" http://127.0.0.1:8000/ops/summary | jq '.freshness'
 /srv/hs-data-api/venv/bin/python -m app.cli freshness-check --since-hours 48
 /srv/hs-data-api/venv/bin/python -m app.cli quality-check
+sudo systemctl start hs-data-api-docker-export-timer-state.service
+jq '{provider, generatedAt, status, timingAvailable, units: (.units | length)}' \
+  /srv/hs-data-api/data/parser-control-systemd.json
 ```
 
 HSReplay archetype database smoke-test:
