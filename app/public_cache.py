@@ -85,6 +85,13 @@ def cache_revision(path: str, query_string: bytes) -> str:
         return _dataset_timestamp(source_id) or "not-cached"
     if path.startswith(("/v1/bg/heroes", "/api/bg/heroes")):
         return _dataset_timestamp("hsreplay_battlegrounds_hero_details") or "not-cached"
+    if path.startswith("/v1/constructed/hsguru-deck"):
+        query = parse_qs(query_string.decode("utf-8", errors="ignore"))
+        format_name = (query.get("format_name") or ["standard"])[0]
+        rank = (query.get("rank") or ["legend"])[0]
+        if format_name in {"standard", "wild"} and rank == "legend":
+            source_id = f"hsguru_deck_catalog_{format_name}_legend"
+            return _dataset_timestamp(source_id) or "not-cached"
     db_revision = _db_revision(path)
     if db_revision:
         return db_revision

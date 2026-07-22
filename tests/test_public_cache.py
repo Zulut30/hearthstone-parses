@@ -87,6 +87,21 @@ def test_cache_revision_is_best_effort_when_storage_is_unavailable() -> None:
         assert cache_revision("/datasets", b"") == "not-cached"
 
 
+def test_hsguru_legend_deck_revision_reads_only_its_catalog() -> None:
+    with (
+        patch("app.public_cache._dataset_timestamp", return_value="catalog-revision") as dataset_timestamp,
+        patch("app.public_cache._latest_dataset_timestamp") as latest_timestamp,
+    ):
+        revision = cache_revision(
+            "/v1/constructed/hsguru-deck",
+            b"archetype=XL+Mill+Druid&format_name=wild&rank=legend",
+        )
+
+    assert revision == "catalog-revision"
+    dataset_timestamp.assert_called_once_with("hsguru_deck_catalog_wild_legend")
+    latest_timestamp.assert_not_called()
+
+
 def _consumer_decks_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
