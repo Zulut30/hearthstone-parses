@@ -103,16 +103,18 @@ def test_all_rank_lookup_uses_its_preloaded_catalog() -> None:
     catalog_rows.assert_called_once_with("wild", "all")
 
 
-def test_all_rank_catalog_targets_meta_archetypes_missing_from_legend() -> None:
+def test_all_rank_catalog_targets_meta_archetypes_missing_from_all_rank_cache() -> None:
     meta_payload = {
         "data": {"tables": [{"rows": [["Popular Mage"], ["XL HL Exodia Mage"]]}]},
     }
     with (
         patch.object(hsguru_decks, "dataset_path", side_effect=lambda source_id: source_id),
         patch.object(hsguru_decks, "read_json", return_value=meta_payload),
-        patch.object(hsguru_decks, "_catalog_rows", return_value=[{"archetype": "Popular Mage"}]),
     ):
-        archetypes = hsguru_decks._all_rank_catalog_archetypes("wild")
+        archetypes = hsguru_decks._all_rank_catalog_archetypes(
+            "wild",
+            [{"archetype": "Popular Mage"}],
+        )
 
     assert archetypes == ["XL HL Exodia Mage"]
 
@@ -126,12 +128,44 @@ def test_fresh_all_rank_catalog_is_reused_without_firecrawl() -> None:
     scrape = AsyncMock()
     with (
         patch.object(hsguru_decks, "_catalog_rows", return_value=cached_rows),
-        patch.object(hsguru_decks, "scrape_source_with_options", scrape),
+        patch.object(hsguru_decks, "_all_rank_catalog_archetypes", return_value=[]),
+        patch.object(hsguru_decks, "_fetch_catalog_chunks", scrape),
     ):
         rows = asyncio.run(hsguru_decks.refresh_hsguru_deck_catalog("wild", "all"))
 
     assert rows == cached_rows
     scrape.assert_not_awaited()
+
+
+def test_catalog_chunks_limit_each_firecrawl_page_to_five_archetypes() -> None:
+    archetypes = [f"Deck {index}" for index in range(12)]
+
+    assert hsguru_decks._catalog_chunks(archetypes) == [
+        archetypes[:5],
+        archetypes[5:10],
+        archetypes[10:],
+    ]
+
+
+def test_partial_all_rank_catalog_fetches_only_missing_archetypes() -> None:
+    existing = [{"archetype": "Popular Mage", "deck_code": EVENLOCK_CODE}]
+    fetched = [{"archetype": "Rare Mage", "deck_code": SECOND_EVENLOCK_CODE}]
+    fetch_chunks = AsyncMock(return_value=(fetched, 1))
+    with (
+        patch.object(hsguru_decks, "_catalog_rows", return_value=existing),
+        patch.object(
+            hsguru_decks,
+            "_all_rank_catalog_archetypes",
+            side_effect=[["Rare Mage"], []],
+        ),
+        patch.object(hsguru_decks, "_fetch_catalog_chunks", fetch_chunks),
+        patch.object(hsguru_decks, "_write_catalog") as write_catalog,
+    ):
+        rows = asyncio.run(hsguru_decks._refresh_all_rank_catalog("wild"))
+
+    assert {row["archetype"] for row in rows} == {"Popular Mage", "Rare Mage"}
+    fetch_chunks.assert_awaited_once_with("wild", ["Rare Mage"])
+    write_catalog.assert_called_once()
 
 
 def test_exact_filtered_page_accepts_specific_build_title() -> None:

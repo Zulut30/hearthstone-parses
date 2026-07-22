@@ -20,6 +20,9 @@ HSGURU_DECKS_URL = "https://www.hsguru.com/decks"
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _EMPTY_CACHE_TTL_SECONDS = 10 * 60
 _CATALOG_MAX_AGE_SECONDS = 24 * 60 * 60
+_ALL_CATALOG_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+_ALL_CATALOG_BATCH_SIZE = 5
+_ALL_CATALOG_BATCH_CONCURRENCY = 2
 _cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _inflight: dict[str, asyncio.Task[list[dict[str, Any]]]] = {}
 _inflight_lock = asyncio.Lock()
@@ -144,7 +147,10 @@ def _catalog_rows(format_name: str, rank: str = "legend") -> list[dict[str, Any]
         payload = read_json(path) or {}
         fetched_at = datetime.fromisoformat(str(payload.get("fetched_at") or "").replace("Z", "+00:00"))
         age_seconds = (datetime.now(UTC) - fetched_at.astimezone(UTC)).total_seconds()
-        rows = payload.get("data") if age_seconds <= _CATALOG_MAX_AGE_SECONDS else []
+        max_age_seconds = (
+            _ALL_CATALOG_MAX_AGE_SECONDS if rank == "all" else _CATALOG_MAX_AGE_SECONDS
+        )
+        rows = payload.get("data") if age_seconds <= max_age_seconds else []
         valid_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     except (OSError, ValueError, TypeError):
         return []
@@ -186,12 +192,41 @@ def _meta_archetypes(format_name: str) -> list[str]:
     return sorted(archetypes.values(), key=str.casefold)
 
 
-def _all_rank_catalog_archetypes(format_name: str) -> list[str]:
-    legend_keys = {
+def _all_rank_catalog_archetypes(
+    format_name: str,
+    catalog_rows: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    rows = catalog_rows if catalog_rows is not None else _catalog_rows(format_name, "all")
+    catalog_keys = {
         _key(str(row.get("archetype") or row.get("title") or ""))
-        for row in _catalog_rows(format_name, "legend")
+        for row in rows
+        if isinstance(row, dict)
     }
-    return [name for name in _meta_archetypes(format_name) if _key(name) not in legend_keys]
+    return [name for name in _meta_archetypes(format_name) if _key(name) not in catalog_keys]
+
+
+def _catalog_chunks(archetypes: list[str], size: int = _ALL_CATALOG_BATCH_SIZE) -> list[list[str]]:
+    return [archetypes[index:index + size] for index in range(0, len(archetypes), size)]
+
+
+def _merge_catalog_rows(*collections: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = sorted(
+        (row for collection in collections for row in collection if isinstance(row, dict)),
+        key=lambda row: (int(row.get("games") or 0), float(row.get("win_rate") or 0)),
+        reverse=True,
+    )
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        identity = (
+            _key(str(row.get("archetype") or row.get("title") or "")),
+            str(row.get("deck_code") or "").strip(),
+        )
+        if not all(identity) or identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(row)
+    return merged
 
 
 async def _canonicalize_catalog_archetypes(rows: list[dict[str, Any]]) -> None:
@@ -220,29 +255,155 @@ async def _canonicalize_catalog_archetypes(rows: list[dict[str, Any]]) -> None:
             row["archetype"] = canonical
 
 
+async def _fetch_catalog_chunk(
+    format_name: str,
+    archetypes: list[str],
+    *,
+    batch_number: int,
+    min_games: int = 100,
+) -> tuple[list[dict[str, Any]], int]:
+    format_id = 2 if format_name == "standard" else 1
+    params: list[tuple[str, object]] = [
+        ("format", format_id),
+        ("rank", "all"),
+        ("period", "past_30_days"),
+        ("min_games", min_games),
+        ("limit", 200),
+        *(("player_deck_archetype[]", archetype) for archetype in archetypes),
+    ]
+    source = Source(
+        id=f"{_catalog_source_id(format_name, 'all')}_batch_{batch_number}",
+        url=str(httpx.URL(HSGURU_DECKS_URL, params=params)),
+        site="hsguru",
+        category="deck_catalog",
+    )
+    result = await scrape_source_with_options(
+        source,
+        formats=["html"],
+        only_main_content=True,
+        max_age_ms=_CACHE_TTL_SECONDS * 1_000,
+        wait_ms=3_000,
+        timeout_ms=25_000,
+    )
+    if "deck_stats_viewport" not in result.html:
+        raise RuntimeError("HSGuru deck catalog page is incomplete")
+    rows = parse_hsguru_decks_html(
+        result.html,
+        archetype=archetypes[0] if len(archetypes) == 1 else "",
+        format_name=format_name,
+        trust_exact_filter=len(archetypes) == 1,
+    )
+    if len(archetypes) > 1:
+        await _canonicalize_catalog_archetypes(rows)
+    credits = int(result.metadata.get("creditsUsed") or 0)
+    return rows, credits
+
+
+async def _fetch_catalog_chunks(
+    format_name: str,
+    archetypes: list[str],
+    *,
+    size: int = _ALL_CATALOG_BATCH_SIZE,
+    min_games: int = 100,
+) -> tuple[list[dict[str, Any]], int]:
+    chunks = _catalog_chunks(archetypes, size)
+    rows: list[dict[str, Any]] = []
+    credits = 0
+    for offset in range(0, len(chunks), _ALL_CATALOG_BATCH_CONCURRENCY):
+        results = await asyncio.gather(*(
+            _fetch_catalog_chunk(
+                format_name,
+                chunk,
+                batch_number=offset + index + 1,
+                min_games=min_games,
+            )
+            for index, chunk in enumerate(chunks[offset:offset + _ALL_CATALOG_BATCH_CONCURRENCY])
+        ))
+        for batch_rows, batch_credits in results:
+            rows.extend(batch_rows)
+            credits += batch_credits
+    return rows, credits
+
+
+def _write_catalog(
+    format_name: str,
+    rank: str,
+    rows: list[dict[str, Any]],
+    *,
+    credits_used: int,
+    missing_archetypes: list[str] | None = None,
+) -> None:
+    fetched_at = datetime.now(UTC).isoformat()
+    for row in rows:
+        if not row.get("updated_at"):
+            row["updated_at"] = fetched_at
+    source_id = _catalog_source_id(format_name, rank)
+    write_json(dataset_path(source_id), {
+        "source_id": source_id,
+        "state": "ok" if not missing_archetypes else "partial",
+        "fetched_at": fetched_at,
+        "http_status": 200,
+        "final_url": HSGURU_DECKS_URL,
+        "backend": "firecrawl",
+        "credits_used": credits_used,
+        "missing_archetypes": missing_archetypes or [],
+        "data": rows,
+    })
+    _catalog_memory.pop((format_name, rank), None)
+
+
+async def _refresh_all_rank_catalog(format_name: str) -> list[dict[str, Any]]:
+    existing_rows = _catalog_rows(format_name, "all")
+    missing = _all_rank_catalog_archetypes(format_name, existing_rows)
+    if existing_rows and not missing:
+        return existing_rows
+
+    batch_rows, credits = await _fetch_catalog_chunks(format_name, missing)
+    merged = _merge_catalog_rows(existing_rows, batch_rows)
+    unresolved = _all_rank_catalog_archetypes(format_name, merged)
+    if unresolved:
+        # A prolific archetype can fill a shared 200-row page. Exact one-name
+        # retries guarantee that quieter archetypes are not crowded out.
+        retry_rows, retry_credits = await _fetch_catalog_chunks(
+            format_name,
+            unresolved,
+            size=1,
+            min_games=10,
+        )
+        credits += retry_credits
+        merged = _merge_catalog_rows(merged, retry_rows)
+        unresolved = _all_rank_catalog_archetypes(format_name, merged)
+
+    _write_catalog(
+        format_name,
+        "all",
+        merged,
+        credits_used=credits,
+        missing_archetypes=unresolved,
+    )
+    if unresolved:
+        raise RuntimeError(
+            f"HSGuru {format_name} catalog still misses {len(unresolved)} archetypes: "
+            + ", ".join(unresolved)
+        )
+    return merged
+
+
 async def refresh_hsguru_deck_catalog(format_name: str, rank: str = "legend") -> list[dict[str, Any]]:
     if format_name not in {"standard", "wild"}:
         raise ValueError("Unsupported HSGuru catalog format")
     if rank not in {"legend", "all"}:
         raise ValueError("Unsupported HSGuru catalog rank")
-    # Rare all-rank builds change much less often than the six-hour meta slice.
-    # Reuse the local daily catalog between timer runs; this keeps modal lookups
-    # fast without paying for the same two targeted Firecrawl pages four times a day.
-    if rank == "all" and (cached_rows := _catalog_rows(format_name, rank)):
-        return cached_rows
+    if rank == "all":
+        return await _refresh_all_rank_catalog(format_name)
     format_id = 2 if format_name == "standard" else 1
     params: list[tuple[str, object]] = [
         ("format", format_id),
         ("rank", rank),
         ("period", "past_30_days"),
-        ("min_games", 10 if rank == "legend" else 100),
+        ("min_games", 10),
         ("limit", 200),
     ]
-    if rank == "all":
-        archetypes = _all_rank_catalog_archetypes(format_name)
-        if not archetypes:
-            raise RuntimeError(f"No uncovered HSGuru {format_name} archetypes to preload")
-        params.extend(("player_deck_archetype[]", archetype) for archetype in archetypes)
     url = str(httpx.URL(HSGURU_DECKS_URL, params=params))
     source = Source(
         id=_catalog_source_id(format_name, rank),
@@ -268,21 +429,12 @@ async def refresh_hsguru_deck_catalog(format_name: str, rank: str = "legend") ->
     if len(rows) < 20:
         raise RuntimeError(f"HSGuru deck catalog is unexpectedly small: {len(rows)}")
     await _canonicalize_catalog_archetypes(rows)
-    fetched_at = datetime.now(UTC).isoformat()
-    for row in rows:
-        row["updated_at"] = fetched_at
-    path = dataset_path(_catalog_source_id(format_name, rank))
-    write_json(path, {
-        "source_id": _catalog_source_id(format_name, rank),
-        "state": "ok",
-        "fetched_at": fetched_at,
-        "http_status": result.status_code,
-        "final_url": result.final_url,
-        "backend": "firecrawl",
-        "credits_used": result.metadata.get("creditsUsed"),
-        "data": rows,
-    })
-    _catalog_memory.pop((format_name, rank), None)
+    _write_catalog(
+        format_name,
+        rank,
+        rows,
+        credits_used=int(result.metadata.get("creditsUsed") or 0),
+    )
     return rows
 
 
