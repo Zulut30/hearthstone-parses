@@ -102,6 +102,21 @@ def test_hsguru_legend_deck_revision_reads_only_its_catalog() -> None:
     latest_timestamp.assert_not_called()
 
 
+def test_hsguru_all_rank_deck_revision_reads_its_preloaded_catalog() -> None:
+    with (
+        patch("app.public_cache._dataset_timestamp", return_value="all-catalog-revision") as dataset_timestamp,
+        patch("app.public_cache._latest_dataset_timestamp") as latest_timestamp,
+    ):
+        revision = cache_revision(
+            "/v1/constructed/hsguru-deck",
+            b"archetype=XL+HL+Exodia+Mage&format_name=wild&rank=all",
+        )
+
+    assert revision == "all-catalog-revision"
+    dataset_timestamp.assert_called_once_with("hsguru_deck_catalog_wild_all")
+    latest_timestamp.assert_not_called()
+
+
 def _consumer_decks_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row

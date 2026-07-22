@@ -23,7 +23,7 @@ _CATALOG_MAX_AGE_SECONDS = 24 * 60 * 60
 _cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _inflight: dict[str, asyncio.Task[list[dict[str, Any]]]] = {}
 _inflight_lock = asyncio.Lock()
-_catalog_memory: dict[str, tuple[int, list[dict[str, Any]]]] = {}
+_catalog_memory: dict[tuple[str, str], tuple[int, list[dict[str, Any]]]] = {}
 
 _CLASS_NAMES = {
     "deathknight": "DeathKnight",
@@ -126,17 +126,18 @@ def parse_hsguru_decks_html(
     )
 
 
-def _catalog_source_id(format_name: str) -> str:
-    return f"hsguru_deck_catalog_{format_name}_legend"
+def _catalog_source_id(format_name: str, rank: str = "legend") -> str:
+    return f"hsguru_deck_catalog_{format_name}_{rank}"
 
 
-def _catalog_rows(format_name: str) -> list[dict[str, Any]]:
-    path = dataset_path(_catalog_source_id(format_name))
+def _catalog_rows(format_name: str, rank: str = "legend") -> list[dict[str, Any]]:
+    path = dataset_path(_catalog_source_id(format_name, rank))
     try:
         mtime_ns = path.stat().st_mtime_ns
     except OSError:
         return []
-    cached = _catalog_memory.get(format_name)
+    cache_key = (format_name, rank)
+    cached = _catalog_memory.get(cache_key)
     if cached and cached[0] == mtime_ns:
         return cached[1]
     try:
@@ -147,24 +148,50 @@ def _catalog_rows(format_name: str) -> list[dict[str, Any]]:
         valid_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     except (OSError, ValueError, TypeError):
         return []
-    _catalog_memory[format_name] = (mtime_ns, valid_rows)
+    _catalog_memory[cache_key] = (mtime_ns, valid_rows)
     return valid_rows
 
 
 def cached_hsguru_catalog_decks(archetype: str, format_name: str, rank: str) -> list[dict[str, Any]]:
-    if rank != "legend":
+    if rank not in {"legend", "all"}:
         return []
     expected = _key(archetype)
     return sorted(
         [
             row
-            for row in _catalog_rows(format_name)
+            for row in _catalog_rows(format_name, rank)
             if _key(str(row.get("archetype") or row.get("title") or "")) == expected
             and str(row.get("format") or "").strip().lower() == format_name
         ],
         key=lambda row: (int(row.get("games") or 0), float(row.get("win_rate") or 0)),
         reverse=True,
     )
+
+
+def _meta_archetypes(format_name: str) -> list[str]:
+    archetypes: dict[str, str] = {}
+    for rank in ("legend", "diamond_4to1", "top_5k", "top_legend"):
+        try:
+            payload = read_json(dataset_path(f"hsguru_meta_{format_name}_{rank}")) or {}
+        except (OSError, ValueError, TypeError):
+            continue
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        tables = data.get("tables") if isinstance(data, dict) else []
+        for table in tables if isinstance(tables, list) else []:
+            rows = table.get("rows") if isinstance(table, dict) else []
+            for row in rows if isinstance(rows, list) else []:
+                name = str(row[0] if isinstance(row, list) and row else "").strip()
+                if name:
+                    archetypes.setdefault(_key(name), name)
+    return sorted(archetypes.values(), key=str.casefold)
+
+
+def _all_rank_catalog_archetypes(format_name: str) -> list[str]:
+    legend_keys = {
+        _key(str(row.get("archetype") or row.get("title") or ""))
+        for row in _catalog_rows(format_name, "legend")
+    }
+    return [name for name in _meta_archetypes(format_name) if _key(name) not in legend_keys]
 
 
 async def _canonicalize_catalog_archetypes(rows: list[dict[str, Any]]) -> None:
@@ -193,19 +220,27 @@ async def _canonicalize_catalog_archetypes(rows: list[dict[str, Any]]) -> None:
             row["archetype"] = canonical
 
 
-async def refresh_hsguru_deck_catalog(format_name: str) -> list[dict[str, Any]]:
+async def refresh_hsguru_deck_catalog(format_name: str, rank: str = "legend") -> list[dict[str, Any]]:
     if format_name not in {"standard", "wild"}:
         raise ValueError("Unsupported HSGuru catalog format")
+    if rank not in {"legend", "all"}:
+        raise ValueError("Unsupported HSGuru catalog rank")
     format_id = 2 if format_name == "standard" else 1
-    url = str(httpx.URL(HSGURU_DECKS_URL, params=[
+    params: list[tuple[str, object]] = [
         ("format", format_id),
-        ("rank", "legend"),
+        ("rank", rank),
         ("period", "past_30_days"),
-        ("min_games", 10),
+        ("min_games", 10 if rank == "legend" else 100),
         ("limit", 200),
-    ]))
+    ]
+    if rank == "all":
+        archetypes = _all_rank_catalog_archetypes(format_name)
+        if not archetypes:
+            raise RuntimeError(f"No uncovered HSGuru {format_name} archetypes to preload")
+        params.extend(("player_deck_archetype[]", archetype) for archetype in archetypes)
+    url = str(httpx.URL(HSGURU_DECKS_URL, params=params))
     source = Source(
-        id=_catalog_source_id(format_name),
+        id=_catalog_source_id(format_name, rank),
         url=url,
         site="hsguru",
         category="deck_catalog",
@@ -231,9 +266,9 @@ async def refresh_hsguru_deck_catalog(format_name: str) -> list[dict[str, Any]]:
     fetched_at = datetime.now(UTC).isoformat()
     for row in rows:
         row["updated_at"] = fetched_at
-    path = dataset_path(_catalog_source_id(format_name))
+    path = dataset_path(_catalog_source_id(format_name, rank))
     write_json(path, {
-        "source_id": _catalog_source_id(format_name),
+        "source_id": _catalog_source_id(format_name, rank),
         "state": "ok",
         "fetched_at": fetched_at,
         "http_status": result.status_code,
@@ -242,7 +277,7 @@ async def refresh_hsguru_deck_catalog(format_name: str) -> list[dict[str, Any]]:
         "credits_used": result.metadata.get("creditsUsed"),
         "data": rows,
     })
-    _catalog_memory.pop(format_name, None)
+    _catalog_memory.pop((format_name, rank), None)
     return rows
 
 

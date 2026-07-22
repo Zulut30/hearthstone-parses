@@ -14,14 +14,20 @@ from app.hsguru_decks import refresh_hsguru_deck_catalog  # noqa: E402
 
 
 async def main() -> None:
-    standard, wild = await asyncio.gather(
+    standard_legend, wild_legend = await asyncio.gather(
         refresh_hsguru_deck_catalog("standard"),
         refresh_hsguru_deck_catalog("wild"),
     )
+    standard_all, wild_all = await asyncio.gather(
+        refresh_hsguru_deck_catalog("standard", "all"),
+        refresh_hsguru_deck_catalog("wild", "all"),
+    )
     print(json.dumps({
         "state": "ok",
-        "standard_decks": len(standard),
-        "wild_decks": len(wild),
+        "standard_legend_decks": len(standard_legend),
+        "wild_legend_decks": len(wild_legend),
+        "standard_all_decks": len(standard_all),
+        "wild_all_decks": len(wild_all),
     }))
 
 

@@ -88,6 +88,35 @@ def test_broad_catalog_is_not_substituted_for_another_rank() -> None:
         assert hsguru_decks.cached_hsguru_catalog_decks("XL Mill Druid", "wild", "diamond_4to1") == []
 
 
+def test_all_rank_lookup_uses_its_preloaded_catalog() -> None:
+    catalog_row = {
+        "archetype": "XL HL Exodia Mage",
+        "format": "Wild",
+        "deck_code": EVENLOCK_CODE,
+        "games": 412,
+        "win_rate": 54.2,
+    }
+    with patch.object(hsguru_decks, "_catalog_rows", return_value=[catalog_row]) as catalog_rows:
+        rows = hsguru_decks.cached_hsguru_catalog_decks("XL HL Exodia Mage", "wild", "all")
+
+    assert rows == [catalog_row]
+    catalog_rows.assert_called_once_with("wild", "all")
+
+
+def test_all_rank_catalog_targets_meta_archetypes_missing_from_legend() -> None:
+    meta_payload = {
+        "data": {"tables": [{"rows": [["Popular Mage"], ["XL HL Exodia Mage"]]}]},
+    }
+    with (
+        patch.object(hsguru_decks, "dataset_path", side_effect=lambda source_id: source_id),
+        patch.object(hsguru_decks, "read_json", return_value=meta_payload),
+        patch.object(hsguru_decks, "_catalog_rows", return_value=[{"archetype": "Popular Mage"}]),
+    ):
+        archetypes = hsguru_decks._all_rank_catalog_archetypes("wild")
+
+    assert archetypes == ["XL HL Exodia Mage"]
+
+
 def test_exact_filtered_page_accepts_specific_build_title() -> None:
     html = _card("FUU Plague DK", "deathknight", EVENLOCK_CODE, 231, 50.0)
 
