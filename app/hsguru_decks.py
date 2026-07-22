@@ -13,14 +13,17 @@ from bs4 import BeautifulSoup
 from .deck_decode import first_deck_code_from_text
 from .firecrawl_backend import scrape_source_with_options
 from .sources import Source
+from .storage import dataset_path, read_json, write_json
 
 
 HSGURU_DECKS_URL = "https://www.hsguru.com/decks"
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _EMPTY_CACHE_TTL_SECONDS = 10 * 60
+_CATALOG_MAX_AGE_SECONDS = 24 * 60 * 60
 _cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _inflight: dict[str, asyncio.Task[list[dict[str, Any]]]] = {}
 _inflight_lock = asyncio.Lock()
+_catalog_memory: dict[str, tuple[int, list[dict[str, Any]]]] = {}
 
 _CLASS_NAMES = {
     "deathknight": "DeathKnight",
@@ -71,7 +74,7 @@ def parse_hsguru_decks_html(
         deck_text = html.unescape(str(copy_button.get("data-clipboard-text") or "")) if copy_button else ""
         title_match = re.search(r"^###\s+(.+?)\s*$", deck_text, flags=re.MULTILINE)
         title = title_match.group(1).strip() if title_match else ""
-        if not trust_exact_filter and _key(title) != expected_archetype:
+        if expected_archetype and not trust_exact_filter and _key(title) != expected_archetype:
             continue
 
         parsed_format = re.search(r"^#\s*Format:\s*(.+?)\s*$", deck_text, flags=re.MULTILINE)
@@ -121,6 +124,126 @@ def parse_hsguru_decks_html(
         key=lambda row: (int(row.get("games") or 0), float(row.get("win_rate") or 0)),
         reverse=True,
     )
+
+
+def _catalog_source_id(format_name: str) -> str:
+    return f"hsguru_deck_catalog_{format_name}_legend"
+
+
+def _catalog_rows(format_name: str) -> list[dict[str, Any]]:
+    path = dataset_path(_catalog_source_id(format_name))
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return []
+    cached = _catalog_memory.get(format_name)
+    if cached and cached[0] == mtime_ns:
+        return cached[1]
+    try:
+        payload = read_json(path) or {}
+        fetched_at = datetime.fromisoformat(str(payload.get("fetched_at") or "").replace("Z", "+00:00"))
+        age_seconds = (datetime.now(UTC) - fetched_at.astimezone(UTC)).total_seconds()
+        rows = payload.get("data") if age_seconds <= _CATALOG_MAX_AGE_SECONDS else []
+        valid_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+    _catalog_memory[format_name] = (mtime_ns, valid_rows)
+    return valid_rows
+
+
+def cached_hsguru_catalog_decks(archetype: str, format_name: str, rank: str) -> list[dict[str, Any]]:
+    if rank != "legend":
+        return []
+    expected = _key(archetype)
+    return sorted(
+        [
+            row
+            for row in _catalog_rows(format_name)
+            if _key(str(row.get("archetype") or row.get("title") or "")) == expected
+            and str(row.get("format") or "").strip().lower() == format_name
+        ],
+        key=lambda row: (int(row.get("games") or 0), float(row.get("win_rate") or 0)),
+        reverse=True,
+    )
+
+
+async def _canonicalize_catalog_archetypes(rows: list[dict[str, Any]]) -> None:
+    deck_codes = list(dict.fromkeys(
+        str(row.get("deck_code") or "").strip()
+        for row in rows
+        if str(row.get("deck_code") or "").strip()
+    ))
+    if not deck_codes:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                "https://api.hsguru.com/api/deck-info",
+                json={"decks": deck_codes},
+                headers={"User-Agent": "HSDataAPI/1.0"},
+            )
+            response.raise_for_status()
+            info_by_code = response.json()
+    except (httpx.HTTPError, ValueError, TypeError):
+        return
+    for row in rows:
+        info = info_by_code.get(str(row.get("deck_code") or ""), {}) if isinstance(info_by_code, dict) else {}
+        canonical = str(info.get("archetype") or "").strip() if isinstance(info, dict) else ""
+        if canonical:
+            row["archetype"] = canonical
+
+
+async def refresh_hsguru_deck_catalog(format_name: str) -> list[dict[str, Any]]:
+    if format_name not in {"standard", "wild"}:
+        raise ValueError("Unsupported HSGuru catalog format")
+    format_id = 2 if format_name == "standard" else 1
+    url = str(httpx.URL(HSGURU_DECKS_URL, params=[
+        ("format", format_id),
+        ("rank", "legend"),
+        ("period", "past_30_days"),
+        ("min_games", 10),
+        ("limit", 200),
+    ]))
+    source = Source(
+        id=_catalog_source_id(format_name),
+        url=url,
+        site="hsguru",
+        category="deck_catalog",
+    )
+    result = await scrape_source_with_options(
+        source,
+        formats=["html"],
+        only_main_content=True,
+        max_age_ms=_CACHE_TTL_SECONDS * 1_000,
+        wait_ms=3_000,
+        timeout_ms=25_000,
+    )
+    if "deck_stats_viewport" not in result.html:
+        raise RuntimeError("HSGuru deck catalog page is incomplete")
+    rows = parse_hsguru_decks_html(
+        result.html,
+        archetype="",
+        format_name=format_name,
+    )
+    if len(rows) < 20:
+        raise RuntimeError(f"HSGuru deck catalog is unexpectedly small: {len(rows)}")
+    await _canonicalize_catalog_archetypes(rows)
+    fetched_at = datetime.now(UTC).isoformat()
+    for row in rows:
+        row["updated_at"] = fetched_at
+    path = dataset_path(_catalog_source_id(format_name))
+    write_json(path, {
+        "source_id": _catalog_source_id(format_name),
+        "state": "ok",
+        "fetched_at": fetched_at,
+        "http_status": result.status_code,
+        "final_url": result.final_url,
+        "backend": "firecrawl",
+        "credits_used": result.metadata.get("creditsUsed"),
+        "data": rows,
+    })
+    _catalog_memory.pop(format_name, None)
+    return rows
 
 
 async def _fetch_attempt(archetype: str, format_name: str, params: list[tuple[str, object]]) -> list[dict[str, Any]]:
@@ -180,6 +303,9 @@ async def _fetch_exact(archetype: str, format_name: str, rank: str) -> list[dict
 
 
 async def exact_hsguru_decks(archetype: str, format_name: str, rank: str) -> list[dict[str, Any]]:
+    catalog_rows = cached_hsguru_catalog_decks(archetype, format_name, rank)
+    if catalog_rows:
+        return catalog_rows
     cache_key = f"{format_name}:{rank}:{_key(archetype)}"
     now = time.monotonic()
     cached = _cache.get(cache_key)

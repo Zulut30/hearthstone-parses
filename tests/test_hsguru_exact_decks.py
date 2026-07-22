@@ -46,6 +46,48 @@ def test_parser_never_substitutes_another_archetype() -> None:
     assert parse_hsguru_decks_html(html, archetype="Big Shaman", format_name="wild") == []
 
 
+def test_catalog_parser_accepts_multiple_exact_deck_titles() -> None:
+    html = (
+        _card("Evenlock", "warlock", EVENLOCK_CODE, 4227, 61.1)
+        + _card("Mug Shaman", "shaman", SECOND_EVENLOCK_CODE, 999, 59.0)
+    )
+
+    rows = parse_hsguru_decks_html(html, archetype="", format_name="wild")
+
+    assert [row["archetype"] for row in rows] == ["Evenlock", "Mug Shaman"]
+
+
+def test_exact_lookup_prefers_the_broad_legend_catalog() -> None:
+    catalog_row = {
+        "archetype": "XL Mill Druid",
+        "format": "Wild",
+        "deck_code": EVENLOCK_CODE,
+        "games": 319,
+        "win_rate": 53.6,
+    }
+    live_lookup = AsyncMock(return_value=[])
+
+    with (
+        patch.object(hsguru_decks, "cached_hsguru_catalog_decks", return_value=[catalog_row]),
+        patch.object(hsguru_decks, "_fetch_exact", live_lookup),
+    ):
+        rows = asyncio.run(hsguru_decks.exact_hsguru_decks("XL Mill Druid", "wild", "legend"))
+
+    assert rows == [catalog_row]
+    live_lookup.assert_not_awaited()
+
+
+def test_broad_catalog_is_not_substituted_for_another_rank() -> None:
+    with patch.object(hsguru_decks, "_catalog_rows", return_value=[{
+        "archetype": "XL Mill Druid",
+        "format": "Wild",
+        "deck_code": EVENLOCK_CODE,
+        "games": 319,
+        "win_rate": 53.6,
+    }]):
+        assert hsguru_decks.cached_hsguru_catalog_decks("XL Mill Druid", "wild", "diamond_4to1") == []
+
+
 def test_exact_filtered_page_accepts_specific_build_title() -> None:
     html = _card("FUU Plague DK", "deathknight", EVENLOCK_CODE, 231, 50.0)
 
