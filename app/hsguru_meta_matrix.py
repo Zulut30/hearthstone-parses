@@ -21,12 +21,10 @@ HSGURU_META_URL = "https://www.hsguru.com/meta"
 FORMATS = ("standard", "wild")
 RANKS = ("all", "legend", "diamond_4to1", "top_5k", "top_legend")
 PERIODS = ("past_day", "past_3_days", "past_week", "past_2_weeks")
-COINS = ("any_player", "going_first", "on_coin")
+COINS = ("any_player",)
 MIN_GAMES = (100, 250, 500, 1000, 2500, 5000)
 
 _FORMAT_QUERY = {"standard": "2", "wild": "1"}
-_COIN_QUERY = {"going_first": "no", "on_coin": "yes"}
-
 _REQUIRED_HEADERS = {
     "archetype": "archetype",
     "winrate": "winrate",
@@ -56,8 +54,6 @@ def iter_slice_specs() -> tuple[SliceSpec, ...]:
             "period": period,
             "min_games": MIN_GAMES[0],
         }
-        if coin != "any_player":
-            params["player_has_coin"] = _COIN_QUERY[coin]
         query = urlencode(params)
         key = "|".join((format_name, rank, period, coin))
         specs.append(SliceSpec(format_name, rank, period, coin, key, f"{HSGURU_META_URL}?{query}"))
@@ -227,7 +223,7 @@ async def refresh_hsguru_meta_matrix(
     complete = len(slices) == len(specs) and not errors
     structured = {
         "type": "hsguru_meta_matrix",
-        "schema_version": 2,
+        "schema_version": 3,
         "fetched_at": fetched_at,
         "dimensions": {
             "formats": list(FORMATS),

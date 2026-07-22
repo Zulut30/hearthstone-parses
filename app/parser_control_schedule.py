@@ -118,12 +118,17 @@ _SCHEDULES: tuple[_ScheduleSpec, ...] = (
     ),
     _ScheduleSpec(
         id="refresh-hsguru-meta-matrix",
-        label="Ежедневно в 05:30",
+        label="Каждые 6 часов",
         systemd_unit="hs-data-api-docker-refresh-hsguru-meta-matrix.timer",
-        on_calendar=("*-*-* 05:30:00 Europe/Warsaw",),
+        on_calendar=(
+            "*-*-* 00:00:00 Europe/Warsaw",
+            "*-*-* 06:00:00 Europe/Warsaw",
+            "*-*-* 12:00:00 Europe/Warsaw",
+            "*-*-* 18:00:00 Europe/Warsaw",
+        ),
         source_ids=frozenset({"hsguru_meta_matrix"}),
         recurrence="daily",
-        local_times=_times((5, 30)),
+        local_times=_times((0, 0), (6, 0), (12, 0), (18, 0)),
     ),
     _ScheduleSpec(
         id="refresh-hsreplay-meta-firecrawl",

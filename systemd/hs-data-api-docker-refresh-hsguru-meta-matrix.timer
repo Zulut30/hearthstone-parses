@@ -1,9 +1,12 @@
 [Unit]
-Description=Refresh the unified HSGuru meta matrix daily
+Description=Refresh the unified HSGuru meta matrix every six hours
 
 [Timer]
-OnCalendar=*-*-* 05:30:00 Europe/Warsaw
-AccuracySec=10min
+OnCalendar=*-*-* 00:00:00 Europe/Warsaw
+OnCalendar=*-*-* 06:00:00 Europe/Warsaw
+OnCalendar=*-*-* 12:00:00 Europe/Warsaw
+OnCalendar=*-*-* 18:00:00 Europe/Warsaw
+AccuracySec=5min
 Persistent=true
 
 [Install]

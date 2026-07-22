@@ -17,7 +17,7 @@ def hsguru_meta(
     format_name: Literal["standard", "wild"] = Query("standard", alias="format"),
     rank: Literal["all", "legend", "diamond_4to1", "top_5k", "top_legend"] = "all",
     period: Literal["past_day", "past_3_days", "past_week", "past_2_weeks"] = "past_day",
-    coin: Literal["any_player", "going_first", "on_coin"] = "any_player",
+    coin: Literal["any_player"] = "any_player",
     min_games: int = Query(100),
 ) -> dict:
     if min_games not in MIN_GAMES:
