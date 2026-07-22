@@ -19,13 +19,22 @@ from .storage import load_dataset, save_dataset, save_status
 SOURCE_ID = "hsguru_meta_matrix"
 HSGURU_META_URL = "https://www.hsguru.com/meta"
 FORMATS = ("standard", "wild")
-RANKS = ("legend", "diamond_4to1", "top_5k", "top_legend")
+RANKS = ("all", "legend", "diamond_4to1", "top_5k", "top_legend")
 PERIODS = ("past_day", "past_3_days", "past_week", "past_2_weeks")
-COINS = ("going_first", "on_coin")
+COINS = ("any_player", "going_first", "on_coin")
 MIN_GAMES = (100, 250, 500, 1000, 2500, 5000)
 
 _FORMAT_QUERY = {"standard": "2", "wild": "1"}
 _COIN_QUERY = {"going_first": "no", "on_coin": "yes"}
+
+_REQUIRED_HEADERS = {
+    "archetype": "archetype",
+    "winrate": "winrate",
+    "popularity": "popularity",
+    "turns": "turns",
+    "duration": "duration_minutes",
+    "climbing speed": "climbing_speed",
+}
 
 
 @dataclass(frozen=True)
@@ -41,15 +50,15 @@ class SliceSpec:
 def iter_slice_specs() -> tuple[SliceSpec, ...]:
     specs = []
     for format_name, rank, period, coin in product(FORMATS, RANKS, PERIODS, COINS):
-        query = urlencode(
-            {
-                "format": _FORMAT_QUERY[format_name],
-                "rank": rank,
-                "period": period,
-                "player_has_coin": _COIN_QUERY[coin],
-                "min_games": MIN_GAMES[0],
-            }
-        )
+        params = {
+            "format": _FORMAT_QUERY[format_name],
+            "rank": rank,
+            "period": period,
+            "min_games": MIN_GAMES[0],
+        }
+        if coin != "any_player":
+            params["player_has_coin"] = _COIN_QUERY[coin]
+        query = urlencode(params)
         key = "|".join((format_name, rank, period, coin))
         specs.append(SliceSpec(format_name, rank, period, coin, key, f"{HSGURU_META_URL}?{query}"))
     return tuple(specs)
@@ -78,38 +87,72 @@ def _games(value: str) -> int | None:
     return int(digits) if digits else None
 
 
+def _header(value: str) -> str:
+    return re.sub(r"[^a-z]+", " ", value.lower()).strip()
+
+
+def _validate_row(row: dict[str, Any]) -> bool:
+    return (
+        bool(row["archetype"])
+        and isinstance(row["games"], int)
+        and row["games"] >= 0
+        and row["winrate"] is not None
+        and 0 <= row["winrate"] <= 100
+        and row["popularity"] is not None
+        and 0 <= row["popularity"] <= 100
+        and row["turns"] is not None
+        and row["turns"] >= 0
+        and row["duration_minutes"] is not None
+        and row["duration_minutes"] >= 0
+        and row["climbing_speed"] is not None
+    )
+
+
 def parse_meta_rows(page_html: str) -> list[dict[str, Any]]:
     soup = BeautifulSoup(page_html, "lxml")
     selected = None
+    indexes: dict[str, int] = {}
     for table in soup.find_all("table"):
-        headers = [cell.get_text(" ", strip=True).lower() for cell in table.find_all("th")]
-        if "archetype" in headers and "popularity" in headers:
+        header_row = table.find("thead") or table.find("tr")
+        headers = [_header(cell.get_text(" ", strip=True)) for cell in header_row.find_all("th")]
+        candidate = {
+            field: headers.index(label)
+            for label, field in _REQUIRED_HEADERS.items()
+            if label in headers
+        }
+        if len(candidate) == len(_REQUIRED_HEADERS):
             selected = table
+            indexes = candidate
             break
     if selected is None:
         return []
 
     rows: list[dict[str, Any]] = []
     table_rows = selected.select("tbody tr") or selected.find_all("tr")[1:]
-    for tr in table_rows:
+    for row_number, tr in enumerate(table_rows, start=1):
         cells = [cell.get_text(" ", strip=True) for cell in tr.find_all(["th", "td"])]
-        if len(cells) < 6:
-            continue
-        archetype = re.sub(r"\s+", " ", cells[0]).strip()
-        games = _games(cells[2])
+        if len(cells) <= max(indexes.values()):
+            raise ValueError(f"HSGuru meta row {row_number} has missing columns")
+        archetype = re.sub(r"\s+", " ", cells[indexes["archetype"]]).strip()
+        popularity_cell = cells[indexes["popularity"]]
+        games = _games(popularity_cell)
         if not archetype or games is None:
-            continue
-        rows.append(
-            {
-                "archetype": archetype,
-                "winrate": _number(cells[1]),
-                "popularity": _number(cells[2]),
-                "games": games,
-                "turns": _number(cells[3]),
-                "duration_minutes": _number(cells[4]),
-                "climbing_speed": _number(cells[5]),
-            }
-        )
+            raise ValueError(f"HSGuru meta row {row_number} has no archetype or game count")
+        row = {
+            "archetype": archetype,
+            "winrate": _number(cells[indexes["winrate"]]),
+            "popularity": _number(popularity_cell),
+            "games": games,
+            "turns": _number(cells[indexes["turns"]]),
+            "duration_minutes": _number(cells[indexes["duration_minutes"]]),
+            "climbing_speed": _number(cells[indexes["climbing_speed"]]),
+        }
+        if not _validate_row(row):
+            raise ValueError(f"HSGuru meta row {row_number} has invalid statistics")
+        rows.append(row)
+    archetypes = [row["archetype"].casefold() for row in rows]
+    if len(archetypes) != len(set(archetypes)):
+        raise ValueError("HSGuru meta table contains duplicate archetypes")
     return rows
 
 
@@ -184,7 +227,7 @@ async def refresh_hsguru_meta_matrix(
     complete = len(slices) == len(specs) and not errors
     structured = {
         "type": "hsguru_meta_matrix",
-        "schema_version": 1,
+        "schema_version": 2,
         "fetched_at": fetched_at,
         "dimensions": {
             "formats": list(FORMATS),
@@ -226,7 +269,10 @@ async def refresh_hsguru_meta_matrix(
             "fetched_at": fetched_at,
             "http_status": 200 if complete else None,
             "backend": "firecrawl",
-            "detail": f"HSGuru matrix: {len(slices)}/64 slices, {len(slices) * len(MIN_GAMES)}/384 logical slices.",
+            "detail": (
+                f"HSGuru matrix: {len(slices)}/{len(specs)} slices, "
+                f"{len(slices) * len(MIN_GAMES)}/{len(specs) * len(MIN_GAMES)} logical slices."
+            ),
             "errors": errors[:20],
             "serving_cached_dataset": bool(cached_dataset) and not complete,
             "last_refresh_state": SourceState.OK if complete else SourceState.PARTIAL,
