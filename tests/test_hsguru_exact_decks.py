@@ -77,15 +77,44 @@ def test_exact_lookup_prefers_the_broad_legend_catalog() -> None:
     live_lookup.assert_not_awaited()
 
 
-def test_broad_catalog_is_not_substituted_for_another_rank() -> None:
-    with patch.object(hsguru_decks, "_catalog_rows", return_value=[{
+def test_all_rank_catalog_supplies_deck_code_without_mismatched_rank_stats() -> None:
+    all_rank_row = {
         "archetype": "XL Mill Druid",
         "format": "Wild",
         "deck_code": EVENLOCK_CODE,
         "games": 319,
         "win_rate": 53.6,
-    }]):
-        assert hsguru_decks.cached_hsguru_catalog_decks("XL Mill Druid", "wild", "diamond_4to1") == []
+    }
+    with patch.object(hsguru_decks, "_catalog_rows", return_value=[all_rank_row]) as catalog_rows:
+        rows = hsguru_decks.cached_hsguru_catalog_decks(
+            "XL Mill Druid",
+            "wild",
+            "diamond_4to1",
+        )
+
+    assert rows == [{
+        **all_rank_row,
+        "games": None,
+        "score": None,
+        "win_rate": None,
+        "sample_rank": "all",
+    }]
+    catalog_rows.assert_called_once_with("wild", "all")
+
+
+def test_legend_catalog_is_preferred_before_all_rank_fallback() -> None:
+    legend_row = {
+        "archetype": "XL Mill Druid",
+        "format": "Wild",
+        "deck_code": EVENLOCK_CODE,
+        "games": 319,
+        "win_rate": 53.6,
+    }
+    with patch.object(hsguru_decks, "_catalog_rows", return_value=[legend_row]) as catalog_rows:
+        rows = hsguru_decks.cached_hsguru_catalog_decks("XL Mill Druid", "wild", "legend")
+
+    assert rows == [legend_row]
+    catalog_rows.assert_called_once_with("wild", "legend")
 
 
 def test_all_rank_lookup_uses_its_preloaded_catalog() -> None:

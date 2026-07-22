@@ -159,16 +159,33 @@ def _catalog_rows(format_name: str, rank: str = "legend") -> list[dict[str, Any]
 
 
 def cached_hsguru_catalog_decks(archetype: str, format_name: str, rank: str) -> list[dict[str, Any]]:
-    if rank not in {"legend", "all"}:
-        return []
     expected = _key(archetype)
-    return sorted(
-        [
+    def matching_rows(catalog_rank: str) -> list[dict[str, Any]]:
+        return [
             row
-            for row in _catalog_rows(format_name, rank)
+            for row in _catalog_rows(format_name, catalog_rank)
             if _key(str(row.get("archetype") or row.get("title") or "")) == expected
             and str(row.get("format") or "").strip().lower() == format_name
-        ],
+        ]
+
+    primary_rank = rank if rank in {"legend", "all"} else ""
+    rows = matching_rows(primary_rank) if primary_rank else []
+    if not rows and rank != "all":
+        # Deck composition is safe to reuse across rank filters, while its
+        # sample statistics are not. Return the all-rank code immediately but
+        # clear rank-specific metrics so consumers never display mismatched WR.
+        rows = [
+            {
+                **row,
+                "games": None,
+                "score": None,
+                "win_rate": None,
+                "sample_rank": "all",
+            }
+            for row in matching_rows("all")
+        ]
+    return sorted(
+        rows,
         key=lambda row: (int(row.get("games") or 0), float(row.get("win_rate") or 0)),
         reverse=True,
     )

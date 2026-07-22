@@ -89,8 +89,9 @@ def cache_revision(path: str, query_string: bytes) -> str:
         query = parse_qs(query_string.decode("utf-8", errors="ignore"))
         format_name = (query.get("format_name") or ["standard"])[0]
         rank = (query.get("rank") or ["legend"])[0]
-        if format_name in {"standard", "wild"} and rank in {"legend", "all"}:
-            source_id = f"hsguru_deck_catalog_{format_name}_{rank}"
+        if format_name in {"standard", "wild"}:
+            catalog_rank = rank if rank in {"legend", "all"} else "all"
+            source_id = f"hsguru_deck_catalog_{format_name}_{catalog_rank}"
             return _dataset_timestamp(source_id) or "not-cached"
     db_revision = _db_revision(path)
     if db_revision:
