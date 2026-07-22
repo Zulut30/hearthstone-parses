@@ -343,6 +343,18 @@ SOURCES: tuple[Source, ...] = (
     # Refreshed by dedicated systemd timers, NOT by the generic scrape planner
     # (fetcher tiers). stale_hours = timer period + ~24h slack.
     Source(
+        id="hsguru_meta_matrix",
+        url="https://www.hsguru.com/meta",
+        site="hsguru",
+        category="meta_matrix",
+        description=(
+            "Unified Standard/Wild HSGuru matrix refreshed daily through Firecrawl: "
+            "four ranks, four periods, two coin states and six locally derived min-games filters."
+        ),
+        stale_hours=36,
+        kind="pipeline",
+    ),
+    Source(
         id="hsreplay_battlegrounds_hero_details",
         url="https://hsreplay.net/battlegrounds/heroes/",
         site="hsreplay",

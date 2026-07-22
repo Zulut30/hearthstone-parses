@@ -19,7 +19,7 @@ from .sources import SOURCE_BY_ID
 
 
 SCHEDULE_INVENTORY_SCHEMA_VERSION = 2
-SCHEDULE_INVENTORY_VERSION = "2026-07-21.2"
+SCHEDULE_INVENTORY_VERSION = "2026-07-22.1"
 SCHEDULE_TIMEZONE = "Europe/Warsaw"
 
 _SYSTEMCTL_SEARCH_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -115,6 +115,15 @@ _SCHEDULES: tuple[_ScheduleSpec, ...] = (
         source_ids=frozenset({"hsguru_streamer_decks_legend_1000"}),
         recurrence="daily",
         local_times=_times((3, 15), (9, 15), (15, 15), (21, 15)),
+    ),
+    _ScheduleSpec(
+        id="refresh-hsguru-meta-matrix",
+        label="Ежедневно в 05:30",
+        systemd_unit="hs-data-api-docker-refresh-hsguru-meta-matrix.timer",
+        on_calendar=("*-*-* 05:30:00 Europe/Warsaw",),
+        source_ids=frozenset({"hsguru_meta_matrix"}),
+        recurrence="daily",
+        local_times=_times((5, 30)),
     ),
     _ScheduleSpec(
         id="refresh-hsreplay-meta-firecrawl",

@@ -22,6 +22,7 @@ admin/ops endpoints и правила авторизации находятся 
 | Проверить наличие cache и состояние всех источников | `GET /v1/system/datasets` |
 | Найти колоды разных источников | `GET /v1/constructed/decks` |
 | Получить актуальные HSReplay-архетипы | `GET /v1/constructed/archetypes` |
+| Получить фильтрованный срез меты HSGuru | `GET /v1/hsguru/meta` |
 | Получить BG-героев solo/duos | `GET /v1/bg/heroes` |
 | Получить BG-существ и их историю | `GET /v1/bg/minions` и `/api/db/bg/minions/*` |
 | Получить классы Арены | `GET /v1/arena/classes` |
@@ -193,6 +194,7 @@ GET /v1/constructed/archetypes
 | `hsguru_meta_standard_diamond_4to1` | Standard Diamond 4–1. |
 | `hsguru_meta_standard_top_5k` | Standard Top 5K. |
 | `hsguru_meta_standard_top_legend` | Standard Top Legend. |
+| `hsguru_meta_matrix` | Unified daily Firecrawl matrix: Standard/Wild, four ranks, four periods, Going First/On Coin, with local 100–5000 game thresholds. |
 | `hsguru_meta_wild_legend` | Wild Legend. |
 | `hsguru_meta_wild_diamond_4to1` | Wild Diamond 4–1. |
 | `hsguru_meta_wild_top_5k` | Wild Top 5K. |

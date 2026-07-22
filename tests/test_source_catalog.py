@@ -21,4 +21,4 @@ def test_generated_source_catalog_is_current_and_complete() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     catalog = (ROOT / "docs" / "SOURCES.md").read_text(encoding="utf-8")
     assert catalog.count("| `") == len(SOURCES)
-    assert "44 scrape + 2 pipeline" in catalog
+    assert "44 scrape + 3 pipeline" in catalog

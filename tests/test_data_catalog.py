@@ -19,6 +19,7 @@ def test_data_catalog_covers_every_registered_source_and_public_api_family() -> 
         "/datasets/{source_id}",
         "/v1/constructed/decks",
         "/v1/constructed/archetypes",
+        "/v1/hsguru/meta",
         "/v1/bg/heroes",
         "/v1/bg/minions",
         "/v1/arena/classes",

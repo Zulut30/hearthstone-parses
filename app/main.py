@@ -22,6 +22,7 @@ from .routers.constructed import router as constructed_v1_router
 from .routers.bg import router as bg_v1_router
 from .routers.arena import router as arena_v1_router
 from .routers.system import router as system_v1_router
+from .routers.hsguru_meta import router as hsguru_meta_v1_router
 from .public_cache import PublicCacheMiddleware
 from .http_observability import RequestObservabilityMiddleware, generic_server_error
 
@@ -60,6 +61,7 @@ app.include_router(constructed_v1_router)
 app.include_router(bg_v1_router)
 app.include_router(arena_v1_router)
 app.include_router(system_v1_router)
+app.include_router(hsguru_meta_v1_router)
 
 
 @app.on_event("startup")
@@ -1089,6 +1091,15 @@ async def refresh_bg_hero_details(
     from .hsreplay_bg_hero_details import refresh_bg_hero_details as refresh_details
 
     return await refresh_details(limit=limit, concurrency=concurrency, mmr=mmr, time_range=time_range)
+
+
+@app.post("/admin/refresh/hsguru-meta-matrix", dependencies=[Depends(require_admin)])
+async def refresh_hsguru_meta_matrix(
+    concurrency: int = Query(2, ge=1, le=5),
+) -> dict:
+    from .hsguru_meta_matrix import refresh_hsguru_meta_matrix as refresh_matrix
+
+    return await refresh_matrix(concurrency=concurrency)
 
 
 @app.post("/admin/capture/bg-compositions-screenshot", dependencies=[Depends(require_admin)])

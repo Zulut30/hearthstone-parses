@@ -1291,7 +1291,11 @@ def _run_result_summary(result: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _run_pipeline_source(source_id: str) -> dict[str, Any]:
-    if source_id == "hsreplay_archetypes":
+    if source_id == "hsguru_meta_matrix":
+        from .hsguru_meta_matrix import refresh_hsguru_meta_matrix
+
+        result = await refresh_hsguru_meta_matrix()
+    elif source_id == "hsreplay_archetypes":
         from .hsreplay_archetypes_db import (
             export_latest_archetypes_json,
             refresh_hsreplay_archetype_database,
@@ -1339,6 +1343,7 @@ async def _run_pipeline_source(source_id: str) -> dict[str, Any]:
     rows_total = _result_rows_total(result)
     if rows_total is None:
         pipeline_row_fields = {
+            "hsguru_meta_matrix": ("logical_slices",),
             "hsreplay_archetypes": ("archetypes_ok",),
             "hsreplay_battlegrounds_hero_details": ("heroes",),
             "hsreplay_battlegrounds_minions": ("minions_ok", "minions_total"),

@@ -150,6 +150,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Skip this scheduled pipeline when its admin section is disabled.",
     )
+    hsguru_matrix = sub.add_parser(
+        "refresh-hsguru-meta-matrix",
+        help="Refresh the unified HSGuru Standard/Wild meta matrix through Firecrawl.",
+    )
+    hsguru_matrix.add_argument("--concurrency", type=int, default=2)
+    hsguru_matrix.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Skip this scheduled pipeline when its admin section is disabled.",
+    )
     sub.add_parser(
         "capture-bg-compositions-screenshot",
         help="Capture a Firecrawl screenshot of HSReplay Battlegrounds compositions.",
@@ -458,6 +468,25 @@ def main(argv: list[str] | None = None) -> int:
                 mmr=args.mmr,
                 time_range=args.time_range,
             )
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "refresh-hsguru-meta-matrix":
+        if args.scheduled:
+            from .parser_control import is_source_scheduled_enabled
+
+            if not is_source_scheduled_enabled("hsguru_meta_matrix"):
+                print(json.dumps({
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "section_disabled",
+                    "source_id": "hsguru_meta_matrix",
+                }, ensure_ascii=False, indent=2))
+                return 0
+        from .hsguru_meta_matrix import refresh_hsguru_meta_matrix
+
+        result = asyncio.run(
+            refresh_hsguru_meta_matrix(concurrency=max(1, min(args.concurrency, 5)))
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1

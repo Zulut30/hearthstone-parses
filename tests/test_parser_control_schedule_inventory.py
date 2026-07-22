@@ -66,6 +66,9 @@ def test_schedule_inventory_calculates_nominal_next_runs_in_utc() -> None:
     assert _schedule(inventory, "refresh-streamer-decks")["nextRunAt"] == (
         "2026-07-21T01:15:00+00:00"
     )
+    assert _schedule(inventory, "refresh-hsguru-meta-matrix")["nextRunAt"] == (
+        "2026-07-21T03:30:00+00:00"
+    )
     assert _schedule(inventory, "refresh-hsreplay-archetypes")["nextRunAt"] == (
         "2026-07-23T01:20:00+00:00"
     )

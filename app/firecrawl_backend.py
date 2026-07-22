@@ -38,18 +38,22 @@ def _scrape_sync(
     formats: list[Any] | None = None,
     only_main_content: bool = True,
     headers: dict[str, str] | None = None,
+    max_age_ms: int | None = None,
+    wait_ms: int | None = None,
+    timeout_ms: int | None = None,
 ) -> FirecrawlScrape:
     api_key = firecrawl_api_key()
     if not api_key:
         raise RuntimeError("FIRECRAWL_API_KEY/HS_FIRECRAWL_API_KEY is not configured")
 
+    effective_timeout_ms = firecrawl_timeout_ms() if timeout_ms is None else timeout_ms
     payload = {
         "url": source.url,
         "formats": formats or ["html", "markdown"],
         "onlyMainContent": only_main_content,
-        "maxAge": firecrawl_max_age_ms(),
-        "waitFor": firecrawl_wait_ms(),
-        "timeout": firecrawl_timeout_ms(),
+        "maxAge": firecrawl_max_age_ms() if max_age_ms is None else max_age_ms,
+        "waitFor": firecrawl_wait_ms() if wait_ms is None else wait_ms,
+        "timeout": effective_timeout_ms,
     }
     if headers:
         payload["headers"] = headers
@@ -62,7 +66,7 @@ def _scrape_sync(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=(firecrawl_timeout_ms() / 1000) + 30) as response:
+    with urllib.request.urlopen(request, timeout=(effective_timeout_ms / 1000) + 30) as response:
         body = json.loads(response.read().decode("utf-8"))
     if not body.get("success"):
         raise RuntimeError(f"Firecrawl scrape failed: {body}")
@@ -94,6 +98,9 @@ async def scrape_source_with_options(
     formats: list[Any] | None = None,
     only_main_content: bool = True,
     headers: dict[str, str] | None = None,
+    max_age_ms: int | None = None,
+    wait_ms: int | None = None,
+    timeout_ms: int | None = None,
 ) -> FirecrawlScrape:
     return await asyncio.to_thread(
         _scrape_sync,
@@ -101,4 +108,7 @@ async def scrape_source_with_options(
         formats=formats,
         only_main_content=only_main_content,
         headers=headers,
+        max_age_ms=max_age_ms,
+        wait_ms=wait_ms,
+        timeout_ms=timeout_ms,
     )

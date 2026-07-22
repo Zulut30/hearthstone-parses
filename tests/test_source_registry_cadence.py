@@ -1,7 +1,7 @@
 """Phase 5: single source registry with per-source freshness cadence.
 
 Covers:
-- Source dataclass defaults (kind="scrape", stale_hours=None) and the two
+- Source dataclass defaults (kind="scrape", stale_hours=None) and the three
   registered pipeline entries with their timer-derived cadences;
 - find_stale_sources honoring per-source stale_hours;
 - freshness.ok in build_summary no longer special-casing orphan statuses;
@@ -28,7 +28,11 @@ from app.source_tiers import (
 from app.sources import SOURCE_BY_ID, SOURCES
 from app.stale_monitor import find_stale_sources
 
-PIPELINE_IDS = ("hsreplay_battlegrounds_hero_details", "hsreplay_archetypes")
+PIPELINE_IDS = (
+    "hsguru_meta_matrix",
+    "hsreplay_battlegrounds_hero_details",
+    "hsreplay_archetypes",
+)
 
 
 def _iso_hours_ago(hours: float) -> str:
@@ -58,15 +62,17 @@ class SourceRegistryDefaultsTest(unittest.TestCase):
         self.assertEqual(archetypes.category, "meta")
         self.assertEqual(archetypes.url, "https://hsreplay.net/meta/")
 
-    def test_registry_grew_by_two_pipeline_sources(self) -> None:
+    def test_registry_has_three_pipeline_sources(self) -> None:
         pipeline = [s for s in SOURCES if s.kind == "pipeline"]
         self.assertEqual(sorted(s.id for s in pipeline), sorted(PIPELINE_IDS))
         self.assertEqual(len(SOURCES), len({s.id for s in SOURCES}))
 
     def test_pipeline_ids_match_module_constants(self) -> None:
+        from app.hsguru_meta_matrix import SOURCE_ID as hsguru_matrix_source
         from app.hsreplay_archetypes_db import SOURCE as archetypes_source
         from app.hsreplay_bg_hero_details import SOURCE_ID as hero_details_source
 
+        self.assertIn(hsguru_matrix_source, SOURCE_BY_ID)
         self.assertIn(archetypes_source, SOURCE_BY_ID)
         self.assertIn(hero_details_source, SOURCE_BY_ID)
 
