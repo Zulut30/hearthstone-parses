@@ -27,7 +27,7 @@ Sites: `firestone` (7), `heartharena` (1), `hearthstone-decks` (1), `hsguru` (12
 | `hsguru_meta_wild_legend` | hsguru | meta | scrape | global | HSGuru meta, format=1, legend (min_games=100 for full table SSR). |
 | `hsguru_meta_wild_top_5k` | hsguru | meta | scrape | global | HSGuru meta, format=1, min_games=100, top 5k. |
 | `hsguru_meta_wild_top_legend` | hsguru | meta | scrape | global | HSGuru meta, format=1, min_games=100, top legend. |
-| `hsguru_meta_matrix` | hsguru | meta_matrix | pipeline | 36 | Unified Standard/Wild HSGuru matrix refreshed daily through Firecrawl: five ranks (including ALL), four periods, three coin states (including Any Player) and six locally derived min-games filters. |
+| `hsguru_meta_matrix` | hsguru | meta_matrix | pipeline | 36 | Unified Standard/Wild HSGuru matrix refreshed every six hours through Firecrawl: five ranks (including ALL), four periods, Any Player and six locally derived min-games filters. |
 | `hsguru_streamer_decks_legend_1000` | hsguru | streamer_decks | scrape | global | Streamer decks filtered to top legend, last 72 hours, limit 100. |
 | `hsreplay_arena` | hsreplay | arena | scrape | global | HSReplay Arena overview. |
 | `hsreplay_arena_cards_advanced` | hsreplay | arena | scrape | global | HSReplay Arena cards. Fragment is client-side. |
