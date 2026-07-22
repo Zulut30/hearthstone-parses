@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 from app import hsguru_decks
+from app.firecrawl_backend import FirecrawlScrape
 from app.hsguru_decks import parse_hsguru_decks_html
 
 
@@ -73,3 +74,45 @@ def test_lookup_continues_after_a_failed_fresh_slice() -> None:
 
     assert rows == [exact_row]
     assert lookup.await_count == 2
+
+
+def test_all_rank_lookup_uses_one_broad_slice() -> None:
+    lookup = AsyncMock(return_value=[])
+
+    with patch.object(hsguru_decks, "_fetch_attempt", lookup):
+        rows = asyncio.run(hsguru_decks._fetch_exact("Harold DH", "standard", "all"))
+
+    assert rows == []
+    lookup.assert_awaited_once_with(
+        "Harold DH",
+        "standard",
+        [("rank", "all"), ("period", "past_30_days"), ("min_games", 10)],
+    )
+
+
+def test_fetch_attempt_uses_cached_firecrawl_html() -> None:
+    scrape = AsyncMock(return_value=FirecrawlScrape(
+        html=(
+            '<div class="deck_stats_viewport">'
+            + _card("Harold DH", "demonhunter", EVENLOCK_CODE, 617, 61.6).replace("# Format: Wild", "# Format: Standard")
+            + '</div>'
+        ),
+        markdown="",
+        screenshot=None,
+        metadata={"creditsUsed": 1},
+        status_code=200,
+        final_url="https://www.hsguru.com/decks",
+    ))
+
+    with patch.object(hsguru_decks, "scrape_source_with_options", scrape):
+        rows = asyncio.run(hsguru_decks._fetch_attempt(
+            "Harold DH",
+            "standard",
+            [("rank", "all"), ("period", "past_30_days"), ("min_games", 10)],
+        ))
+
+    assert len(rows) == 1
+    assert rows[0]["archetype"] == "Harold DH"
+    assert rows[0]["games"] == 617
+    assert scrape.await_args.kwargs["max_age_ms"] == 6 * 60 * 60 * 1_000
+    assert scrape.await_args.kwargs["timeout_ms"] == 25_000

@@ -11,8 +11,8 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .deck_decode import first_deck_code_from_text
-from .scrapers.http_resilience import build_fetch_headers, resilient_http_get
-from .scrapers.proxy import burn_proxy_session, httpx_client_kwargs
+from .firecrawl_backend import scrape_source_with_options
+from .sources import Source
 
 
 HSGURU_DECKS_URL = "https://www.hsguru.com/decks"
@@ -135,43 +135,36 @@ async def _fetch_attempt(archetype: str, format_name: str, params: list[tuple[st
             ],
         )
     )
-    source_id = "hsguru_exact_deck"
-    last_error: Exception | None = None
-    for proxy_attempt in range(2):
-        try:
-            body, _status, _final_url = await resilient_http_get(
-                url,
-                source_id=source_id,
-                headers=build_fetch_headers(url),
-                # Recreate kwargs after every failure so the burned sticky session
-                # really receives a new residential IP on the next request.
-                client_kwargs=httpx_client_kwargs(source_id, page_url=url, timeout=30.0),
-                max_attempts=1,
-                on_session_burn=lambda: burn_proxy_session(source_id, page_url=url, reason="exact-deck-blocked"),
-                validate_body=lambda status, text: status == 200 and "deck_stats_viewport" in text,
-            )
-            return parse_hsguru_decks_html(
-                body,
-                archetype=archetype,
-                format_name=format_name,
-                trust_exact_filter=True,
-            )
-        except Exception as exc:
-            last_error = exc
-            if proxy_attempt == 0:
-                burn_proxy_session(source_id, page_url=url, reason="exact-deck-request-failed")
-    assert last_error is not None
-    raise last_error
+    source = Source(
+        id="hsguru_exact_deck",
+        url=url,
+        site="hsguru",
+        category="exact_deck",
+    )
+    result = await scrape_source_with_options(
+        source,
+        formats=["html"],
+        only_main_content=True,
+        # Firecrawl can reuse a recent identical lookup across API restarts. The
+        # in-process result cache below still controls the public response TTL.
+        max_age_ms=_CACHE_TTL_SECONDS * 1_000,
+        wait_ms=3_000,
+        timeout_ms=25_000,
+    )
+    if "deck_stats_viewport" not in result.html:
+        raise RuntimeError("HSGuru exact deck page is incomplete")
+    return parse_hsguru_decks_html(
+        result.html,
+        archetype=archetype,
+        format_name=format_name,
+        trust_exact_filter=True,
+    )
 
 
 async def _fetch_exact(archetype: str, format_name: str, rank: str) -> list[dict[str, Any]]:
-    attempts = [
-        [("rank", rank), ("min_games", 50)],
-        [("rank", rank), ("min_games", 10)],
-        [("rank", "all"), ("period", "past_week"), ("min_games", 50)],
-        [("rank", "all"), ("period", "past_week"), ("min_games", 10)],
-        [("rank", "all"), ("period", "past_30_days"), ("min_games", 10)],
-    ]
+    attempts = [[("rank", rank), ("period", "past_30_days"), ("min_games", 10)]]
+    if rank != "all":
+        attempts.append([("rank", "all"), ("period", "past_30_days"), ("min_games", 10)])
     last_error: Exception | None = None
     for params in attempts:
         try:
