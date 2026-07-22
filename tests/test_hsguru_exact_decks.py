@@ -117,6 +117,23 @@ def test_all_rank_catalog_targets_meta_archetypes_missing_from_legend() -> None:
     assert archetypes == ["XL HL Exodia Mage"]
 
 
+def test_fresh_all_rank_catalog_is_reused_without_firecrawl() -> None:
+    cached_rows = [{
+        "archetype": "XL HL Exodia Mage",
+        "format": "Wild",
+        "deck_code": EVENLOCK_CODE,
+    }]
+    scrape = AsyncMock()
+    with (
+        patch.object(hsguru_decks, "_catalog_rows", return_value=cached_rows),
+        patch.object(hsguru_decks, "scrape_source_with_options", scrape),
+    ):
+        rows = asyncio.run(hsguru_decks.refresh_hsguru_deck_catalog("wild", "all"))
+
+    assert rows == cached_rows
+    scrape.assert_not_awaited()
+
+
 def test_exact_filtered_page_accepts_specific_build_title() -> None:
     html = _card("FUU Plague DK", "deathknight", EVENLOCK_CODE, 231, 50.0)
 

@@ -225,6 +225,11 @@ async def refresh_hsguru_deck_catalog(format_name: str, rank: str = "legend") ->
         raise ValueError("Unsupported HSGuru catalog format")
     if rank not in {"legend", "all"}:
         raise ValueError("Unsupported HSGuru catalog rank")
+    # Rare all-rank builds change much less often than the six-hour meta slice.
+    # Reuse the local daily catalog between timer runs; this keeps modal lookups
+    # fast without paying for the same two targeted Firecrawl pages four times a day.
+    if rank == "all" and (cached_rows := _catalog_rows(format_name, rank)):
+        return cached_rows
     format_id = 2 if format_name == "standard" else 1
     params: list[tuple[str, object]] = [
         ("format", format_id),
