@@ -349,7 +349,7 @@ SOURCES: tuple[Source, ...] = (
         category="meta_matrix",
         description=(
             "Unified Standard/Wild HSGuru matrix refreshed every six hours through Firecrawl: "
-            "five ranks (including ALL), four periods, Any Player "
+            "five ranks (including ALL), five periods (including the latest six hours), Any Player "
             "and six locally derived min-games filters."
         ),
         stale_hours=36,

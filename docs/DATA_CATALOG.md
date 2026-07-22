@@ -194,7 +194,7 @@ GET /v1/constructed/archetypes
 | `hsguru_meta_standard_diamond_4to1` | Standard Diamond 4–1. |
 | `hsguru_meta_standard_top_5k` | Standard Top 5K. |
 | `hsguru_meta_standard_top_legend` | Standard Top Legend. |
-| `hsguru_meta_matrix` | Unified six-hourly Firecrawl matrix: Standard/Wild, five ranks (including ALL), four periods, Any Player, with local 100–5000 game thresholds. |
+| `hsguru_meta_matrix` | Unified six-hourly Firecrawl matrix: Standard/Wild, five ranks (including ALL), five periods (including the latest six hours), Any Player, with local 100–5000 game thresholds. |
 | `hsguru_meta_wild_legend` | Wild Legend. |
 | `hsguru_meta_wild_diamond_4to1` | Wild Diamond 4–1. |
 | `hsguru_meta_wild_top_5k` | Wild Top 5K. |

@@ -16,7 +16,9 @@ router = APIRouter(prefix="/v1/hsguru", tags=["v1-hsguru"])
 def hsguru_meta(
     format_name: Literal["standard", "wild"] = Query("standard", alias="format"),
     rank: Literal["all", "legend", "diamond_4to1", "top_5k", "top_legend"] = "all",
-    period: Literal["past_day", "past_3_days", "past_week", "past_2_weeks"] = "past_day",
+    period: Literal[
+        "past_6_hours", "past_day", "past_3_days", "past_week", "past_2_weeks"
+    ] = "past_day",
     coin: Literal["any_player"] = "any_player",
     min_games: int = Query(100),
 ) -> dict:

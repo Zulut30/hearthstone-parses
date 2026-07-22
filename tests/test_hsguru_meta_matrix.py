@@ -27,18 +27,19 @@ HSGURU_TABLE = """
 """
 
 
-def test_matrix_has_40_remote_slices_and_six_local_min_game_filters() -> None:
+def test_matrix_has_50_remote_slices_and_six_local_min_game_filters() -> None:
     from app.hsguru_meta_matrix import MIN_GAMES, iter_slice_specs
 
     specs = list(iter_slice_specs())
 
     assert MIN_GAMES == (100, 250, 500, 1000, 2500, 5000)
     assert 7500 not in MIN_GAMES
-    assert len(specs) == 40
-    assert len({spec.key for spec in specs}) == 40
+    assert len(specs) == 50
+    assert len({spec.key for spec in specs}) == 50
     assert all("min_games=100" in spec.url for spec in specs)
     assert all("7500" not in spec.url for spec in specs)
     assert {spec.period for spec in specs} == {
+        "past_6_hours",
         "past_day",
         "past_3_days",
         "past_week",
@@ -111,7 +112,7 @@ def test_hsguru_table_parser_rejects_incomplete_statistics() -> None:
         parse_meta_rows(broken)
 
 
-def test_refresh_publishes_one_unified_dataset_after_40_firecrawl_pages() -> None:
+def test_refresh_publishes_one_unified_dataset_after_50_firecrawl_pages() -> None:
     from app.firecrawl_backend import FirecrawlScrape
     from app.hsguru_meta_matrix import refresh_hsguru_meta_matrix
 
@@ -138,10 +139,10 @@ def test_refresh_publishes_one_unified_dataset_after_40_firecrawl_pages() -> Non
         )
 
     assert result["ok"] is True
-    assert result["base_slices"] == 40
-    assert result["logical_slices"] == 240
-    assert result["firecrawl_credits_used"] == 40
-    assert len(calls) == 40
+    assert result["base_slices"] == 50
+    assert result["logical_slices"] == 300
+    assert result["firecrawl_credits_used"] == 50
+    assert len(calls) == 50
     save_dataset.assert_called_once()
     dataset = save_dataset.call_args.args[1]
     assert dataset["data"]["structured"]["dimensions"]["min_games"] == [
@@ -164,7 +165,7 @@ def test_v1_hsguru_meta_filters_unified_dataset_by_min_games() -> None:
                 "dimensions": {
                     "formats": ["standard", "wild"],
                     "ranks": ["all", "legend", "diamond_4to1", "top_5k", "top_legend"],
-                    "periods": ["past_day", "past_3_days", "past_week", "past_2_weeks"],
+                    "periods": ["past_6_hours", "past_day", "past_3_days", "past_week", "past_2_weeks"],
                     "coins": ["any_player"],
                     "min_games": [100, 250, 500, 1000, 2500, 5000],
                 },
@@ -238,3 +239,24 @@ def test_v1_hsguru_meta_accepts_all_ranks_and_any_player() -> None:
     assert response.status_code == 200
     assert response.json()["data"]["rank"] == "all"
     assert response.json()["data"]["coin"] == "any_player"
+
+
+def test_v1_hsguru_meta_accepts_past_six_hours() -> None:
+    fetched_at = datetime.now(UTC).isoformat()
+    dataset = {
+        "source_id": "hsguru_meta_matrix",
+        "fetched_at": fetched_at,
+        "data": {"structured": {"slices": [{
+            "key": "wild|top_legend|past_6_hours|any_player",
+            "source_url": "https://www.hsguru.com/meta?format=1&rank=top_legend&period=past_6_hours&min_games=100",
+            "rows": [{"archetype": "Quest Mage", "games": 742, "winrate": 51.1}],
+        }]}},
+    }
+
+    with patch("app.routers.hsguru_meta.load_dataset", return_value=dataset):
+        response = client.get(
+            "/v1/hsguru/meta?format=wild&rank=top_legend&period=past_6_hours&coin=any_player&min_games=100"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["period"] == "past_6_hours"

@@ -20,7 +20,7 @@ SOURCE_ID = "hsguru_meta_matrix"
 HSGURU_META_URL = "https://www.hsguru.com/meta"
 FORMATS = ("standard", "wild")
 RANKS = ("all", "legend", "diamond_4to1", "top_5k", "top_legend")
-PERIODS = ("past_day", "past_3_days", "past_week", "past_2_weeks")
+PERIODS = ("past_6_hours", "past_day", "past_3_days", "past_week", "past_2_weeks")
 COINS = ("any_player",)
 MIN_GAMES = (100, 250, 500, 1000, 2500, 5000)
 
@@ -223,7 +223,7 @@ async def refresh_hsguru_meta_matrix(
     complete = len(slices) == len(specs) and not errors
     structured = {
         "type": "hsguru_meta_matrix",
-        "schema_version": 3,
+        "schema_version": 4,
         "fetched_at": fetched_at,
         "dimensions": {
             "formats": list(FORMATS),
