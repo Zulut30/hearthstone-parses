@@ -367,6 +367,16 @@ def firecrawl_timeout_ms() -> int:
     return max(1000, int(os.environ.get("HS_FIRECRAWL_TIMEOUT_MS", "30000")))
 
 
+def firecrawl_hsguru_matchups_timeout_ms() -> int:
+    return min(
+        300_000,
+        max(
+            firecrawl_timeout_ms(),
+            int(os.environ.get("HS_FIRECRAWL_HSGURU_MATCHUPS_TIMEOUT_MS", "180000")),
+        ),
+    )
+
+
 def firecrawl_primary_source_ids() -> set[str]:
     raw = os.environ.get(
         "HS_FIRECRAWL_PRIMARY_SOURCE_IDS",

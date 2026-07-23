@@ -8,6 +8,7 @@ from typing import Any
 
 from .config import (
     firecrawl_api_key,
+    firecrawl_hsguru_matchups_timeout_ms,
     firecrawl_max_age_ms,
     firecrawl_timeout_ms,
     firecrawl_wait_ms,
@@ -89,6 +90,12 @@ def _scrape_sync(
 
 
 async def scrape_source(source: Source) -> FirecrawlScrape:
+    if source.site == "hsguru" and source.category == "matchups":
+        return await asyncio.to_thread(
+            _scrape_sync,
+            source,
+            timeout_ms=firecrawl_hsguru_matchups_timeout_ms(),
+        )
     return await asyncio.to_thread(_scrape_sync, source)
 
 
