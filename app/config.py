@@ -370,7 +370,13 @@ def firecrawl_timeout_ms() -> int:
 def firecrawl_primary_source_ids() -> set[str]:
     raw = os.environ.get(
         "HS_FIRECRAWL_PRIMARY_SOURCE_IDS",
-        "hsguru_streamer_decks_legend_1000",
+        ",".join(
+            [
+                "hsguru_streamer_decks_legend_1000",
+                "hsguru_matchups_legend",
+                "hsguru_matchups_wild_legend",
+            ]
+        ),
     )
     return {part.strip() for part in raw.split(",") if part.strip()}
 
@@ -389,6 +395,7 @@ def firecrawl_fallback_source_ids() -> set[str]:
                 "hsguru_meta_wild_top_legend",
                 "hsguru_meta_wild_top_5k",
                 "hsguru_matchups_legend",
+                "hsguru_matchups_wild_legend",
                 "hsguru_matchups_diamond_4to1",
                 "hsreplay_battlegrounds_comps",
                 "hsreplay_battlegrounds_heroes",

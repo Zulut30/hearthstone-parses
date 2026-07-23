@@ -199,7 +199,8 @@ GET /v1/constructed/archetypes
 | `hsguru_meta_wild_diamond_4to1` | Wild Diamond 4–1. |
 | `hsguru_meta_wild_top_5k` | Wild Top 5K. |
 | `hsguru_meta_wild_top_legend` | Wild Top Legend. |
-| `hsguru_matchups_legend` | `matchups[]`: archetype, opponent (`vs`), winrate. |
+| `hsguru_matchups_legend` | Standard Legend: `matchups[]` with archetype, opponent (`vs`) and winrate; minimum 100 archetype games and 25 matchup games. |
+| `hsguru_matchups_wild_legend` | Wild Legend: the same matchup matrix and minimum sample thresholds. |
 | `hsguru_matchups_diamond_4to1` | Та же matchup-матрица для Diamond 4–1. |
 | `metastats_matchups` | Archetype, opponent, winrate/vs_winrate и games. |
 

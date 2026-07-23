@@ -392,6 +392,7 @@ for _sid in (
     "hsguru_meta_wild_top_legend",
     "hsguru_meta_wild_top_5k",
     "hsguru_matchups_legend",
+    "hsguru_matchups_wild_legend",
     "hsguru_matchups_diamond_4to1",
 ):
     CONTRACTS.setdefault(

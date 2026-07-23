@@ -79,6 +79,7 @@ BROWSER_PROTECTED_IDS: frozenset[str] = frozenset(
         "hsguru_meta_wild_top_legend",
         "hsguru_meta_wild_top_5k",
         "hsguru_matchups_legend",
+        "hsguru_matchups_wild_legend",
         "hsguru_matchups_diamond_4to1",
         "hsreplay_battlegrounds_trinkets_lesser",
         "hsreplay_battlegrounds_trinkets_greater",

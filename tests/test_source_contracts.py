@@ -278,6 +278,18 @@ class SourceContractsTest(unittest.TestCase):
         self.assertFalse(tiny["ok"])
         self.assertIn("too few rows", "; ".join(tiny["warnings"]))
 
+    def test_hsguru_legend_matchup_sources_use_requested_samples(self) -> None:
+        standard = SOURCE_BY_ID["hsguru_matchups_legend"]
+        wild = SOURCE_BY_ID["hsguru_matchups_wild_legend"]
+
+        for source in (standard, wild):
+            self.assertIn("min_archetype_sample=100", source.fetch_url)
+            self.assertIn("min_matchup_sample=25", source.fetch_url)
+            self.assertIn("rank=legend", source.fetch_url)
+            self.assertEqual(source.stale_hours, 36)
+        self.assertNotIn("format=", standard.fetch_url)
+        self.assertIn("format=1", wild.fetch_url)
+
     def test_vicious_radars_contract_rejects_tiny_optional_fetch_result(self) -> None:
         contract = get_contract("vicious_syndicate_radars")
 

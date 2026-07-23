@@ -96,10 +96,19 @@ SOURCES: tuple[Source, ...] = (
     ),
     Source(
         "hsguru_matchups_legend",
-        "https://www.hsguru.com/matchups?rank=legend",
+        "https://www.hsguru.com/matchups?min_archetype_sample=100&min_matchup_sample=25&rank=legend",
         "hsguru",
         "matchups",
-        description="HSGuru matchup matrix, legend.",
+        description="HSGuru Standard matchup matrix, legend, min archetype sample 100, min matchup sample 25.",
+        stale_hours=36,
+    ),
+    Source(
+        "hsguru_matchups_wild_legend",
+        "https://www.hsguru.com/matchups?format=1&min_archetype_sample=100&min_matchup_sample=25&rank=legend",
+        "hsguru",
+        "matchups",
+        description="HSGuru Wild matchup matrix, legend, min archetype sample 100, min matchup sample 25.",
+        stale_hours=36,
     ),
     Source(
         "hsguru_matchups_diamond_4to1",

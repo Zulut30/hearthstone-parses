@@ -67,6 +67,7 @@ SECTIONS: tuple[ParserSection, ...] = (
         description="Матрицы матчапов и радары взаимодействий между колодами.",
         source_ids=(
             "hsguru_matchups_legend",
+            "hsguru_matchups_wild_legend",
             "hsguru_matchups_diamond_4to1",
             "metastats_matchups",
             "vicious_syndicate_radars",
@@ -210,7 +211,8 @@ SOURCE_LABELS_RU: dict[str, str] = {
     "hsguru_meta_matrix": "HSGuru · единая матрица Standard/Wild",
     "hsguru_meta_wild_top_legend": "HSGuru · Wild, верх Легенды",
     "hsguru_meta_wild_top_5k": "HSGuru · Wild, топ-5000",
-    "hsguru_matchups_legend": "HSGuru · матчапы Легенды",
+    "hsguru_matchups_legend": "HSGuru · Standard, матчапы Легенды",
+    "hsguru_matchups_wild_legend": "HSGuru · Wild, матчапы Легенды",
     "hsguru_matchups_diamond_4to1": "HSGuru · матчапы Алмаза 4–1",
     "hsreplay_battlegrounds_comps": "HSReplay · составы Полей Сражений",
     "hsreplay_battlegrounds_heroes": "HSReplay · герои Полей Сражений",
