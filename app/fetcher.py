@@ -957,6 +957,7 @@ async def _try_firecrawl_html(
             detail=reason,
         )
         scraped = await scrape_source(source)
+        backend = scraped.backend
         snapshot = None
         if scraped.markdown:
             snapshot = {
@@ -973,14 +974,14 @@ async def _try_firecrawl_html(
             parsed = _dedupe_streamer_decks_parsed(parsed)
         parsed = _enrich_firecrawl_trinkets_from_cache(source, parsed)
         parsed = _enrich_firecrawl_bg_heroes_from_cache(source, parsed)
-        gate = validate_candidate_for_publish(source, parsed, backend="firecrawl")
+        gate = validate_candidate_for_publish(source, parsed, backend=backend)
         ok, validation_reason = gate.ok, gate.reason
         qmetrics = quality_metrics(source, parsed)
         if not ok:
             log_action(
                 "firecrawl.validate.fail",
                 source_id=source.id,
-                backend="firecrawl",
+                backend=backend,
                 state=SourceState.QUALITY_ERROR,
                 level="warn",
                 detail=validation_reason,
@@ -994,7 +995,7 @@ async def _try_firecrawl_html(
             "http_status": scraped.status_code,
             "final_url": scraped.final_url,
             "content_length": scraped.content_length,
-            "backend": "firecrawl",
+            "backend": backend,
             "used_residential_proxy": False,
             "data": parsed,
         }
@@ -1009,12 +1010,13 @@ async def _try_firecrawl_html(
             http_status=scraped.status_code,
             final_url=scraped.final_url,
             content_length=scraped.content_length,
-            backend="firecrawl",
+            backend=backend,
             detail=reg_msg if reg else None,
             used_residential_proxy=False,
             quality=qmetrics,
         )
-        status["firecrawl_credits_used"] = scraped.metadata.get("creditsUsed")
+        status["firecrawl_credits_used"] = scraped.firecrawl_credits_used
+        status["scrape_do_credits_used"] = scraped.scrape_do_credits_used
         status["firecrawl_cache_state"] = scraped.metadata.get("cacheState")
         _attach_provisional_status(status, provisional_metadata)
         if reg:
@@ -1024,11 +1026,11 @@ async def _try_firecrawl_html(
         log_action(
             "firecrawl.fetch.ok",
             source_id=source.id,
-            backend="firecrawl",
+            backend=backend,
             state=state,
             bytes_out=scraped.content_length,
             extra={
-                "credits_used": scraped.metadata.get("creditsUsed"),
+                "credits_used": scraped.request_credits,
                 "cache_state": scraped.metadata.get("cacheState"),
                 "reason": reason,
                 "quality_metrics": qmetrics,

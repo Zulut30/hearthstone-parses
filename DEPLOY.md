@@ -121,6 +121,10 @@ Production refresh schedule:
 - `hs-data-api-docker-rebuild-hsreplay-index.timer`: daily derived-index rebuild at
   `19:15 Europe/Warsaw` from current cached datasets, without spending Firecrawl
   credits or waiting for the weekly URL map.
+- `hs-data-api-docker-refresh-hsguru-meta-matrix.timer`: HSGuru Standard/Wild
+  matrix at `00:00` and `12:00 Europe/Warsaw`; every rank includes rolling,
+  active-patch and Violet Hold periods. A newly advertised HSGuru `patch_*`
+  becomes active only after the complete matrix passes its publication gate.
 - `hs-data-api-docker-refresh-hsreplay-archetypes.timer`: HSReplay Standard archetype SQLite snapshots at `03:20 Europe/Warsaw` on Mondays and Thursdays.
 - `scripts/install-docker-systemd.sh`: автоматически устанавливает и включает все
   `hs-data-api-docker-*.timer`, поэтому новый pipeline timer не останется только

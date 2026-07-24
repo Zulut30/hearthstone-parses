@@ -434,3 +434,12 @@ def is_firecrawl_credit_error(exc: BaseException) -> bool:
         "quota",
     )
     return any(item in text for item in needles)
+
+
+def is_firecrawl_pool_unavailable(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "all firecrawl api keys are exhausted" in text
+        or "firecrawl_api_key/hs_firecrawl_api_key/hs_firecrawl_api_keys is not configured"
+        in text
+    )

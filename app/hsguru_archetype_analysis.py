@@ -315,8 +315,8 @@ async def _fetch_html(url: str) -> tuple[str, dict[str, Any]]:
                 timeout_ms=120_000,
             )
             return result.html, {
-                "backend": "firecrawl",
-                "request_credits": int(result.metadata.get("creditsUsed") or 1),
+                "backend": result.backend,
+                "request_credits": result.request_credits,
                 "final_url": result.final_url,
             }
         except Exception as exc:

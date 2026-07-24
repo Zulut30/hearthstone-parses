@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import product
 from typing import Any, Awaitable, Callable
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -73,6 +73,21 @@ def matrix_periods(current_patch_period: str) -> tuple[str, ...]:
     if not re.fullmatch(r"patch_\d+(?:\.\d+){1,3}", current_patch_period):
         raise ValueError(f"Invalid HSGuru patch period: {current_patch_period}")
     return (*ROLLING_PERIODS, current_patch_period, *NAMED_PERIODS)
+
+
+def _patch_version_key(period: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in period.removeprefix("patch_").split("."))
+
+
+def patch_periods_from_html(page_html: str) -> tuple[str, ...]:
+    periods: set[str] = set()
+    soup = BeautifulSoup(page_html, "lxml")
+    for link in soup.find_all("a", href=True):
+        values = parse_qs(urlparse(str(link.get("href") or "")).query).get("period") or []
+        for value in values:
+            if re.fullmatch(r"patch_\d+(?:\.\d+){1,3}", value):
+                periods.add(value)
+    return tuple(sorted(periods, key=_patch_version_key))
 
 
 def iter_slice_specs(periods: tuple[str, ...] = PERIODS) -> tuple[SliceSpec, ...]:
@@ -206,6 +221,54 @@ def resolve_current_patch_period(cached_dataset: dict[str, Any] | None = None) -
     raise RuntimeError(
         "Cannot discover the current Hearthstone patch; set HS_HSGURU_PATCH_PERIOD"
     )
+
+
+async def _discover_hsguru_patch_period(
+    cached_dataset: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any] | None]:
+    fallback = await asyncio.to_thread(resolve_current_patch_period, cached_dataset)
+    url = (
+        f"{HSGURU_META_URL}?"
+        + urlencode(
+            {
+                "format": _FORMAT_QUERY["standard"],
+                "rank": "all",
+                "period": "past_day",
+                "min_games": MIN_GAMES[0],
+            }
+        )
+    )
+    source = Source(
+        id=f"{SOURCE_ID}:patch-discovery",
+        url=url,
+        site="hsguru",
+        category="meta_patch_discovery",
+    )
+    try:
+        result = await scrape_source_with_options(
+            source,
+            formats=["html"],
+            only_main_content=True,
+            headers=hsguru_firecrawl_headers(),
+            max_age_ms=0,
+            wait_ms=3_000,
+            timeout_ms=120_000,
+        )
+    except Exception as exc:
+        return fallback, {
+            "kind": "patch_discovery",
+            "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+        }
+    discovered = patch_periods_from_html(result.html)
+    period = discovered[-1] if discovered else fallback
+    return period, {
+        "kind": "patch_discovery",
+        "backend": result.backend,
+        "request_credits": result.request_credits,
+        "source_url": url,
+        "periods_found": list(discovered),
+        "selected_period": period,
+    }
 
 
 def _current_catalog_url(format_name: str, period: str) -> str:
@@ -416,8 +479,8 @@ async def _scrape_current_page(
             source_url=url,
         ), {
             "format": format_name,
-            "backend": "firecrawl",
-            "request_credits": int(result.metadata.get("creditsUsed") or 1),
+            "backend": result.backend,
+            "request_credits": result.request_credits,
             "rows": len(rows),
         }
     except Exception as exc:
@@ -544,13 +607,17 @@ async def refresh_hsguru_meta_matrix(
         [str, str],
         Awaitable[tuple[list[dict[str, Any]], dict[str, Any]]],
     ] = _scrape_current_page,
+    discover_patch: Callable[
+        [dict[str, Any] | None],
+        Awaitable[tuple[str, dict[str, Any] | None]],
+    ] = _discover_hsguru_patch_period,
 ) -> dict[str, Any]:
     fetched_at = datetime.now(UTC).isoformat()
     cached_dataset = load_dataset(SOURCE_ID)
     discovery_errors: list[dict[str, str]] = []
+    patch_discovery_acquisition: dict[str, Any] | None = None
     try:
-        current_period = await asyncio.to_thread(
-            resolve_current_patch_period,
+        current_period, patch_discovery_acquisition = await discover_patch(
             cached_dataset,
         )
     except Exception as exc:
@@ -588,7 +655,9 @@ async def refresh_hsguru_meta_matrix(
                         for min_games in MIN_GAMES
                     },
                     "content_length": result.content_length,
-                    "credits_used": result.metadata.get("creditsUsed"),
+                    "backend": result.backend,
+                    "firecrawl_credits_used": result.firecrawl_credits_used,
+                    "scrape_do_credits_used": result.scrape_do_credits_used,
                 }
             except Exception as exc:
                 last_error = exc
@@ -605,7 +674,12 @@ async def refresh_hsguru_meta_matrix(
     slices = [item for item in await asyncio.gather(*(fetch_one(spec) for spec in specs)) if item]
     slices.sort(key=lambda item: item["key"])
     content_length = sum(int(item.pop("content_length", 0)) for item in slices)
-    credits_used = sum(float(item.pop("credits_used") or 0) for item in slices)
+    firecrawl_credits_used = sum(
+        float(item.pop("firecrawl_credits_used") or 0) for item in slices
+    )
+    scrape_do_credits_used = sum(
+        int(item.pop("scrape_do_credits_used") or 0) for item in slices
+    )
     current_rows: list[dict[str, Any]] = []
     current_acquisition: list[dict[str, Any]] = []
     try:
@@ -644,15 +718,58 @@ async def refresh_hsguru_meta_matrix(
         current_period is not None
         and all(current_coverage[name]["archetypes"] > 0 for name in FORMATS)
     )
-    credits_used += sum(
+    firecrawl_credits_used += sum(
         float(item.get("request_credits") or 0) for item in current_acquisition
         if item.get("backend") == "firecrawl"
     )
-    scrape_do_credits_used = sum(
+    scrape_do_credits_used += sum(
         int(item.get("request_credits") or 0)
         for item in current_acquisition
         if str(item.get("backend") or "").startswith("scrape_do")
     )
+    if patch_discovery_acquisition:
+        backend = str(patch_discovery_acquisition.get("backend") or "")
+        request_credits = int(
+            patch_discovery_acquisition.get("request_credits") or 0
+        )
+        if backend == "firecrawl":
+            firecrawl_credits_used += request_credits
+        elif backend.startswith("scrape_do"):
+            scrape_do_credits_used += request_credits
+    firecrawl_requests = sum(
+        1 for item in slices if item.get("backend") == "firecrawl"
+    ) + sum(
+        1 for item in current_acquisition if item.get("backend") == "firecrawl"
+    )
+    if (
+        patch_discovery_acquisition
+        and patch_discovery_acquisition.get("backend") == "firecrawl"
+    ):
+        firecrawl_requests += 1
+    scrape_do_requests = sum(
+        1
+        for item in slices
+        if str(item.get("backend") or "").startswith("scrape_do")
+    ) + sum(
+        1
+        for item in current_acquisition
+        if str(item.get("backend") or "").startswith("scrape_do")
+    )
+    if (
+        patch_discovery_acquisition
+        and str(patch_discovery_acquisition.get("backend") or "").startswith(
+            "scrape_do"
+        )
+    ):
+        scrape_do_requests += 1
+    active_backends = {
+        str(item.get("backend"))
+        for item in [*slices, *current_acquisition]
+        if item.get("backend")
+    }
+    if patch_discovery_acquisition and patch_discovery_acquisition.get("backend"):
+        active_backends.add(str(patch_discovery_acquisition["backend"]))
+    dataset_backend = "+".join(sorted(active_backends)) or "cache"
     complete = len(slices) == len(specs) and not errors and current_complete
     structured = {
         "type": "hsguru_meta_matrix",
@@ -669,23 +786,19 @@ async def refresh_hsguru_meta_matrix(
         "logical_slice_count": len(slices) * len(MIN_GAMES),
         "slices": slices,
         "firecrawl": {
-            "requests": len(slices)
-            + sum(
-                1
-                for item in current_acquisition
-                if item.get("backend") == "firecrawl"
+            "requests": firecrawl_requests,
+            "credits_used": (
+                int(firecrawl_credits_used)
+                if firecrawl_credits_used.is_integer()
+                else firecrawl_credits_used
             ),
-            "credits_used": int(credits_used) if credits_used.is_integer() else credits_used,
             "content_length": content_length,
         },
         "scrape_do": {
-            "requests": sum(
-                1
-                for item in current_acquisition
-                if str(item.get("backend") or "").startswith("scrape_do")
-            ),
+            "requests": scrape_do_requests,
             "credits_used": scrape_do_credits_used,
         },
+        "patch_discovery": patch_discovery_acquisition,
         "current_catalog": {
             "criteria": {
                 "period": current_period,
@@ -715,7 +828,7 @@ async def refresh_hsguru_meta_matrix(
         "http_status": 200,
         "final_url": HSGURU_META_URL,
         "content_length": content_length,
-        "backend": "firecrawl",
+        "backend": dataset_backend,
         "data": {"structured": structured},
     }
     if complete:
@@ -731,7 +844,7 @@ async def refresh_hsguru_meta_matrix(
             "state": SourceState.OK if complete else SourceState.PARTIAL,
             "fetched_at": fetched_at,
             "http_status": 200 if complete else None,
-            "backend": "firecrawl",
+            "backend": dataset_backend,
             "detail": (
                 f"HSGuru matrix: {len(slices)}/{len(specs)} slices, "
                 f"{len(slices) * len(MIN_GAMES)}/{len(specs) * len(MIN_GAMES)} logical slices."
@@ -740,12 +853,8 @@ async def refresh_hsguru_meta_matrix(
             "serving_cached_dataset": bool(cached_dataset) and not complete,
             "last_refresh_state": SourceState.OK if complete else SourceState.PARTIAL,
             "last_refresh_at": fetched_at,
-            "firecrawl_requests": len(slices)
-            + sum(
-                1
-                for item in current_acquisition
-                if item.get("backend") == "firecrawl"
-            ),
+            "firecrawl_requests": firecrawl_requests,
+            "scrape_do_requests": scrape_do_requests,
             "firecrawl_credits_used": structured["firecrawl"]["credits_used"],
             "scrape_do_credits_used": scrape_do_credits_used,
             "current_catalog_archetypes": len(current_rows),

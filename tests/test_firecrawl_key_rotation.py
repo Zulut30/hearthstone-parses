@@ -103,3 +103,10 @@ def test_period_id_around_reset_day():
     assert fk.current_credit_period_id(date(2026, 7, 23)) == "2026-07-22"
     assert fk.current_credit_period_id(date(2026, 8, 21)) == "2026-07-22"
     assert fk.current_credit_period_id(date(2026, 8, 22)) == "2026-08-22"
+
+
+def test_pool_unavailable_error_is_distinct_from_target_error():
+    assert fk.is_firecrawl_pool_unavailable(
+        RuntimeError("All Firecrawl API keys are exhausted (rotation limit reached)")
+    )
+    assert not fk.is_firecrawl_pool_unavailable(RuntimeError("target timed out"))

@@ -7,18 +7,24 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from bs4 import BeautifulSoup, NavigableString
+
 from .config import (
     firecrawl_hsguru_matchups_timeout_ms,
     firecrawl_max_age_ms,
     firecrawl_timeout_ms,
     firecrawl_wait_ms,
+    scrape_do_token,
 )
 from .firecrawl_keys import (
     acquire_firecrawl_key,
     is_firecrawl_credit_error,
+    is_firecrawl_pool_unavailable,
     mark_firecrawl_key_exhausted,
+    parse_firecrawl_api_keys,
     record_firecrawl_credits,
 )
+from .scrape_do_backend import scrape_url_sync
 from .sources import Source
 
 
@@ -37,6 +43,116 @@ class FirecrawlScrape:
     @property
     def content_length(self) -> int:
         return len(self.html.encode("utf-8", errors="replace"))
+
+    @property
+    def backend(self) -> str:
+        return str(self.metadata.get("backend") or "firecrawl")
+
+    @property
+    def firecrawl_credits_used(self) -> int:
+        if self.backend != "firecrawl":
+            return 0
+        try:
+            return int(self.metadata.get("creditsUsed") or 1)
+        except (TypeError, ValueError):
+            return 1
+
+    @property
+    def scrape_do_credits_used(self) -> int:
+        if not self.backend.startswith("scrape_do"):
+            return 0
+        try:
+            return int(self.metadata.get("scrapeDoCreditsUsed") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @property
+    def request_credits(self) -> int:
+        return self.scrape_do_credits_used or self.firecrawl_credits_used
+
+
+def _html_to_markdown(html: str) -> str:
+    if not html.strip():
+        return ""
+    soup = BeautifulSoup(html, "lxml")
+    for node in soup(["script", "style", "noscript"]):
+        node.decompose()
+    for node in soup.find_all("br"):
+        node.replace_with(NavigableString("\n"))
+    for node in soup.find_all("a"):
+        text = node.get_text(" ", strip=True)
+        href = str(node.get("href") or "").strip()
+        node.replace_with(
+            NavigableString(f"[{text}]({href})" if text and href else text)
+        )
+    for level in range(1, 7):
+        for node in soup.find_all(f"h{level}"):
+            text = node.get_text(" ", strip=True)
+            node.replace_with(NavigableString(f"\n{'#' * level} {text}\n"))
+    for node in soup.find_all("li"):
+        text = node.get_text(" ", strip=True)
+        node.replace_with(NavigableString(f"\n- {text}"))
+    for node in soup.find_all("tr"):
+        cells = [
+            cell.get_text(" ", strip=True)
+            for cell in node.find_all(["th", "td"], recursive=False)
+        ]
+        if cells:
+            node.replace_with(NavigableString("\n" + " | ".join(cells)))
+    lines = [
+        " ".join(line.split())
+        for line in soup.get_text("\n").splitlines()
+        if line.strip()
+    ]
+    return "\n".join(lines)
+
+
+def _screenshot_options(formats: list[Any] | None) -> tuple[bool, bool]:
+    for item in formats or []:
+        if isinstance(item, dict) and item.get("type") == "screenshot":
+            return True, bool(item.get("fullPage"))
+    return False, False
+
+
+def _scrape_via_scrape_do(
+    source: Source,
+    *,
+    formats: list[Any] | None,
+    headers: dict[str, str] | None,
+    wait_ms: int | None,
+    timeout_ms: int | None,
+    reason: str,
+) -> FirecrawlScrape:
+    if not scrape_do_token():
+        raise RuntimeError(reason)
+    screenshot, full_screenshot = _screenshot_options(formats)
+    scraped = scrape_url_sync(
+        source.url,
+        render=True,
+        super_proxy=False,
+        headers=headers,
+        wait_ms=wait_ms,
+        timeout_ms=timeout_ms,
+        screenshot=screenshot,
+        full_screenshot=full_screenshot,
+    )
+    html = scraped.html
+    requested = formats or ["html", "markdown"]
+    markdown = _html_to_markdown(html) if "markdown" in requested else ""
+    return FirecrawlScrape(
+        html=html,
+        markdown=markdown,
+        screenshot=scraped.screenshot,
+        metadata={
+            "backend": "scrape_do",
+            "creditsUsed": 0,
+            "scrapeDoCreditsUsed": scraped.request_cost,
+            "scrapeDoRemainingCredits": scraped.credits_remaining,
+            "firecrawlFallbackReason": reason[:500],
+        },
+        status_code=scraped.status_code,
+        final_url=scraped.final_url,
+    )
 
 
 def _scrape_once(
@@ -85,6 +201,7 @@ def _scrape_once(
     if not html and any(fmt == "html" for fmt in (formats or ["html", "markdown"])):
         raise RuntimeError("Firecrawl response did not include html")
     metadata = dict(data.get("metadata") or {})
+    metadata.setdefault("backend", "firecrawl")
     if body.get("creditsUsed") is not None and metadata.get("creditsUsed") is None:
         metadata["creditsUsed"] = body.get("creditsUsed")
     return FirecrawlScrape(
@@ -108,8 +225,21 @@ def _scrape_sync(
     timeout_ms: int | None = None,
 ) -> FirecrawlScrape:
     errors: list[str] = []
-    for _ in range(8):
-        lease = acquire_firecrawl_key()
+    attempt_limit = max(8, len(parse_firecrawl_api_keys()))
+    for _ in range(attempt_limit):
+        try:
+            lease = acquire_firecrawl_key()
+        except Exception as exc:
+            if is_firecrawl_pool_unavailable(exc):
+                return _scrape_via_scrape_do(
+                    source,
+                    formats=formats,
+                    headers=headers,
+                    wait_ms=wait_ms,
+                    timeout_ms=timeout_ms,
+                    reason=str(exc),
+                )
+            raise
         try:
             scraped = _scrape_once(
                 source,
@@ -148,7 +278,15 @@ def _scrape_sync(
         )
 
     detail = "; ".join(errors) if errors else "no available keys"
-    raise RuntimeError(f"Firecrawl scrape failed after key rotation attempts: {detail}")
+    reason = f"Firecrawl scrape failed after key rotation attempts: {detail}"
+    return _scrape_via_scrape_do(
+        source,
+        formats=formats,
+        headers=headers,
+        wait_ms=wait_ms,
+        timeout_ms=timeout_ms,
+        reason=reason,
+    )
 
 
 async def scrape_source(source: Source) -> FirecrawlScrape:

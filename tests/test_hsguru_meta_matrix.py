@@ -245,6 +245,9 @@ def test_refresh_publishes_one_unified_dataset_after_126_firecrawl_pages() -> No
             "rows": 1,
         }
 
+    async def discover_patch(_cached):
+        return "patch_36.0.3", None
+
     with (
         patch("app.hsguru_meta_matrix.load_dataset", return_value=None),
         patch(
@@ -262,6 +265,7 @@ def test_refresh_publishes_one_unified_dataset_after_126_firecrawl_pages() -> No
                 attempts=1,
                 scrape=scrape,
                 scrape_current=scrape_current,
+                discover_patch=discover_patch,
             )
         )
 
@@ -287,7 +291,7 @@ def test_refresh_publishes_one_unified_dataset_after_126_firecrawl_pages() -> No
 
 
 def test_runtime_periods_replace_previous_patch_with_discovered_patch() -> None:
-    from app.hsguru_meta_matrix import matrix_periods
+    from app.hsguru_meta_matrix import matrix_periods, patch_periods_from_html
 
     assert matrix_periods("patch_36.0.4") == (
         "past_6_hours",
@@ -297,6 +301,15 @@ def test_runtime_periods_replace_previous_patch_with_discovered_patch() -> None:
         "past_2_weeks",
         "patch_36.0.4",
         "violet_hold",
+    )
+    html = """
+    <a href="/meta?format=2&amp;period=patch_36.0.3&amp;rank=all">36.0.3</a>
+    <a href="/meta?format=2&amp;period=patch_36.0.10&amp;rank=all">36.0.10</a>
+    <a href="/meta?format=2&amp;period=violet_hold&amp;rank=all">Violet Hold</a>
+    """
+    assert patch_periods_from_html(html) == (
+        "patch_36.0.3",
+        "patch_36.0.10",
     )
 
 
