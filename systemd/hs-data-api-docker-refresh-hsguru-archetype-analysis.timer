@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh HSGuru Legend archetype analysis daily
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 Europe/Warsaw
+AccuracySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

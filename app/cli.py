@@ -175,6 +175,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="all",
         help="Restrict candidate hunt to one format (standard refresh timer uses this).",
     )
+    hsguru_analysis = sub.add_parser(
+        "refresh-hsguru-archetype-analysis",
+        help="Refresh Legend class matchups and card stats for active HSGuru archetypes.",
+    )
+    hsguru_analysis.add_argument("--concurrency", type=int, default=3)
+    hsguru_analysis.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Debug: refresh only the first N active archetypes.",
+    )
     sub.add_parser(
         "capture-bg-compositions-screenshot",
         help="Capture a Firecrawl screenshot of HSReplay Battlegrounds compositions.",
@@ -521,6 +532,17 @@ def main(argv: list[str] | None = None) -> int:
 
         focus = None if getattr(args, "format", "all") in (None, "all") else str(args.format)
         result = refresh_fun_decks(scheduled=bool(args.scheduled), format_focus=focus)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "refresh-hsguru-archetype-analysis":
+        from .hsguru_archetype_analysis import refresh_hsguru_archetype_analysis
+
+        result = asyncio.run(
+            refresh_hsguru_archetype_analysis(
+                concurrency=max(1, min(args.concurrency, 10)),
+                limit=args.limit,
+            )
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "capture-bg-compositions-screenshot":

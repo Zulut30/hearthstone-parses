@@ -10,6 +10,7 @@ from .models import ApiMeta, timestamp_is_stale
 
 
 router = APIRouter(prefix="/v1/hsguru", tags=["v1-hsguru"])
+ANALYSIS_SOURCE_ID = "hsguru_archetype_analysis"
 
 
 @router.get("/meta")
@@ -167,4 +168,46 @@ def hsguru_archetype_history(
             "archetype": archetype,
             "count": len(rows),
         },
+    }
+@router.get("/archetypes/analysis")
+def hsguru_archetype_analysis(
+    archetype: str = Query(..., min_length=1, max_length=120),
+    format_name: Literal["standard", "wild"] = Query(..., alias="format"),
+) -> dict[str, Any]:
+    dataset = load_dataset(ANALYSIS_SOURCE_ID)
+    if not dataset:
+        raise HTTPException(
+            status_code=503,
+            detail="HSGuru archetype analysis is not available",
+        )
+    structured = ((dataset.get("data") or {}).get("structured") or {})
+    if structured.get("type") != ANALYSIS_SOURCE_ID:
+        raise HTTPException(
+            status_code=503,
+            detail="HSGuru archetype analysis has an invalid schema",
+        )
+    selected = next(
+        (
+            dict(row)
+            for row in structured.get("archetypes") or []
+            if isinstance(row, dict)
+            and row.get("format") == format_name
+            and str(row.get("archetype") or "").casefold() == archetype.casefold()
+        ),
+        None,
+    )
+    if selected is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Archetype analysis is not available for the requested filters",
+        )
+    fetched_at = selected.get("updated_at") or dataset.get("fetched_at")
+    return {
+        "data": selected,
+        "meta": ApiMeta(
+            source_id=ANALYSIS_SOURCE_ID,
+            fetched_at=fetched_at,
+            stale=timestamp_is_stale(fetched_at, max_age_hours=36),
+            count=1,
+        ).model_dump(exclude_none=True),
     }

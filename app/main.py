@@ -1173,6 +1173,21 @@ async def refresh_hsguru_meta_matrix(
     return await refresh_matrix(concurrency=concurrency)
 
 
+@app.post(
+    "/admin/refresh/hsguru-archetype-analysis",
+    dependencies=[Depends(require_admin)],
+)
+async def refresh_hsguru_archetype_analysis(
+    concurrency: int = Query(3, ge=1, le=10),
+    limit: int | None = Query(None, ge=1, le=500),
+) -> dict:
+    from .hsguru_archetype_analysis import (
+        refresh_hsguru_archetype_analysis as refresh_analysis,
+    )
+
+    return await refresh_analysis(concurrency=concurrency, limit=limit)
+
+
 @app.post("/admin/capture/bg-compositions-screenshot", dependencies=[Depends(require_admin)])
 async def capture_bg_compositions_screenshot() -> dict:
     from .hsreplay_bg_screenshots import capture_compositions_screenshot
