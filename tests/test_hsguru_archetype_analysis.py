@@ -159,6 +159,49 @@ class HSGuruArchetypeAnalysisTest(unittest.TestCase):
         self.assertEqual(len(rows[0]["class_matchups"]), 2)
         self.assertEqual(len(rows[0]["card_stats"]), 1)
 
+    def test_refresh_treats_missing_upstream_card_table_as_available_gap(self) -> None:
+        async def fetch_html(url: str):
+            if "/archetype/" in url:
+                return MATCHUPS_HTML, {"backend": "firecrawl", "request_credits": 1}
+            return "<html><body>No card stats for this sample</body></html>", {
+                "backend": "firecrawl",
+                "request_credits": 1,
+            }
+
+        saved = {}
+        with (
+            patch(
+                "app.hsguru_archetype_analysis._previous_analysis",
+                return_value={},
+            ),
+            patch(
+                "app.hsguru_archetype_analysis.save_dataset",
+                side_effect=lambda source_id, payload: saved.update(
+                    {"source_id": source_id, "payload": payload}
+                ),
+            ),
+            patch("app.hsguru_archetype_analysis.save_status"),
+        ):
+            import asyncio
+
+            result = asyncio.run(
+                refresh_hsguru_archetype_analysis(
+                    archetypes=[
+                        {"format": "wild", "archetype": "Small Sample Priest"}
+                    ],
+                    fetch_html=fetch_html,
+                )
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(len(result["unavailable"]), 1)
+        self.assertEqual(result["firecrawl_credits_used"], 2)
+        row = saved["payload"]["data"]["structured"]["archetypes"][0]
+        self.assertEqual(row["state"], "partial")
+        self.assertEqual(len(row["class_matchups"]), 2)
+        self.assertEqual(row["card_stats"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

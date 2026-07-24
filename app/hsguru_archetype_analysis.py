@@ -38,6 +38,10 @@ CLASS_KEYS = {
 }
 
 
+class HSGuruAnalysisUnavailable(RuntimeError):
+    """The page loaded successfully, but HSGuru has no table for this sample."""
+
+
 def _header(value: str) -> str:
     return re.sub(r"[^a-z]+", " ", value.casefold()).strip()
 
@@ -365,6 +369,7 @@ async def refresh_hsguru_archetype_analysis(
     semaphore = asyncio.Semaphore(max(1, min(concurrency, 10)))
     acquisitions: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    unavailable: list[dict[str, str]] = []
 
     async def fetch_and_parse(
         url: str,
@@ -377,8 +382,6 @@ async def refresh_hsguru_archetype_analysis(
         async with semaphore:
             html, acquisition = await fetch_html(url)
         rows = parser(html)
-        if not rows:
-            raise RuntimeError(f"HSGuru {kind} page contained no valid rows")
         fetched_at = _now()
         acquisitions.append(
             {
@@ -389,6 +392,10 @@ async def refresh_hsguru_archetype_analysis(
                 "rows": len(rows),
             }
         )
+        if not rows:
+            raise HSGuruAnalysisUnavailable(
+                f"HSGuru {kind} page has no data for the requested sample"
+            )
         return rows, fetched_at
 
     async def enrich(target: dict[str, str]) -> dict[str, Any]:
@@ -438,6 +445,15 @@ async def refresh_hsguru_archetype_analysis(
                     entry["card_stats"] = rows
                     entry["card_stats_updated_at"] = fetched_at
                 fresh += 1
+            except HSGuruAnalysisUnavailable as exc:
+                unavailable.append(
+                    {
+                        "format": format_name,
+                        "archetype": archetype,
+                        "kind": kind,
+                        "reason": str(exc),
+                    }
+                )
             except Exception as exc:
                 errors.append(
                     {
@@ -541,6 +557,7 @@ async def refresh_hsguru_archetype_analysis(
         "rows_total": len(rows),
         "coverage": coverage,
         "errors": errors[:50],
+        "unavailable": unavailable[:500],
         "firecrawl_credits_used": firecrawl_credits,
         "scrape_do_credits_used": scrape_do_credits,
     }
@@ -552,6 +569,7 @@ async def refresh_hsguru_archetype_analysis(
         "archetypes": len(rows),
         "coverage": coverage,
         "errors": errors,
+        "unavailable": unavailable,
         "firecrawl_credits_used": firecrawl_credits,
         "scrape_do_credits_used": scrape_do_credits,
     }
