@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import html
 import re
 from typing import Any
 
-from .cards_index import resolve_card_name
+from .cards_index import cards_by_id, resolve_card_name
 from .parsing_normalize import is_percent, looks_like_name
 from .sources import SOURCE_BY_ID, Source
 
@@ -389,6 +390,18 @@ TRINKET_TRIBE_EN_TO_RU = {
     "Quilboar": "Свинобраз",
     "Undead": "Нежить",
 }
+TRINKET_TRIBE_EN_PLURAL = {
+    "Beast": "Beasts",
+    "Demon": "Demons",
+    "Dragon": "Dragons",
+    "Elemental": "Elementals",
+    "Mech": "Mechs",
+    "Murloc": "Murlocs",
+    "Naga": "Naga",
+    "Pirate": "Pirates",
+    "Quilboar": "Quilboar",
+    "Undead": "Undead",
+}
 TRINKET_TRIBES = set(TRINKET_TRIBE_EN_TO_RU) | set(TRINKET_TRIBE_RU_TO_EN)
 TRINKET_TIER_MARKERS = {"s", "a", "b", "c", "d", "e", "f"}
 
@@ -447,6 +460,116 @@ def trinket_identity_key(row: dict[str, Any], trinket_type: str | None = None) -
     return "|".join([type_key, name, tribe, card_id])
 
 
+def _normalize_trinket_card_text(
+    value: Any,
+    *,
+    tribe: str | None = None,
+    tribe_ru: str | None = None,
+    locale: str = "enUS",
+) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    text = re.sub(r"\[x\]", "", text, flags=re.I)
+    text = re.sub(r"\$(\d+)", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    def replace_inflection(match: re.Match[str]) -> str:
+        number = int(match.group("number"))
+        forms = [form.strip() for form in match.group("forms").split(",")]
+        if not forms:
+            return str(number)
+        if len(forms) >= 3 and locale == "ruRU":
+            if number % 100 in range(11, 15):
+                selected = forms[2]
+            elif number % 10 == 1:
+                selected = forms[0]
+            elif number % 10 in range(2, 5):
+                selected = forms[1]
+            else:
+                selected = forms[2]
+        else:
+            selected = forms[0] if number == 1 else forms[min(1, len(forms) - 1)]
+        return f"{number} {selected}".strip()
+
+    text = re.sub(
+        r"\(?(?P<number>\d+)\)?\s*\|4\((?P<forms>[^)]+)\)",
+        replace_inflection,
+        text,
+    )
+
+    if locale == "ruRU":
+        if tribe_ru:
+            text = re.sub(r"\b92\b", tribe_ru.lower(), text)
+        else:
+            text = re.sub(r"типа\s+[«\"]?92[»\"]?", "предложенного типа", text, flags=re.I)
+            text = re.sub(r"\b92\b", "существ предложенного типа", text)
+    elif tribe:
+        plural = TRINKET_TRIBE_EN_PLURAL.get(tribe, tribe)
+        text = re.sub(
+            r"\b(\d+)\s+random\s+92\b",
+            lambda match: f"{match.group(1)} random {plural}",
+            text,
+            flags=re.I,
+        )
+        text = re.sub(r"\b92\b", tribe, text)
+    else:
+        text = re.sub(
+            r"\ba random\s+92\b",
+            "a random minion of the offered type",
+            text,
+            flags=re.I,
+        )
+        text = re.sub(r"\b92\b", "minions of the offered type", text)
+    return text
+
+
+def _canonical_trinket_fields(
+    card_id: str,
+    *,
+    tribe: str | None,
+    tribe_ru: str | None,
+) -> dict[str, str]:
+    if not card_id:
+        return {}
+    try:
+        card_en = cards_by_id("enUS").get(card_id) or {}
+    except Exception:
+        card_en = {}
+    try:
+        card_ru = cards_by_id("ruRU").get(card_id) or {}
+    except Exception:
+        card_ru = {}
+
+    fields: dict[str, str] = {}
+    name_en = str(card_en.get("name") or "").strip()
+    description_en = _normalize_trinket_card_text(
+        card_en.get("text"),
+        tribe=tribe,
+        tribe_ru=tribe_ru,
+        locale="enUS",
+    )
+    name_ru = str(card_ru.get("name") or "").strip()
+    description_ru = _normalize_trinket_card_text(
+        card_ru.get("text"),
+        tribe=tribe,
+        tribe_ru=tribe_ru,
+        locale="ruRU",
+    )
+    if name_en:
+        fields["name"] = name_en
+    if description_en:
+        fields["description"] = description_en
+    if name_ru:
+        fields["localized_name"] = name_ru
+    if description_ru:
+        fields["localized_description"] = description_ru
+    return fields
+
+
 def enrich_trinket_variant_fields(row: dict[str, Any], *, trinket_type: str | None = None) -> dict[str, Any]:
     out = dict(row)
     if trinket_type:
@@ -463,6 +586,14 @@ def enrich_trinket_variant_fields(row: dict[str, Any], *, trinket_type: str | No
         out["tribe_ru"] = tribe_ru
         if str(out.get("description") or "").strip() in TRINKET_TRIBE_RU_TO_EN:
             out.pop("description", None)
+    card_id = str(out.get("trinket_id") or out.get("id") or "").strip()
+    out.update(
+        _canonical_trinket_fields(
+            card_id,
+            tribe=tribe,
+            tribe_ru=tribe_ru,
+        )
+    )
     out["variant_key"] = trinket_variant_key(out, trinket_type)
     return out
 
@@ -587,7 +718,7 @@ def build_structured(source: Source, data: dict[str, Any]) -> dict[str, Any]:
             if len(l) > 5 and len(l) < 80 and any(k in l.lower() for k in ("comp", "build", "tier"))
         ][:40]
         return {"type": "bg_comps", "blocked": blocked, "comps": comps}
-    if sid in ("hsreplay_battlegrounds_trinkets_lesser", "hsreplay_battlegrounds_trinkets_greater"):
+    if sid.startswith("hsreplay_battlegrounds_trinkets_"):
         return {"type": "bg_trinkets", "trinkets": parse_bg_trinkets(lines)}
     if sid.startswith("hsreplay_cards_"):
         blocked = any("could not load" in l.lower() for l in lines)

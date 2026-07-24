@@ -946,6 +946,21 @@ def get_archetype_detail(archetype_id: int, *, rank_range: str = "LEGEND", game_
                 (snapshot_id,),
             ).fetchall()
         ]
+        # Return each deck's card list with the detail response.  This keeps
+        # the archetype view self-contained while cards remain scoped to its
+        # exact snapshot.
+        for deck in decks:
+            deck["cards"] = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM archetype_deck_cards
+                    WHERE archetype_deck_id = ?
+                    ORDER BY sideboard ASC, COALESCE(cost, 99), card_name
+                    """,
+                    (deck["id"],),
+                ).fetchall()
+            ]
         history = [
             dict(row)
             for row in conn.execute(

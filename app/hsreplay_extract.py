@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import math
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
@@ -17,6 +18,18 @@ CARD_HREF_RE = re.compile(r"/cards/(\d+)")
 HERO_HREF_RE = re.compile(r"/battlegrounds/heroes/(\d+)")
 COMP_HREF_RE = re.compile(r"/battlegrounds/comps/(\d+)/([^/?#]+)")
 TRINKET_HREF_RE = re.compile(r"/battlegrounds/trinkets/")
+TRINKET_EXTRA_DATA_TRIBES = {
+    11: "Undead",
+    14: "Murloc",
+    15: "Demon",
+    17: "Mech",
+    18: "Elemental",
+    20: "Beast",
+    23: "Pirate",
+    24: "Dragon",
+    43: "Quilboar",
+    92: "Naga",
+}
 
 ARENA_CLASS_MARKERS = {
     "Death Knight", "Demon Hunter", "Druid", "Hunter", "Mage",
@@ -56,6 +69,113 @@ def _cards_from_hrefs(html_chunk: str) -> list[dict[str, Any]]:
         if entry.get("id"):
             cards.append(entry)
     return cards
+
+
+def parse_bg_trinkets_api_payload(
+    payload: Any,
+    *,
+    trinket_type: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(payload, list):
+        return []
+    expected_group = trinket_type.strip().lower()
+    cards = cards_by_dbfid()
+    trinkets: list[dict[str, Any]] = []
+    for raw in payload:
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("group") or "").strip().lower() != expected_group:
+            continue
+        try:
+            dbf_id = int(raw.get("trinket_dbf_id"))
+        except (TypeError, ValueError):
+            continue
+        card = cards.get(dbf_id) or {}
+        card_id = str(card.get("id") or "").strip()
+        name = str(card.get("name") or "").strip()
+        if not card_id or not name:
+            continue
+        try:
+            pick_rate = f"{float(raw.get('pick_rate')):.1f}%"
+            avg_placement = f"{float(raw.get('avg_final_placement')):.2f}"
+        except (TypeError, ValueError):
+            continue
+        distribution = raw.get("final_placement_distribution")
+        if not isinstance(distribution, list) or len(distribution) != 8:
+            continue
+        try:
+            placement_distribution = [
+                {"place": index + 1, "rate": f"{float(value):.2f}%"}
+                for index, value in enumerate(distribution)
+            ]
+        except (TypeError, ValueError):
+            continue
+        extra_data = raw.get("extra_data")
+        try:
+            tribe = TRINKET_EXTRA_DATA_TRIBES.get(int(extra_data)) if extra_data is not None else None
+        except (TypeError, ValueError):
+            tribe = None
+        row = {
+            "name": name,
+            "dbfId": dbf_id,
+            "id": card_id,
+            "trinket_id": card_id,
+            "cost": card.get("cost"),
+            "description": str(card.get("text") or ""),
+            "type": trinket_type,
+            "trinket_tier": trinket_type,
+            "tier": str(raw.get("tier") or "").strip().upper(),
+            "pick_rate": pick_rate,
+            "avg_placement": avg_placement,
+            "placement_distribution": placement_distribution,
+            "games": infer_minimum_games(distribution),
+            "games_is_minimum": True,
+            "extra_data": extra_data,
+            "tribe": tribe,
+            "race": tribe,
+        }
+        trinkets.append(enrich_trinket_variant_fields(row, trinket_type=trinket_type))
+    return trinkets
+
+
+def infer_minimum_games(distribution: list[Any], *, maximum: int = 10_000) -> int | None:
+    """Return the smallest integer sample compatible with rounded percentages.
+
+    HSReplay exposes placement percentages rounded to two decimals but not the
+    underlying sample count. The result is therefore an honest lower bound,
+    never presented as an exact count.
+    """
+    if len(distribution) != 8:
+        return None
+    try:
+        rates = [float(value) for value in distribution]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(rate) or rate < 0 or rate > 100 for rate in rates):
+        return None
+    if abs(sum(rates) - 100.0) > 0.1:
+        return None
+
+    epsilon = 1e-12
+    for games in range(1, maximum + 1):
+        minimum_total = 0
+        maximum_total = 0
+        feasible = True
+        for rate in rates:
+            lower = max(0.0, rate - 0.005)
+            upper = min(100.0, rate + 0.005)
+            minimum_count = math.ceil((lower * games / 100.0) - epsilon)
+            maximum_count = math.ceil((upper * games / 100.0) - epsilon) - 1
+            minimum_count = max(0, min(games, minimum_count))
+            maximum_count = max(0, min(games, maximum_count))
+            if minimum_count > maximum_count:
+                feasible = False
+                break
+            minimum_total += minimum_count
+            maximum_total += maximum_count
+        if feasible and minimum_total <= games <= maximum_total:
+            return games
+    return None
 
 
 def _hero_display_name(dbf_id: int, raw: str) -> str:

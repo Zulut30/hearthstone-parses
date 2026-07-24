@@ -32,6 +32,16 @@ def _bg_comp_detail_cache_path(url: str) -> Path | None:
     return _bg_comp_detail_cache_dir() / f"{comp_id}.md"
 
 
+def _looks_like_bg_comp_markdown(text: str) -> bool:
+    """Reject HTML shells that used to poison the on-disk detail cache."""
+    sample = (text or "")[:800].lstrip().lower()
+    if not sample or sample.startswith("<!doctype") or sample.startswith("<html"):
+        return False
+    if "<head>" in sample and "<script" in sample:
+        return False
+    return len(text) > 200
+
+
 def _read_bg_comp_detail_cache(url: str) -> str | None:
     p = _bg_comp_detail_cache_path(url)
     if not p or not p.exists():
@@ -41,14 +51,14 @@ def _read_bg_comp_detail_cache(url: str) -> str | None:
         return None
     try:
         txt = p.read_text(encoding="utf-8", errors="replace")
-        return txt if len(txt) > 200 else None
+        return txt if _looks_like_bg_comp_markdown(txt) else None
     except Exception:
         return None
 
 
 def _write_bg_comp_detail_cache(url: str, markdown: str) -> None:
     p = _bg_comp_detail_cache_path(url)
-    if not p:
+    if not p or not _looks_like_bg_comp_markdown(markdown):
         return
     try:
         p.write_text(markdown, encoding="utf-8")
@@ -421,13 +431,32 @@ async def parse_hsreplay_comp_detail(url: str, *, source_id: str) -> dict[str, A
     return {}
 
 
+_TIER_LETTER_RE = re.compile(r"^[sabcdef]$", re.I)
+
+
+def _tier_letter(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if _TIER_LETTER_RE.fullmatch(text):
+        return text.upper()
+    return None
+
+
 def parse_hsreplay_markdown(markdown: str, *, detail_limit: int = 12) -> list[dict[str, Any]]:
     lines = markdown.splitlines()
     headers = _find_comp_headers(markdown)
     comps: list[dict[str, Any]] = []
+    # Carry-forward: Firecrawl dumps put many image lines between comps, so a
+    # fixed lookback window misses the S/A/B markers and leaves half the list tierless.
+    current_tier: str | None = None
+    cursor = 0
 
     for i, header in enumerate(headers):
         next_line = headers[i + 1]["line"] if i + 1 < len(headers) else len(lines)
+        for line in lines[cursor : header["line"]]:
+            found = _tier_letter(line)
+            if found:
+                current_tier = found
+        cursor = header["line"]
         section = "\n".join(lines[header["line"] + 1 : next_line])
 
         caption = header.get("caption", "")
@@ -437,11 +466,7 @@ def parse_hsreplay_markdown(markdown: str, *, detail_limit: int = 12) -> list[di
         )
         caption_text = _clean_md_text(re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", caption))
         difficulty = next((d for d in ("Easy", "Medium", "Hard") if re.search(rf"\b{d}\b", caption_text)), None)
-        tier = None
-        for prev in reversed(lines[max(0, header["line"] - 80):header["line"]]):
-            if prev.strip().lower() in {"s", "a", "b", "c", "d", "e", "f"}:
-                tier = prev.strip().upper()
-                break
+        tier = current_tier
         title = _title_from_slug(header["slug"])
         if " - " not in title:
             title = title.replace(" ", " - ", 1)
@@ -531,7 +556,11 @@ async def fetch_battlegrounds_comps_firecrawl(
             except Exception as exc:
                 errors.append(f"{url}: {type(exc).__name__}: {str(exc)[:160]}")
                 return comp
+        listing_tier = _tier_letter(comp.get("tier"))
         merged = {**comp, **{k: v for k, v in detail.items() if v not in (None, "", [])}}
+        detail_tier = _tier_letter(detail.get("tier"))
+        # Prefer listing tier (Jeef table columns); detail pages often omit it.
+        merged["tier"] = listing_tier or detail_tier or merged.get("tier") or None
         merged["url"] = url
         merged["main_cards"] = merged.get("main_cards") or []
         merged["core_cards"] = merged["main_cards"]

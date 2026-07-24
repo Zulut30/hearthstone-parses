@@ -199,7 +199,10 @@ async def fetch_firestone_comps(source: Source) -> dict[str, Any]:
     
     for strategy in strategies_data:
         comp_id = str(strategy.get("compId") or "").strip()
-        if not comp_id:
+        title_probe = str(strategy.get("name") or "").strip()
+        if not comp_id or comp_id == "#N/A" or title_probe in {"", "#N/A"}:
+            continue
+        if not (strategy.get("cards") or []):
             continue
             
         stats = stats_by_archetype.get(comp_id) or {}
