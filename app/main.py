@@ -18,6 +18,12 @@ from .fetcher import refresh_sources
 from .source_state import SourceState
 from .sources import SOURCES, SOURCE_BY_ID
 from .storage import load_dataset, load_status, root_dir, save_dataset, save_status
+from .trinket_slices import (
+    DEFAULT_TRINKET_MMR,
+    DEFAULT_TRINKET_TIME_RANGE,
+    TRINKET_SLICE_SOURCE_IDS,
+    source_ids_for_trinket_slice,
+)
 from .routers.constructed import router as constructed_v1_router
 from .routers.bg import router as bg_v1_router
 from .routers.arena import router as arena_v1_router
@@ -31,7 +37,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 ACTIVE_TRINKET_SOURCE_IDS = {
     "hsreplay_battlegrounds_trinkets_lesser",
     "hsreplay_battlegrounds_trinkets_greater",
-}
+} | TRINKET_SLICE_SOURCE_IDS
 _HEALTH_CACHE_SECONDS = 15.0
 _health_cache_lock = threading.Lock()
 _health_cache_at = 0.0
@@ -543,7 +549,6 @@ def public_dataset_payload(
 def _trinket_rows_for_api(source_id: str, *, active_only: bool = True) -> list[dict[str, Any]]:
     from .structured import enrich_trinket_variant_fields
 
-    trinket_type = "Lesser" if source_id.endswith("_lesser") else "Greater"
     dataset = load_dataset(source_id) or {}
     structured = (dataset.get("data") or {}).get("structured") or {}
     rows = structured.get("trinkets") or []
@@ -553,6 +558,9 @@ def _trinket_rows_for_api(source_id: str, *, active_only: bool = True) -> list[d
             continue
         if active_only and not (row.get("pick_rate") or row.get("avg_placement")):
             continue
+        trinket_type = str(row.get("trinket_tier") or row.get("type") or "").strip()
+        if not trinket_type:
+            trinket_type = "Lesser" if source_id.endswith("_lesser") else "Greater"
         item = enrich_trinket_variant_fields(dict(row), trinket_type=trinket_type)
         item["source_id"] = source_id
         item["source_url"] = SOURCE_BY_ID[source_id].url
@@ -564,12 +572,17 @@ def _trinket_rows_for_api(source_id: str, *, active_only: bool = True) -> list[d
 def bg_trinkets(
     trinket_tier: str = Query("all", pattern="^(all|lesser|greater)$"),
     active_only: bool = Query(True),
+    mmr: str = Query(
+        DEFAULT_TRINKET_MMR,
+        pattern="^(ALL|TOP_50_PERCENT|TOP_20_PERCENT|TOP_5_PERCENT|TOP_1_PERCENT)$",
+    ),
+    time_range: str = Query(
+        DEFAULT_TRINKET_TIME_RANGE,
+        alias="timeRange",
+        pattern="^(CURRENT_BATTLEGROUNDS_PATCH|LAST_7_DAYS)$",
+    ),
 ) -> dict[str, Any]:
-    source_ids = list(ACTIVE_TRINKET_SOURCE_IDS)
-    if trinket_tier == "lesser":
-        source_ids = ["hsreplay_battlegrounds_trinkets_lesser"]
-    elif trinket_tier == "greater":
-        source_ids = ["hsreplay_battlegrounds_trinkets_greater"]
+    source_ids = list(source_ids_for_trinket_slice(mmr, time_range))
     rows: list[dict[str, Any]] = []
     fetched_at: list[str] = []
     for source_id in source_ids:
@@ -577,6 +590,14 @@ def bg_trinkets(
         if dataset and dataset.get("fetched_at"):
             fetched_at.append(str(dataset["fetched_at"]))
         rows.extend(_trinket_rows_for_api(source_id, active_only=active_only))
+    if trinket_tier != "all":
+        expected_tier = trinket_tier.lower()
+        rows = [
+            row
+            for row in rows
+            if str(row.get("trinket_tier") or row.get("type") or "").strip().lower()
+            == expected_tier
+        ]
     rows.sort(
         key=lambda row: (
             row.get("trinket_tier") or "",
@@ -591,6 +612,12 @@ def bg_trinkets(
         "count": len(rows),
         "active_only": active_only,
         "trinket_tier": trinket_tier,
+        "mmr": mmr,
+        "timeRange": time_range,
+        "games_note": (
+            "games is the minimum integer sample compatible with HSReplay's "
+            "rounded placement distribution"
+        ),
         "fetched_at": max(fetched_at) if fetched_at else None,
         "trinkets": rows,
     }
@@ -1071,6 +1098,50 @@ async def refresh_hsreplay_archetypes(
     result["export_path"] = str(export_latest_archetypes_json())
     return result
 
+
+
+
+@app.get("/api/hsreplay/archetypes")
+async def hsreplay_archetypes_dictionary(
+    hl: str = Query("en", min_length=2, max_length=8),
+) -> dict:
+    """
+    Return HSReplay's complete archetype reference dictionary.
+
+    Consumer: the admin-only `/archetypes/` page in HS-Arena. The upstream
+    request must stay in this service because `fetch_hsreplay_json` owns the
+    protected HSReplay transport/session; browser-side calls are blocked by
+    Cloudflare. This endpoint deliberately returns English canonical names.
+    Russian naming is Arena's editorial concern and is applied from its
+    `archetype_translations` table, not persisted here.
+    """
+    from .hsreplay_client import fetch_hsreplay_json
+
+    locale = "ru" if hl.lower().startswith("ru") else "en"
+    url = f"https://hsreplay.net/api/v1/archetypes/?hl={locale}"
+    payload = await fetch_hsreplay_json(url, source_id="hsreplay_archetypes_dictionary")
+    rows = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), list) else payload
+    if not isinstance(rows, list):
+        rows = []
+    archetypes = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        archetypes.append(
+            {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "class": row.get("player_class_name") or row.get("player_class"),
+                "url": row.get("url"),
+                # A reference archetype can exist for one format only.  Keep
+                # these flags so the consuming UI never guesses the format
+                # from an English name or a URL.
+                "standard": bool(row.get("standard_ccp_signature_core")),
+                "wild": bool(row.get("wild_ccp_signature_core")),
+            }
+        )
+    archetypes.sort(key=lambda item: (str(item.get("class") or ""), str(item.get("name") or ""), int(item.get("id") or 0)))
+    return {"count": len(archetypes), "hl": locale, "archetypes": archetypes}
 
 @app.post("/admin/refresh/bg-minions-db", dependencies=[Depends(require_admin)])
 async def refresh_bg_minions_db() -> dict:
@@ -1674,12 +1745,30 @@ def db_bg_minion_history(
 
 
 @app.get("/api/bg/heroes")
-def api_bg_heroes(
+async def api_bg_heroes(
     mode: str = Query("solo", pattern="^(solo|duos)$"),
     q: str | None = Query(None, min_length=1, max_length=120),
+    mmr: str = Query("TOP_50_PERCENT", pattern="^(TOP_50_PERCENT|TOP_20_PERCENT|TOP_5_PERCENT|TOP_1_PERCENT)$"),
 ) -> dict:
-    from .hsreplay_bg_hero_details import list_bg_heroes
+    from .hsreplay_bg_hero_details import BG_MMR, fetch_hero_index, list_bg_heroes
 
+    # The stored full detail snapshot is Top 50%. Other MMR ranges are
+    # lightweight live index slices, cached by the protected HSReplay client.
+    if mmr != BG_MMR:
+        payload = await fetch_hero_index(duos=mode == "duos", mmr=mmr)
+        rows = payload.get("heroes") or []
+        if q:
+            needle = q.lower()
+            rows = [row for row in rows if needle in str(row.get("hero") or "").lower()]
+        return {
+            "type": "bg_heroes",
+            "mode": mode,
+            "count": len(rows),
+            "fetched_at": datetime.now(UTC).isoformat(),
+            "filters": payload.get("filters"),
+            "source": payload.get("source"),
+            "heroes": rows,
+        }
     return list_bg_heroes(mode=mode, q=q)
 
 

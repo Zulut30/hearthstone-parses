@@ -12,6 +12,7 @@ const LABELS = {
   hsguru_matchups_legend: "Матчапы · Legend",
   hsguru_matchups_diamond_4to1: "Матчапы · Diamond",
   hsguru_streamer_decks_legend_1000: "Колоды стримеров",
+  hsguru_fun_decks: "Фановые / off-meta колоды",
   hsreplay_arena: "Арена · матрица классов",
   hsreplay_arena_cards_advanced: "Арена · тир карт",
   hsreplay_arena_legendaries: "Арена · легендарные группы",
@@ -59,6 +60,7 @@ const SIDEBAR_ORDER = [
   "hsguru_matchups_legend",
   "hsguru_matchups_diamond_4to1",
   "hsguru_streamer_decks_legend_1000",
+  "hsguru_fun_decks",
 ];
 
 const SIDEBAR_GROUPS = [
@@ -562,6 +564,31 @@ function renderDetail(p) {
         ${renderCards(d.cards)}</div>`;
     }
     body += "</div>";
+  } else if ((t === "hsguru_fun_decks" || t === "fun_decks") && Array.isArray(v.rows)) {
+    const rows = v.rows;
+    const byFormat = rows.reduce((acc, row) => {
+      const key = String(row.format || "other");
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    body = `<div class="block"><h3>Фановые / off-meta колоды (${rows.length})</h3>`;
+    body += `<p class="muted">Детектор: ${escapeHtml(String(v.detector_version || "?"))} · Standard ${escapeHtml(String(byFormat.Standard || byFormat.standard || 0))} · Wild ${escapeHtml(String(byFormat.Wild || byFormat.wild || 0))}</p>`;
+    body += "<table class='simple'><thead><tr><th>Название</th><th>Формат</th><th>Класс</th><th>Fun</th><th>Sim</th><th>WR</th><th>Код</th><th>Причины</th></tr></thead><tbody>";
+    for (const row of rows.slice(0, 100)) {
+      const code = String(row.deck_code || "");
+      const reasons = Array.isArray(row.reasons) ? row.reasons.join(", ") : "";
+      body += `<tr>
+        <td>${row.url ? `<a href="${escapeHtml(row.url)}" target="_blank" rel="noopener">${escapeHtml(row.title || "?")}</a>` : escapeHtml(row.title || "?")}</td>
+        <td>${escapeHtml(row.format || "")}</td>
+        <td>${escapeHtml(row.class || "")}</td>
+        <td>${escapeHtml(String(row.fun_score ?? ""))}</td>
+        <td>${escapeHtml(String(row.max_meta_similarity ?? ""))}</td>
+        <td>${escapeHtml(String(row.win_rate ?? ""))}</td>
+        <td><code style="user-select:all;word-break:break-all;">${escapeHtml(code)}</code></td>
+        <td>${escapeHtml(reasons)}</td>
+      </tr>`;
+    }
+    body += "</tbody></table></div>";
   } else if (t === "card_stats" && v.blocked) {
     body = `<div class="block warn"><h3>Требуется сессия HSReplay</h3>
       <p>Импортируйте cookies и выполните refresh.</p></div>`;

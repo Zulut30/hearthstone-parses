@@ -67,6 +67,7 @@ class PublishGateTest(unittest.TestCase):
             {
                 "name": f"Valid Trinket {index}",
                 "trinket_id": f"BG_TEST_{index}",
+                "description": "A complete canonical trinket description.",
                 "pick_rate": "1.0%",
                 "avg_placement": "4.0",
             }

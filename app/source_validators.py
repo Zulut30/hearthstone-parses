@@ -401,7 +401,20 @@ def _validate_arena_legendary_groups(_source_id: str, structured: dict[str, Any]
     report = ValidationReport()
     groups = [row for row in (structured.get("groups") or []) if isinstance(row, dict)]
     with_key_card = sum(1 for row in groups if row.get("key_card"))
-    report.metrics.update({"groups": len(groups), "groups_with_key_card": with_key_card})
+    with_pick = sum(1 for row in groups if row.get("pick_rate") not in (None, ""))
+    with_offer = sum(1 for row in groups if row.get("offer_rate") not in (None, ""))
+    with_score = sum(1 for row in groups if row.get("score") is not None)
+    with_winrate = sum(1 for row in groups if row.get("winrate") not in (None, ""))
+    report.metrics.update(
+        {
+            "groups": len(groups),
+            "groups_with_key_card": with_key_card,
+            "groups_with_winrate": with_winrate,
+            "groups_with_pick_rate": with_pick,
+            "groups_with_offer_rate": with_offer,
+            "groups_with_score": with_score,
+        }
+    )
     if len(groups) < 10:
         report.add_issue(
             "arena_legendary_groups.too_few_groups",
@@ -414,8 +427,33 @@ def _validate_arena_legendary_groups(_source_id: str, structured: dict[str, Any]
             "legendary groups missing key_card",
             field="key_card",
         )
+    # Arenasmith footer metrics (pick/offer/score) should cover most groups after enrich.
+    metrics_floor = max(5, len(groups) // 2) if groups else 5
+    if groups and with_score < metrics_floor:
+        report.add_issue(
+            "arena_legendary_groups.missing_score_metrics",
+            f"legendary score fill too low ({with_score}/{len(groups)}; minimum {metrics_floor})",
+            field="score",
+        )
+    if groups and with_pick < metrics_floor:
+        report.add_issue(
+            "arena_legendary_groups.missing_pick_rate",
+            f"legendary pick_rate fill too low ({with_pick}/{len(groups)}; minimum {metrics_floor})",
+            field="pick_rate",
+        )
+    if groups and with_offer < metrics_floor:
+        report.add_issue(
+            "arena_legendary_groups.missing_offer_rate",
+            f"legendary offer_rate fill too low ({with_offer}/{len(groups)}; minimum {metrics_floor})",
+            field="offer_rate",
+        )
+    fill_score = (
+        min(with_pick / max(len(groups), 1), 1.0)
+        + min(with_offer / max(len(groups), 1), 1.0)
+        + min(with_score / max(len(groups), 1), 1.0)
+    ) / 3.0
     report.score = round(
-        (min(len(groups) / 10.0, 1.0) + min(with_key_card, 1)) / 2,
+        (min(len(groups) / 10.0, 1.0) + min(with_key_card, 1) + fill_score) / 3,
         4,
     )
     return report
@@ -500,11 +538,22 @@ def _validate_bg_trinkets(_source_id: str, structured: dict[str, Any]) -> Valida
         and str(row.get("name") or "")[:1].isalnum()
     ]
     minimum_valid = max(6, len(trinkets) // 2)
+    complete_descriptions = [
+        row
+        for row in trinkets
+        if len(str(row.get("description") or "").strip()) >= 20
+        and "92" not in str(row.get("description") or "")
+        and "|4(" not in str(row.get("description") or "")
+        and re.search(r'[.!?)]$|["”»]$', str(row.get("description") or "").strip())
+    ]
+    minimum_complete_descriptions = math.ceil(len(trinkets) * 0.90)
     report.metrics.update(
         {
             "trinkets": len(trinkets),
             "valid_trinkets": len(valid),
             "minimum_valid": minimum_valid,
+            "complete_descriptions": len(complete_descriptions),
+            "minimum_complete_descriptions": minimum_complete_descriptions,
             "parser_level": structured.get("parser_level"),
             "dropped_rows": int(structured.get("dropped_rows") or 0),
         }
@@ -529,8 +578,26 @@ def _validate_bg_trinkets(_source_id: str, structured: dict[str, Any]) -> Valida
             f"bg trinkets invalid names/stats ({len(valid)}/{len(trinkets)}; minimum {minimum_valid})",
             field="name,pick_rate",
         )
+    if len(complete_descriptions) < minimum_complete_descriptions:
+        report.add_issue(
+            "bg_trinkets.incomplete_descriptions",
+            (
+                "bg trinkets have incomplete descriptions "
+                f"({len(complete_descriptions)}/{len(trinkets)}; "
+                f"minimum {minimum_complete_descriptions})"
+            ),
+            field="description",
+        )
     report.score = round(
-        (min(len(trinkets) / 8.0, 1.0) + min(len(valid) / max(minimum_valid, 1), 1.0)) / 2,
+        (
+            min(len(trinkets) / 8.0, 1.0)
+            + min(len(valid) / max(minimum_valid, 1), 1.0)
+            + min(
+                len(complete_descriptions) / max(minimum_complete_descriptions, 1),
+                1.0,
+            )
+        )
+        / 3,
         4,
     )
     return report
@@ -1110,6 +1177,29 @@ def _validate_hsguru_streamer_decks(
     return report
 
 
+def _validate_hsguru_fun_decks(
+    _source_id: str,
+    structured: dict[str, Any],
+) -> ValidationReport:
+    report = ValidationReport()
+    rows = [row for row in (structured.get("rows") or []) if isinstance(row, dict)]
+    with_scores = sum(
+        1
+        for row in rows
+        if row.get("deck_code") and row.get("fun_score") is not None
+    )
+    report.metrics.update({"rows": len(rows), "rows_with_scores": with_scores})
+    # Empty is allowed early on; once populated, require scored codes.
+    if rows and with_scores < max(1, len(rows) // 2):
+        report.add_issue(
+            "hsguru_fun_decks.missing_scores",
+            f"Fun decks missing scores/codes ({with_scores}/{len(rows)})",
+            field="fun_score,deck_code",
+        )
+    report.score = 1.0 if not rows else round(min(with_scores / max(len(rows), 1), 1.0), 4)
+    return report
+
+
 def _validate_hsguru_matchups(
     _source_id: str,
     structured: dict[str, Any],
@@ -1158,6 +1248,7 @@ _VALIDATORS: dict[str, Callable[[str, dict[str, Any]], ValidationReport]] = {
     "hsreplay_meta_archetypes": _validate_hsreplay_meta_archetypes,
     "meta": _validate_hsguru_meta,
     "streamer_decks": _validate_hsguru_streamer_decks,
+    "fun_decks": _validate_hsguru_fun_decks,
     "matchups": _validate_hsguru_matchups,
 }
 

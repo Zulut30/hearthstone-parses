@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .sources import SOURCE_BY_ID
+from .trinket_slices import TRINKET_SLICE_SOURCE_IDS
 
 
 EARLY_SOURCE_IDS = frozenset(
@@ -89,9 +90,10 @@ SECTIONS: tuple[ParserSection, ...] = (
         id="traditional-decks",
         label="Колоды",
         group="Традиционный режим",
-        description="Популярные, стримерские и высокоранговые сборки.",
+        description="Популярные, стримерские, фановые и высокоранговые сборки.",
         source_ids=(
             "hsguru_streamer_decks_legend_1000",
+            "hsguru_fun_decks",
             "hsreplay_decks_trending",
             "hearthstone_decks",
         ),
@@ -176,6 +178,7 @@ SECTIONS: tuple[ParserSection, ...] = (
         source_ids=(
             "hsreplay_battlegrounds_trinkets_lesser",
             "hsreplay_battlegrounds_trinkets_greater",
+            *sorted(TRINKET_SLICE_SOURCE_IDS),
         ),
     ),
 )
@@ -202,6 +205,7 @@ if _duplicates:
 
 SOURCE_LABELS_RU: dict[str, str] = {
     "hsguru_streamer_decks_legend_1000": "HSGuru · колоды стримеров, топ-1000 Легенды",
+    "hsguru_fun_decks": "HSGuru · фановые / off-meta колоды",
     "hsguru_meta_standard_legend": "HSGuru · Standard, Легенда",
     "hsguru_meta_standard_diamond_4to1": "HSGuru · Standard, Алмаз 4–1",
     "hsguru_meta_wild_legend": "HSGuru · Wild, Легенда",

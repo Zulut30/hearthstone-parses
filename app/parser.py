@@ -7,8 +7,9 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from .cards_index import resolve_card_name
-from .hsreplay_extract import extract_for_source
+from .hsreplay_extract import extract_for_source, parse_bg_trinkets_api_payload
 from .sources import Source
+from .trinket_slices import TRINKET_SLICE_BY_SOURCE_ID, TRINKET_SLICE_SOURCE_IDS
 from .structured import build_structured
 
 
@@ -108,6 +109,30 @@ def _tables_from_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _json_body_payload(
+    html: str,
+    soup: BeautifulSoup,
+    snapshot: dict[str, Any] | None,
+) -> Any:
+    candidates = [html.strip()]
+    pre = soup.find("pre")
+    if pre:
+        candidates.append(pre.get_text().strip())
+    if snapshot and snapshot.get("lines"):
+        snapshot_text = "\n".join(str(line) for line in snapshot["lines"]).strip()
+        snapshot_text = re.sub(r"^```(?:json)?\s*", "", snapshot_text, flags=re.I)
+        snapshot_text = re.sub(r"\s*```$", "", snapshot_text)
+        candidates.append(snapshot_text)
+    for candidate in candidates:
+        if not candidate or candidate[:1] not in "[{":
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def parse_html(source: Source, html: str, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     soup = BeautifulSoup(html, "lxml")
     title_tag = soup.find("title")
@@ -169,11 +194,40 @@ def parse_html(source: Source, html: str, snapshot: dict[str, Any] | None = None
             )
     links = _extract_links(soup)
     hsreplay_bootstrap = _extract_hsreplay_bootstrap(json_scripts) if source.site == "hsreplay" else None
-    hsreplay_extracted = (
-        extract_for_source(source.id, soup, html, snapshot)
-        if source.site == "hsreplay"
-        else {}
-    )
+    hsreplay_extracted: dict[str, Any] = {}
+    if source.site == "hsreplay":
+        if source.id in {
+            "hsreplay_battlegrounds_trinkets_lesser",
+            "hsreplay_battlegrounds_trinkets_greater",
+        } | TRINKET_SLICE_SOURCE_IDS:
+            body_payload = _json_body_payload(html, soup, snapshot)
+            if source.id in TRINKET_SLICE_SOURCE_IDS:
+                api_rows = [
+                    *parse_bg_trinkets_api_payload(body_payload, trinket_type="Lesser"),
+                    *parse_bg_trinkets_api_payload(body_payload, trinket_type="Greater"),
+                ]
+                mmr_percentile, time_range = TRINKET_SLICE_BY_SOURCE_ID[source.id]
+            else:
+                trinket_type = "Lesser" if source.id.endswith("_lesser") else "Greater"
+                api_rows = parse_bg_trinkets_api_payload(
+                    body_payload,
+                    trinket_type=trinket_type,
+                )
+                mmr_percentile, time_range = "TOP_1_PERCENT", "LAST_7_DAYS"
+            if api_rows:
+                hsreplay_extracted = {
+                    "type": "bg_trinkets",
+                    "trinkets": api_rows,
+                    "active_trinkets": len(api_rows),
+                    "parser_level": "primary",
+                    "source": {
+                        "backend": "hsreplay_json_api",
+                        "mmr_percentile": mmr_percentile,
+                        "time_range": time_range,
+                    },
+                }
+        if not hsreplay_extracted:
+            hsreplay_extracted = extract_for_source(source.id, soup, html, snapshot)
     structured = build_structured(
         source,
         {

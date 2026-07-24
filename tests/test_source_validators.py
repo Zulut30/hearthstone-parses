@@ -271,7 +271,17 @@ class SourceValidatorsTest(unittest.TestCase):
         )
 
     def test_arena_legendary_groups_require_key_card(self) -> None:
-        groups = [{"name": f"Group {idx}", "key_card": None} for idx in range(10)]
+        groups = [
+            {
+                "name": f"Group {idx}",
+                "key_card": None,
+                "winrate": 50.0,
+                "pick_rate": 10.0,
+                "offer_rate": 20.0,
+                "score": 1.0,
+            }
+            for idx in range(10)
+        ]
         report = validate_structured(
             "hsreplay_arena_legendaries",
             {"type": "arena_legendary_groups", "groups": groups},
@@ -332,7 +342,11 @@ class SourceValidatorsTest(unittest.TestCase):
 
     def test_bg_trinkets_reject_placeholder_names(self) -> None:
         trinkets = [
-            {"name": "—" if idx < 3 else f"Trinket {idx}", "pick_rate": "5%"}
+            {
+                "name": "—" if idx < 3 else f"Trinket {idx}",
+                "pick_rate": "5%",
+                "description": "A complete trinket description for validation.",
+            }
             for idx in range(8)
         ]
         report = validate_structured(
@@ -352,6 +366,31 @@ class SourceValidatorsTest(unittest.TestCase):
                 "hsreplay_battlegrounds_trinkets_lesser",
                 {"type": "bg_trinkets", "trinkets": trinkets},
             ).ok
+        )
+
+    def test_bg_trinkets_reject_truncated_descriptions(self) -> None:
+        trinkets = [
+            {
+                "name": f"Trinket {idx}",
+                "pick_rate": "5%",
+                "description": (
+                    "Start of Combat:"
+                    if idx < 2
+                    else "Start of Combat: Give your minions +2/+2 permanently."
+                ),
+            }
+            for idx in range(8)
+        ]
+
+        report = validate_structured(
+            "hsreplay_battlegrounds_trinkets_lesser",
+            {"type": "bg_trinkets", "trinkets": trinkets},
+        )
+
+        self.assertFalse(report.ok)
+        self.assertIn(
+            "bg_trinkets.incomplete_descriptions",
+            {issue.code for issue in report.issues},
         )
 
     def test_bg_minions_require_forty_stat_rows(self) -> None:

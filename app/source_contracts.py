@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from .post_patch_policy import effective_contract_min_rows
+from .trinket_slices import TRINKET_SLICE_SOURCE_IDS
 
 
 @dataclass(frozen=True)
@@ -110,13 +111,16 @@ CONTRACTS: dict[str, SourceContract] = {
         source_id="hsreplay_arena_legendaries",
         structured_type="arena_legendary_groups",
         preferred_channels=HSREPLAY_JSON_CHANNELS,
-        allow_browser_fallback=False,
+        allow_browser_fallback=True,
         min_rows=10,
-        critical_fields=("key_card",),
-        min_field_fill_rate=0.80,
+        critical_fields=("key_card", "winrate", "pick_rate", "offer_rate", "score"),
+        min_field_fill_rate=0.50,
         regression_drop_ratio=0.30,
-        fallback_policy="api_only",
-        recommendation="Legendary groups must retain key_card mappings from HSReplay API.",
+        fallback_policy="preserve_previous_good",
+        recommendation=(
+            "Primary: card_packages/free + Arenasmith card_stats enrich. "
+            "Fallback: Firecrawl scrape of /arena/legendaries/ then same enrich."
+        ),
     ),
     "hsreplay_battlegrounds_heroes": SourceContract(
         source_id="hsreplay_battlegrounds_heroes",
@@ -155,7 +159,7 @@ CONTRACTS: dict[str, SourceContract] = {
         structured_type="bg_trinkets",
         allow_browser_fallback=True,
         min_rows=80,
-        critical_fields=("name", "trinket_id", "pick_rate", "avg_placement"),
+        critical_fields=("name", "trinket_id", "description", "pick_rate", "avg_placement"),
         min_field_fill_rate=0.90,
         regression_drop_ratio=0.35,
         fallback_policy="html_allowed",
@@ -166,7 +170,7 @@ CONTRACTS: dict[str, SourceContract] = {
         structured_type="bg_trinkets",
         allow_browser_fallback=True,
         min_rows=80,
-        critical_fields=("name", "trinket_id", "pick_rate", "avg_placement"),
+        critical_fields=("name", "trinket_id", "description", "pick_rate", "avg_placement"),
         min_field_fill_rate=0.90,
         regression_drop_ratio=0.35,
         fallback_policy="html_allowed",
@@ -343,6 +347,22 @@ CONTRACTS: dict[str, SourceContract] = {
         recommendation="Track deck_code fill rate separately; missing individual detail pages should not fail the whole source.",
     ),
 }
+
+for _trinket_slice_source_id in TRINKET_SLICE_SOURCE_IDS:
+    CONTRACTS[_trinket_slice_source_id] = SourceContract(
+        source_id=_trinket_slice_source_id,
+        structured_type="bg_trinkets",
+        allow_browser_fallback=True,
+        min_rows=160,
+        critical_fields=("name", "trinket_id", "description", "pick_rate", "avg_placement"),
+        min_field_fill_rate=0.90,
+        regression_drop_ratio=0.35,
+        fallback_policy="html_allowed",
+        recommendation=(
+            "HSReplay combined trinket JSON slice; retain both Lesser and Greater "
+            "rows with canonical card identities."
+        ),
+    )
 
 
 for _sid in (

@@ -45,8 +45,9 @@ class SourceContractsTest(unittest.TestCase):
 
         self.assertEqual(source.site, "hsguru")
         self.assertEqual(source.category, "streamer_decks")
-        self.assertIn("last_played=min_ago_4320", source.fetch_url)
+        self.assertIn("last_played=min_ago_60", source.fetch_url)
         self.assertIn("legend=1000", source.fetch_url)
+        self.assertIn("violet_hold=no", source.fetch_url)
         self.assertIn("limit=100", source.fetch_url)
 
     def test_arena_advanced_contract_blocks_bad_fallback(self) -> None:
@@ -80,7 +81,7 @@ class SourceContractsTest(unittest.TestCase):
 
     def test_trinket_contract_checks_canonical_id_fill(self) -> None:
         # The trinket contract now requires stats fields on top of canonical ids:
-        # critical_fields=("name", "trinket_id", "pick_rate", "avg_placement")
+        # critical_fields=("name", "trinket_id", "description", "pick_rate", "avg_placement")
         # with min_field_fill_rate=0.90 (app/source_contracts.py:150-160), so a
         # realistic full row carries pick_rate/avg_placement as well.
         report = contract_quality_report(
@@ -91,6 +92,7 @@ class SourceContractsTest(unittest.TestCase):
                     {
                         "name": f"Trinket {idx}",
                         "trinket_id": f"BG30_MagicItem_{idx}",
+                        "description": "A complete canonical trinket description.",
                         "pick_rate": "10.0%",
                         "avg_placement": "4.50",
                     }

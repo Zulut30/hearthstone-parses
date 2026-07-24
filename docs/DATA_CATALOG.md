@@ -23,6 +23,7 @@ admin/ops endpoints и правила авторизации находятся 
 | Найти колоды разных источников | `GET /v1/constructed/decks` |
 | Получить актуальные HSReplay-архетипы | `GET /v1/constructed/archetypes` |
 | Получить фильтрованный срез меты HSGuru | `GET /v1/hsguru/meta` |
+| Получить актуальные HSGuru-архетипы со сборками | `GET /v1/hsguru/archetypes?min_games=50&has_decks=true` |
 | Получить BG-героев solo/duos | `GET /v1/bg/heroes` |
 | Получить BG-существ и их историю | `GET /v1/bg/minions` и `/api/db/bg/minions/*` |
 | Получить классы Арены | `GET /v1/arena/classes` |
@@ -185,6 +186,7 @@ GET /v1/constructed/archetypes
 | `hearthstone_decks` | Standard/Wild Legend posts: player, rank, score, date, deck code и статус его извлечения. |
 | `metastats_decks` | Архетип, класс, winrate, games, cards, deck code. |
 | `hsguru_streamer_decks_legend_1000` | Streamer, peak/latest rank, win-loss, format, last played, links и deck code. |
+| `hsguru_fun_decks` | Off-meta / fun decks: `fun_score`, `max_meta_similarity`, nearest archetype, reasons; derived from streamer candidates vs meta catalogs. |
 
 ## Matchups и meta
 
@@ -194,7 +196,7 @@ GET /v1/constructed/archetypes
 | `hsguru_meta_standard_diamond_4to1` | Standard Diamond 4–1. |
 | `hsguru_meta_standard_top_5k` | Standard Top 5K. |
 | `hsguru_meta_standard_top_legend` | Standard Top Legend. |
-| `hsguru_meta_matrix` | Unified six-hourly Firecrawl matrix: Standard/Wild, five ranks (including ALL), five periods (including the latest six hours), Any Player, with local 100–5000 game thresholds. |
+| `hsguru_meta_matrix` | Unified twelve-hourly Firecrawl matrix: Standard/Wild, nine ranks, five rolling periods, Any Player and local 100–5000 game thresholds. It also contains the current-patch Standard/Wild archetype catalog (minimum 50 games), cached builds and time-series statistics. |
 | `hsguru_meta_wild_legend` | Wild Legend. |
 | `hsguru_meta_wild_diamond_4to1` | Wild Diamond 4–1. |
 | `hsguru_meta_wild_top_5k` | Wild Top 5K. |
@@ -206,6 +208,14 @@ GET /v1/constructed/archetypes
 
 HSGuru meta-строки находятся в `data.structured.strategies[]`, matchup-строки —
 в `data.structured.matchups[]`.
+
+Актуальный каталог находится в
+`data.structured.current_catalog.archetypes[]`. У строки есть `games`,
+`winrate`, `popularity_pct`, `deck_count`, `has_decks` и `decks[]`; каждая
+сборка содержит deck code, число игр, winrate, класс и ссылку HSGuru.
+`GET /v1/hsguru/archetypes` поддерживает фильтры `format`, `min_games`,
+`has_decks`, поиск, сортировку и пагинацию. Временной ряд доступен через
+`GET /v1/hsguru/archetypes/history`.
 
 ## Battlegrounds
 
@@ -274,6 +284,16 @@ Firestone-наборы:
 
 Источники `hsreplay_battlegrounds_trinkets_lesser` и
 `hsreplay_battlegrounds_trinkets_greater` используют `type=bg_trinkets`.
+
+Дополнительные агрегированные срезы объединяют малые и большие аксессуары:
+
+| MMR | Текущий BG-патч | Последние 7 дней |
+| --- | --- | --- |
+| Все игроки | `hsreplay_battlegrounds_trinkets_all_current_battlegrounds_patch` | `hsreplay_battlegrounds_trinkets_all_last_7_days` |
+| Топ 50% | `hsreplay_battlegrounds_trinkets_top_50_percent_current_battlegrounds_patch` | `hsreplay_battlegrounds_trinkets_top_50_percent_last_7_days` |
+| Топ 20% | `hsreplay_battlegrounds_trinkets_top_20_percent_current_battlegrounds_patch` | `hsreplay_battlegrounds_trinkets_top_20_percent_last_7_days` |
+| Топ 5% | `hsreplay_battlegrounds_trinkets_top_5_percent_current_battlegrounds_patch` | `hsreplay_battlegrounds_trinkets_top_5_percent_last_7_days` |
+| Топ 1% | `hsreplay_battlegrounds_trinkets_top_1_percent_current_battlegrounds_patch` | legacy-наборы `hsreplay_battlegrounds_trinkets_lesser` и `hsreplay_battlegrounds_trinkets_greater` |
 
 Поля: `trinket_id`, `trinket_tier`, `name`, `localized_name`, `dbfId`, `cost`,
 `pick_rate`, `avg_placement`, `placement_distribution`, `race`, `tribe`,

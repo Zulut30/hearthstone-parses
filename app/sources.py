@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urldefrag
 
+from .trinket_slices import TRINKET_SLICE_PARAMETERS, trinket_slice_source_id
+
 
 @dataclass(frozen=True)
 class Source:
@@ -33,10 +35,10 @@ class Source:
 SOURCES: tuple[Source, ...] = (
     Source(
         "hsguru_streamer_decks_legend_1000",
-        "https://www.hsguru.com/streamer-decks?last_played=min_ago_4320&legend=1000&limit=100",
+        "https://www.hsguru.com/streamer-decks?last_played=min_ago_60&legend=1000&violet_hold=no&limit=100",
         "hsguru",
         "streamer_decks",
-        description="Streamer decks filtered to top legend, last 72 hours, limit 100.",
+        description="Streamer decks filtered to top 1000 legend, last 60 minutes, excluding Violet Hold, limit 100.",
     ),
     Source(
         "hsguru_meta_standard_legend",
@@ -147,17 +149,36 @@ SOURCES: tuple[Source, ...] = (
     ),
     Source(
         "hsreplay_battlegrounds_trinkets_lesser",
-        "https://hsreplay.net/battlegrounds/trinkets/lesser/",
+        "https://hsreplay.net/api/v1/battlegrounds/trinkets/"
+        "?format=json&hl=en&BattlegroundsMMRPercentile=TOP_1_PERCENT"
+        "&BattlegroundsTimeRange=LAST_7_DAYS",
         "hsreplay",
         "battlegrounds",
-        description="HSReplay lesser trinkets.",
+        description="HSReplay lesser trinkets, Top 1% MMR, last 7 days.",
     ),
     Source(
         "hsreplay_battlegrounds_trinkets_greater",
-        "https://hsreplay.net/battlegrounds/trinkets/greater/",
+        "https://hsreplay.net/api/v1/battlegrounds/trinkets/"
+        "?format=json&hl=en&BattlegroundsMMRPercentile=TOP_1_PERCENT"
+        "&BattlegroundsTimeRange=LAST_7_DAYS",
         "hsreplay",
         "battlegrounds",
-        description="HSReplay greater trinkets.",
+        description="HSReplay greater trinkets, Top 1% MMR, last 7 days.",
+    ),
+    *tuple(
+        Source(
+            trinket_slice_source_id(mmr, time_range),
+            "https://hsreplay.net/api/v1/battlegrounds/trinkets/"
+            f"?format=json&hl=en&BattlegroundsMMRPercentile={mmr}"
+            f"&BattlegroundsTimeRange={time_range}",
+            "hsreplay",
+            "battlegrounds",
+            description=(
+                "HSReplay lesser and greater trinkets, "
+                f"{mmr}, {time_range}."
+            ),
+        )
+        for mmr, time_range in TRINKET_SLICE_PARAMETERS
     ),
     Source(
         "hsreplay_arena",
@@ -357,9 +378,10 @@ SOURCES: tuple[Source, ...] = (
         site="hsguru",
         category="meta_matrix",
         description=(
-            "Unified Standard/Wild HSGuru matrix refreshed every six hours through Firecrawl: "
-            "five ranks (including ALL), five periods (including the latest six hours), Any Player "
-            "and six locally derived min-games filters."
+            "Unified Standard/Wild HSGuru matrix refreshed every twelve hours through Firecrawl: "
+            "nine ranks (including ALL, Top-500 and Top-100), five rolling periods, Any Player, "
+            "six locally derived min-games filters, plus the current-patch 50-game archetype "
+            "catalog with cached HSGuru builds and history."
         ),
         stale_hours=36,
         kind="pipeline",
@@ -388,6 +410,19 @@ SOURCES: tuple[Source, ...] = (
             "(Mon,Thu 03:20 Europe/Warsaw); stale_hours = 96h max gap + 24h slack."
         ),
         stale_hours=120,
+        kind="pipeline",
+    ),
+    Source(
+        id="hsguru_fun_decks",
+        url="https://www.hsguru.com/streamer-decks",
+        site="hsguru",
+        category="fun_decks",
+        description=(
+            "Off-meta / fun decks derived from streamer-deck candidates by low overlap "
+            "with HSGuru meta catalogs and niche archetype popularity. "
+            "Refreshed after streamer Firecrawl runs, plus a dedicated Standard-focused refresh every 2 hours (refresh-fun-decks --format standard)."
+        ),
+        stale_hours=36,
         kind="pipeline",
     ),
 )

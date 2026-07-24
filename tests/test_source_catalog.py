@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import subprocess
 import sys
 from pathlib import Path
@@ -21,4 +22,5 @@ def test_generated_source_catalog_is_current_and_complete() -> None:
     assert result.returncode == 0, result.stdout + result.stderr
     catalog = (ROOT / "docs" / "SOURCES.md").read_text(encoding="utf-8")
     assert catalog.count("| `") == len(SOURCES)
-    assert "45 scrape + 3 pipeline" in catalog
+    kinds = Counter(source.kind for source in SOURCES)
+    assert f"{kinds['scrape']} scrape + {kinds['pipeline']} pipeline" in catalog

@@ -4,6 +4,7 @@ from enum import Enum
 from typing import NamedTuple
 
 from .sources import SOURCES, Source
+from .trinket_slices import TRINKET_SLICE_SOURCE_IDS
 
 
 class SourceTier(str, Enum):
@@ -85,6 +86,7 @@ BROWSER_PROTECTED_IDS: frozenset[str] = frozenset(
         "hsreplay_battlegrounds_trinkets_greater",
         "hsreplay_decks_trending",
     }
+    | TRINKET_SLICE_SOURCE_IDS
 )
 
 _ALL_TIER_IDS = (

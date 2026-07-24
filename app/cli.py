@@ -160,6 +160,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Skip this scheduled pipeline when its admin section is disabled.",
     )
+    fun_decks = sub.add_parser(
+        "refresh-fun-decks",
+        help="Rebuild the derived fun/off-meta decks dataset from streamer candidates.",
+    )
+    fun_decks.add_argument(
+        "--scheduled",
+        action="store_true",
+        help="Skip this scheduled pipeline when its admin section is disabled.",
+    )
+    fun_decks.add_argument(
+        "--format",
+        choices=("standard", "wild", "all"),
+        default="all",
+        help="Restrict candidate hunt to one format (standard refresh timer uses this).",
+    )
     sub.add_parser(
         "capture-bg-compositions-screenshot",
         help="Capture a Firecrawl screenshot of HSReplay Battlegrounds compositions.",
@@ -488,6 +503,24 @@ def main(argv: list[str] | None = None) -> int:
         result = asyncio.run(
             refresh_hsguru_meta_matrix(concurrency=max(1, min(args.concurrency, 5)))
         )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
+    if args.command == "refresh-fun-decks":
+        if args.scheduled:
+            from .parser_control import is_source_scheduled_enabled
+
+            if not is_source_scheduled_enabled("hsguru_fun_decks"):
+                print(json.dumps({
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "section_disabled",
+                    "source_id": "hsguru_fun_decks",
+                }, ensure_ascii=False, indent=2))
+                return 0
+        from .fun_decks import refresh_fun_decks
+
+        focus = None if getattr(args, "format", "all") in (None, "all") else str(args.format)
+        result = refresh_fun_decks(scheduled=bool(args.scheduled), format_focus=focus)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result.get("ok") else 1
     if args.command == "capture-bg-compositions-screenshot":

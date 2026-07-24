@@ -29,6 +29,7 @@ from app.sources import SOURCE_BY_ID, SOURCES
 from app.stale_monitor import find_stale_sources
 
 PIPELINE_IDS = (
+    "hsguru_fun_decks",
     "hsguru_meta_matrix",
     "hsreplay_battlegrounds_hero_details",
     "hsreplay_archetypes",
@@ -62,7 +63,7 @@ class SourceRegistryDefaultsTest(unittest.TestCase):
         self.assertEqual(archetypes.category, "meta")
         self.assertEqual(archetypes.url, "https://hsreplay.net/meta/")
 
-    def test_registry_has_three_pipeline_sources(self) -> None:
+    def test_registry_has_all_pipeline_sources(self) -> None:
         pipeline = [s for s in SOURCES if s.kind == "pipeline"]
         self.assertEqual(sorted(s.id for s in pipeline), sorted(PIPELINE_IDS))
         self.assertEqual(len(SOURCES), len({s.id for s in SOURCES}))
