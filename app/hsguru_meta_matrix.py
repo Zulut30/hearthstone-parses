@@ -6,11 +6,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import product
 from typing import Any, Awaitable, Callable
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from bs4 import BeautifulSoup
 
 from .firecrawl_backend import FirecrawlScrape, scrape_source_with_options
+from .config import hsguru_current_patch_period, scrape_do_token
+from .hsguru_auth import hsguru_firecrawl_headers
+from .hsguru_decks import cached_hsguru_catalog_decks
+from .scrape_do_backend import scrape_url
 from .source_state import SourceState
 from .sources import Source
 from .storage import load_dataset, save_dataset, save_status
@@ -19,10 +23,21 @@ from .storage import load_dataset, save_dataset, save_status
 SOURCE_ID = "hsguru_meta_matrix"
 HSGURU_META_URL = "https://www.hsguru.com/meta"
 FORMATS = ("standard", "wild")
-RANKS = ("all", "legend", "diamond_4to1", "top_5k", "top_legend")
+RANKS = (
+    "all",
+    "diamond",
+    "diamond_4to1",
+    "diamond_to_legend",
+    "legend",
+    "top_5k",
+    "top_legend",
+    "top_500",
+    "top_100",
+)
 PERIODS = ("past_6_hours", "past_day", "past_3_days", "past_week", "past_2_weeks")
 COINS = ("any_player",)
 MIN_GAMES = (100, 250, 500, 1000, 2500, 5000)
+CURRENT_MIN_GAMES = 50
 
 _FORMAT_QUERY = {"standard": "2", "wild": "1"}
 _REQUIRED_HEADERS = {
@@ -152,6 +167,341 @@ def parse_meta_rows(page_html: str) -> list[dict[str, Any]]:
     return rows
 
 
+def resolve_current_patch_period(cached_dataset: dict[str, Any] | None = None) -> str:
+    configured = hsguru_current_patch_period()
+    if configured:
+        return configured
+    try:
+        from scripts.seed_hs_manacost_patches import latest_official_patches
+
+        latest = latest_official_patches(1)
+        version = str((latest[0] if latest else {}).get("version") or "")
+        if re.fullmatch(r"\d+(?:\.\d+){1,3}", version):
+            return f"patch_{version}"
+    except Exception:
+        pass
+    previous = (
+        (((cached_dataset or {}).get("data") or {}).get("structured") or {})
+        .get("current_catalog", {})
+        .get("criteria", {})
+        .get("period")
+    )
+    if isinstance(previous, str) and re.fullmatch(r"patch_\d+(?:\.\d+){1,3}", previous):
+        return previous
+    raise RuntimeError(
+        "Cannot discover the current Hearthstone patch; set HS_HSGURU_PATCH_PERIOD"
+    )
+
+
+def _current_catalog_url(format_name: str, period: str) -> str:
+    params = {
+        'format': _FORMAT_QUERY[format_name],
+        'rank': 'all',
+        'period': period,
+        'min_games': CURRENT_MIN_GAMES,
+    }
+    return f"{HSGURU_META_URL}?{urlencode(params)}"
+
+
+def _normalize_current_rows(
+    rows: list[dict[str, Any]],
+    *,
+    format_name: str,
+    period: str,
+    source_url: str,
+) -> list[dict[str, Any]]:
+    normalized = []
+    for row in rows:
+        games = int(row.get("games") or 0)
+        if games < CURRENT_MIN_GAMES:
+            continue
+        archetype = str(row.get("archetype") or "").strip()
+        normalized.append(
+            {
+                "format": format_name,
+                "format_id": int(_FORMAT_QUERY[format_name]),
+                "archetype": archetype,
+                "games": games,
+                "winrate": row.get("winrate"),
+                "popularity_pct": row.get("popularity"),
+                "avg_turns": row.get("turns"),
+                "avg_duration_minutes": row.get("duration_minutes"),
+                "climbing_speed_stars_per_hour": row.get("climbing_speed"),
+                "period": period,
+                "rank": "all",
+                "source_url": source_url,
+                "archetype_url": f"https://www.hsguru.com/archetype/{quote(archetype)}",
+                "decks_url": (
+                    "https://www.hsguru.com/decks?"
+                    + urlencode(
+                        [
+                            ("format", _FORMAT_QUERY[format_name]),
+                            ("min_games", str(CURRENT_MIN_GAMES)),
+                            ("period", period),
+                            ("rank", "all"),
+                            ("player_deck_archetype[]", archetype),
+                        ]
+                    )
+                ),
+                "decks": [],
+            }
+        )
+    return normalized
+
+
+def enrich_current_rows_with_cached_decks(
+    rows: list[dict[str, Any]],
+    cached_dataset: dict[str, Any] | None = None,
+) -> None:
+    """Attach locally cached HSGuru builds without spending scrape credits.
+
+    The dedicated deck-catalog job already refreshes Standard and Wild builds.
+    Reusing it here keeps the archetype snapshot self-contained while avoiding
+    one paid page request per archetype on every matrix refresh.
+    """
+    previous_rows = (
+        ((((cached_dataset or {}).get("data") or {}).get("structured") or {})
+        .get("current_catalog", {})
+        .get("archetypes", []))
+    )
+    previous_decks = {
+        (
+            str(row.get("format") or ""),
+            str(row.get("archetype") or "").casefold(),
+        ): row.get("decks") or []
+        for row in previous_rows
+        if isinstance(row, dict)
+    }
+
+    for row in rows:
+        format_name = str(row.get("format") or "")
+        archetype = str(row.get("archetype") or "")
+        decks = cached_hsguru_catalog_decks(archetype, format_name, "all")
+        if not decks:
+            decks = previous_decks.get((format_name, archetype.casefold()), [])
+
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for deck in decks:
+            if not isinstance(deck, dict):
+                continue
+            deck_code = str(deck.get("deck_code") or "").strip()
+            if not deck_code or deck_code in seen:
+                continue
+            seen.add(deck_code)
+            merged.append(
+                {
+                    **deck,
+                    "sample_rank": deck.get("sample_rank") or "all",
+                    "sample_period": deck.get("sample_period") or "past_30_days",
+                }
+            )
+        merged.sort(
+            key=lambda deck: (
+                int(deck.get("games") or 0),
+                float(deck.get("win_rate") or 0),
+            ),
+            reverse=True,
+        )
+        row["decks"] = merged
+        row["deck_count"] = len(merged)
+        row["has_decks"] = bool(merged)
+
+
+def _current_catalog_coverage(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    return {
+        format_name: {
+            "archetypes": sum(
+                1 for row in rows if row["format"] == format_name
+            ),
+            "with_decks": sum(
+                1
+                for row in rows
+                if row["format"] == format_name and row.get("has_decks")
+            ),
+            "decks": sum(
+                int(row.get("deck_count") or 0)
+                for row in rows
+                if row["format"] == format_name
+            ),
+            "games": sum(
+                int(row["games"])
+                for row in rows
+                if row["format"] == format_name
+            ),
+        }
+        for format_name in FORMATS
+    }
+
+
+def refresh_current_catalog_deck_join() -> dict[str, Any]:
+    """Rejoin refreshed deck catalogs into the current archetype snapshot."""
+    dataset = load_dataset(SOURCE_ID)
+    structured = (((dataset or {}).get("data") or {}).get("structured") or {})
+    catalog = structured.get("current_catalog") or {}
+    rows = catalog.get("archetypes")
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError("Current HSGuru archetype catalog is unavailable")
+
+    enrich_current_rows_with_cached_decks(rows, dataset)
+    joined_at = datetime.now(UTC).isoformat()
+    catalog["coverage"] = _current_catalog_coverage(rows)
+    catalog["deck_catalog"] = {
+        "joined_at": joined_at,
+        "source_ids": [
+            "hsguru_deck_catalog_standard_all",
+            "hsguru_deck_catalog_wild_all",
+        ],
+        "sample_rank": "all",
+        "sample_period": "past_30_days",
+    }
+    structured["schema_version"] = max(int(structured.get("schema_version") or 0), 7)
+    save_dataset(SOURCE_ID, dataset)
+    return {
+        "ok": True,
+        "joined_at": joined_at,
+        "archetypes": len(rows),
+        "with_decks": sum(1 for row in rows if row.get("has_decks")),
+        "decks": sum(int(row.get("deck_count") or 0) for row in rows),
+        "coverage": catalog["coverage"],
+    }
+
+
+async def _scrape_current_page(
+    format_name: str,
+    period: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    url = _current_catalog_url(format_name, period)
+    source = Source(
+        id=f"{SOURCE_ID}:current:{format_name}",
+        url=url,
+        site="hsguru",
+        category="meta_current",
+    )
+    firecrawl_error: Exception | None = None
+    try:
+        result = await scrape_source_with_options(
+            source,
+            formats=["html"],
+            only_main_content=True,
+            headers=hsguru_firecrawl_headers(),
+            max_age_ms=0,
+            wait_ms=5_000,
+            timeout_ms=120_000,
+        )
+        rows = parse_meta_rows(result.html)
+        if not rows:
+            raise RuntimeError("Firecrawl page contained no current-patch meta rows")
+        return _normalize_current_rows(
+            rows,
+            format_name=format_name,
+            period=period,
+            source_url=url,
+        ), {
+            "format": format_name,
+            "backend": "firecrawl",
+            "request_credits": int(result.metadata.get("creditsUsed") or 1),
+            "rows": len(rows),
+        }
+    except Exception as exc:
+        firecrawl_error = exc
+
+    if not scrape_do_token():
+        raise RuntimeError(f"Firecrawl failed and Scrape.do is not configured: {firecrawl_error}")
+    errors: list[str] = []
+    for super_proxy, attempts in ((False, 2), (True, 3)):
+        for attempt in range(1, attempts + 1):
+            try:
+                result = await scrape_url(url, render=True, super_proxy=super_proxy)
+                rows = parse_meta_rows(result.html)
+                if not rows:
+                    raise RuntimeError("rendered page contained no meta rows")
+                return _normalize_current_rows(
+                    rows,
+                    format_name=format_name,
+                    period=period,
+                    source_url=url,
+                ), {
+                    "format": format_name,
+                    "backend": "scrape_do_super" if super_proxy else "scrape_do",
+                    "request_credits": result.request_cost,
+                    "rows": len(rows),
+                    "attempt": attempt,
+                }
+            except Exception as exc:
+                errors.append(
+                    f"{'super' if super_proxy else 'standard'} attempt {attempt}: {exc}"
+                )
+                if attempt < attempts:
+                    await asyncio.sleep(min(attempt * 2, 4))
+    raise RuntimeError(
+        f"Current {format_name} catalog failed; firecrawl={firecrawl_error}; "
+        + "; ".join(errors)
+    )
+
+
+def _record_current_history(rows: list[dict[str, Any]], fetched_at: str) -> None:
+    from .db import get_db_connection
+
+    conn = get_db_connection()
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hsguru_archetype_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    format TEXT NOT NULL,
+                    archetype TEXT NOT NULL,
+                    patch TEXT NOT NULL,
+                    rank TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    games INTEGER NOT NULL,
+                    winrate REAL,
+                    popularity_pct REAL,
+                    avg_turns REAL,
+                    avg_duration_minutes REAL,
+                    climbing_speed_stars_per_hour REAL,
+                    UNIQUE(format, archetype, patch, rank, recorded_at)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_hsguru_archetype_history_lookup
+                ON hsguru_archetype_history(format, archetype, recorded_at DESC)
+                """
+            )
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO hsguru_archetype_history (
+                    format, archetype, patch, rank, recorded_at, games, winrate,
+                    popularity_pct, avg_turns, avg_duration_minutes,
+                    climbing_speed_stars_per_hour
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row["format"],
+                        row["archetype"],
+                        row["period"],
+                        row["rank"],
+                        fetched_at,
+                        row["games"],
+                        row.get("winrate"),
+                        row.get("popularity_pct"),
+                        row.get("avg_turns"),
+                        row.get("avg_duration_minutes"),
+                        row.get("climbing_speed_stars_per_hour"),
+                    )
+                    for row in rows
+                ],
+            )
+    finally:
+        conn.close()
+
+
 async def _default_scrape(spec: SliceSpec) -> FirecrawlScrape:
     source = Source(
         id=f"{SOURCE_ID}:{spec.key}",
@@ -163,6 +513,7 @@ async def _default_scrape(spec: SliceSpec) -> FirecrawlScrape:
         source,
         formats=["html"],
         only_main_content=True,
+        headers=hsguru_firecrawl_headers(),
         max_age_ms=0,
         wait_ms=5_000,
         timeout_ms=120_000,
@@ -174,8 +525,13 @@ async def refresh_hsguru_meta_matrix(
     concurrency: int = 2,
     attempts: int = 3,
     scrape: Callable[[SliceSpec], Awaitable[FirecrawlScrape]] = _default_scrape,
+    scrape_current: Callable[
+        [str, str],
+        Awaitable[tuple[list[dict[str, Any]], dict[str, Any]]],
+    ] = _scrape_current_page,
 ) -> dict[str, Any]:
     fetched_at = datetime.now(UTC).isoformat()
+    cached_dataset = load_dataset(SOURCE_ID)
     specs = iter_slice_specs()
     semaphore = asyncio.Semaphore(max(1, min(concurrency, 5)))
     errors: list[dict[str, str]] = []
@@ -187,8 +543,8 @@ async def refresh_hsguru_meta_matrix(
                 async with semaphore:
                     result = await scrape(spec)
                 rows = parse_meta_rows(result.html)
-                if not rows:
-                    raise RuntimeError("HSGuru meta table is missing or empty")
+                # Sparse premium ranks (Top-100/Top-500) can legitimately return an
+                # empty table for short periods; still publish the slice.
                 return {
                     "key": spec.key,
                     "format": spec.format,
@@ -220,10 +576,62 @@ async def refresh_hsguru_meta_matrix(
     slices.sort(key=lambda item: item["key"])
     content_length = sum(int(item.pop("content_length", 0)) for item in slices)
     credits_used = sum(float(item.pop("credits_used") or 0) for item in slices)
-    complete = len(slices) == len(specs) and not errors
+    current_period: str | None = None
+    current_rows: list[dict[str, Any]] = []
+    current_acquisition: list[dict[str, Any]] = []
+    try:
+        current_period = await asyncio.to_thread(
+            resolve_current_patch_period,
+            cached_dataset,
+        )
+        current_results = await asyncio.gather(
+            *(
+                scrape_current(format_name, current_period)
+                for format_name in FORMATS
+            ),
+            return_exceptions=True,
+        )
+        for format_name, result in zip(FORMATS, current_results, strict=True):
+            if isinstance(result, Exception):
+                errors.append(
+                    {
+                        "key": f"current|{format_name}|{current_period}",
+                        "error": f"{type(result).__name__}: {str(result)[:300]}",
+                    }
+                )
+                continue
+            rows, acquisition = result
+            current_rows.extend(rows)
+            current_acquisition.append(acquisition)
+    except Exception as exc:
+        errors.append(
+            {
+                "key": "current|patch-discovery",
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            }
+        )
+    current_rows.sort(
+        key=lambda row: (row["format"], -int(row["games"]), row["archetype"])
+    )
+    enrich_current_rows_with_cached_decks(current_rows, cached_dataset)
+    current_coverage = _current_catalog_coverage(current_rows)
+    current_complete = (
+        current_period is not None
+        and all(current_coverage[name]["archetypes"] > 0 for name in FORMATS)
+    )
+    credits_used += sum(
+        float(item.get("request_credits") or 0) for item in current_acquisition
+        if item.get("backend") == "firecrawl"
+    )
+    scrape_do_credits_used = sum(
+        int(item.get("request_credits") or 0)
+        for item in current_acquisition
+        if str(item.get("backend") or "").startswith("scrape_do")
+    )
+    complete = len(slices) == len(specs) and not errors and current_complete
     structured = {
         "type": "hsguru_meta_matrix",
-        "schema_version": 4,
+        "schema_version": 7,
         "fetched_at": fetched_at,
         "dimensions": {
             "formats": list(FORMATS),
@@ -236,9 +644,43 @@ async def refresh_hsguru_meta_matrix(
         "logical_slice_count": len(slices) * len(MIN_GAMES),
         "slices": slices,
         "firecrawl": {
-            "requests": len(slices),
+            "requests": len(slices)
+            + sum(
+                1
+                for item in current_acquisition
+                if item.get("backend") == "firecrawl"
+            ),
             "credits_used": int(credits_used) if credits_used.is_integer() else credits_used,
             "content_length": content_length,
+        },
+        "scrape_do": {
+            "requests": sum(
+                1
+                for item in current_acquisition
+                if str(item.get("backend") or "").startswith("scrape_do")
+            ),
+            "credits_used": scrape_do_credits_used,
+        },
+        "current_catalog": {
+            "criteria": {
+                "period": current_period,
+                "rank": "all",
+                "minimum_games": CURRENT_MIN_GAMES,
+                "formats": list(FORMATS),
+            },
+            "coverage": current_coverage,
+            "total_archetypes": len(current_rows),
+            "archetypes": current_rows,
+            "acquisition": current_acquisition,
+            "deck_catalog": {
+                "joined_at": fetched_at,
+                "source_ids": [
+                    "hsguru_deck_catalog_standard_all",
+                    "hsguru_deck_catalog_wild_all",
+                ],
+                "sample_rank": "all",
+                "sample_period": "past_30_days",
+            },
         },
     }
     dataset = {
@@ -251,8 +693,8 @@ async def refresh_hsguru_meta_matrix(
         "backend": "firecrawl",
         "data": {"structured": structured},
     }
-    cached_dataset = load_dataset(SOURCE_ID)
     if complete:
+        _record_current_history(current_rows, fetched_at)
         save_dataset(SOURCE_ID, dataset)
     save_status(
         SOURCE_ID,
@@ -273,8 +715,16 @@ async def refresh_hsguru_meta_matrix(
             "serving_cached_dataset": bool(cached_dataset) and not complete,
             "last_refresh_state": SourceState.OK if complete else SourceState.PARTIAL,
             "last_refresh_at": fetched_at,
-            "firecrawl_requests": len(slices),
+            "firecrawl_requests": len(slices)
+            + sum(
+                1
+                for item in current_acquisition
+                if item.get("backend") == "firecrawl"
+            ),
             "firecrawl_credits_used": structured["firecrawl"]["credits_used"],
+            "scrape_do_credits_used": scrape_do_credits_used,
+            "current_catalog_archetypes": len(current_rows),
+            "current_catalog_period": current_period,
         },
     )
     return {
@@ -285,7 +735,10 @@ async def refresh_hsguru_meta_matrix(
         "fetched_at": fetched_at,
         "base_slices": len(slices),
         "logical_slices": len(slices) * len(MIN_GAMES),
+        "current_catalog_archetypes": len(current_rows),
+        "current_catalog_period": current_period,
         "firecrawl_credits_used": structured["firecrawl"]["credits_used"],
+        "scrape_do_credits_used": scrape_do_credits_used,
         "content_length": content_length,
         "errors": errors,
     }

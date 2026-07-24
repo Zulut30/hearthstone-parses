@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh Standard-focused fun/off-meta decks every 2 hours
+
+[Timer]
+OnCalendar=*-*-* 00/2:45:00 Europe/Warsaw
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

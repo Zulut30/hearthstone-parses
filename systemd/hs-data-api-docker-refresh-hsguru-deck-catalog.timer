@@ -1,11 +1,9 @@
 [Unit]
-Description=Refresh broad HSGuru deck catalogs every six hours
+Description=Refresh broad HSGuru deck catalogs every twelve hours
 
 [Timer]
 OnCalendar=*-*-* 00:20:00 Europe/Warsaw
-OnCalendar=*-*-* 06:20:00 Europe/Warsaw
 OnCalendar=*-*-* 12:20:00 Europe/Warsaw
-OnCalendar=*-*-* 18:20:00 Europe/Warsaw
 AccuracySec=5min
 Persistent=true
 

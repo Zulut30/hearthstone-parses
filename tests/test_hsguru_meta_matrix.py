@@ -27,15 +27,15 @@ HSGURU_TABLE = """
 """
 
 
-def test_matrix_has_50_remote_slices_and_six_local_min_game_filters() -> None:
+def test_matrix_has_90_remote_slices_and_six_local_min_game_filters() -> None:
     from app.hsguru_meta_matrix import MIN_GAMES, iter_slice_specs
 
     specs = list(iter_slice_specs())
 
     assert MIN_GAMES == (100, 250, 500, 1000, 2500, 5000)
     assert 7500 not in MIN_GAMES
-    assert len(specs) == 50
-    assert len({spec.key for spec in specs}) == 50
+    assert len(specs) == 90
+    assert len({spec.key for spec in specs}) == 90
     assert all("min_games=100" in spec.url for spec in specs)
     assert all("7500" not in spec.url for spec in specs)
     assert {spec.period for spec in specs} == {
@@ -46,7 +46,15 @@ def test_matrix_has_50_remote_slices_and_six_local_min_game_filters() -> None:
         "past_2_weeks",
     }
     assert {spec.rank for spec in specs} == {
-        "all", "legend", "diamond_4to1", "top_5k", "top_legend"
+        "all",
+        "diamond",
+        "diamond_4to1",
+        "diamond_to_legend",
+        "legend",
+        "top_5k",
+        "top_legend",
+        "top_500",
+        "top_100",
     }
     assert {spec.coin for spec in specs} == {"any_player"}
     assert all("player_has_coin=" not in spec.url for spec in specs)
@@ -112,7 +120,90 @@ def test_hsguru_table_parser_rejects_incomplete_statistics() -> None:
         parse_meta_rows(broken)
 
 
-def test_refresh_publishes_one_unified_dataset_after_50_firecrawl_pages() -> None:
+def test_current_archetypes_reuse_cached_deck_catalog_without_scraping() -> None:
+    from app.hsguru_meta_matrix import enrich_current_rows_with_cached_decks
+
+    rows = [{
+        "format": "wild",
+        "archetype": "Thief Priest",
+        "games": 31959,
+        "decks": [],
+    }]
+    builds = [
+        {
+            "archetype": "Thief Priest",
+            "format": "Wild",
+            "deck_code": "AAECAa0GAValidDeckCodeOne",
+            "games": 250,
+            "win_rate": 58.1,
+            "url": "https://www.hsguru.com/deck/1",
+        },
+        {
+            "archetype": "Thief Priest",
+            "format": "Wild",
+            "deck_code": "AAECAa0GAValidDeckCodeTwo",
+            "games": 900,
+            "win_rate": 61.2,
+            "url": "https://www.hsguru.com/deck/2",
+        },
+    ]
+
+    with patch(
+        "app.hsguru_meta_matrix.cached_hsguru_catalog_decks",
+        return_value=builds,
+    ):
+        enrich_current_rows_with_cached_decks(rows)
+
+    assert rows[0]["has_decks"] is True
+    assert rows[0]["deck_count"] == 2
+    assert [deck["games"] for deck in rows[0]["decks"]] == [900, 250]
+    assert all(deck["sample_rank"] == "all" for deck in rows[0]["decks"])
+    assert all(deck["sample_period"] == "past_30_days" for deck in rows[0]["decks"])
+
+
+def test_deck_catalog_refresh_can_rejoin_builds_without_refetching_meta() -> None:
+    from app.hsguru_meta_matrix import refresh_current_catalog_deck_join
+
+    dataset = {
+        "source_id": "hsguru_meta_matrix",
+        "data": {
+            "structured": {
+                "schema_version": 6,
+                "current_catalog": {
+                    "archetypes": [{
+                        "format": "standard",
+                        "archetype": "Face Hunter",
+                        "games": 1000,
+                        "decks": [],
+                    }]
+                },
+            }
+        },
+    }
+
+    def attach(rows, _cached):
+        rows[0]["decks"] = [{"deck_code": "AAECAValidDeckCode"}]
+        rows[0]["deck_count"] = 1
+        rows[0]["has_decks"] = True
+
+    with (
+        patch("app.hsguru_meta_matrix.load_dataset", return_value=dataset),
+        patch(
+            "app.hsguru_meta_matrix.enrich_current_rows_with_cached_decks",
+            side_effect=attach,
+        ),
+        patch("app.hsguru_meta_matrix.save_dataset") as save_dataset,
+    ):
+        result = refresh_current_catalog_deck_join()
+
+    assert result["with_decks"] == 1
+    assert result["decks"] == 1
+    assert result["coverage"]["standard"]["games"] == 1000
+    assert dataset["data"]["structured"]["schema_version"] == 7
+    save_dataset.assert_called_once_with("hsguru_meta_matrix", dataset)
+
+
+def test_refresh_publishes_one_unified_dataset_after_90_firecrawl_pages() -> None:
     from app.firecrawl_backend import FirecrawlScrape
     from app.hsguru_meta_matrix import refresh_hsguru_meta_matrix
 
@@ -129,26 +220,67 @@ def test_refresh_publishes_one_unified_dataset_after_50_firecrawl_pages() -> Non
             final_url=spec.url,
         )
 
+    async def scrape_current(format_name, period):
+        return [
+            {
+                "format": format_name,
+                "format_id": 2 if format_name == "standard" else 1,
+                "archetype": "Quest Mage",
+                "games": 742,
+                "winrate": 51.1,
+                "popularity_pct": 0.8,
+                "avg_turns": 9.1,
+                "avg_duration_minutes": 8.0,
+                "climbing_speed_stars_per_hour": 0.4,
+                "period": period,
+                "rank": "all",
+                "decks": [],
+            }
+        ], {
+            "format": format_name,
+            "backend": "firecrawl",
+            "request_credits": 1,
+            "rows": 1,
+        }
+
     with (
         patch("app.hsguru_meta_matrix.load_dataset", return_value=None),
+        patch(
+            "app.hsguru_meta_matrix.resolve_current_patch_period",
+            return_value="patch_36.0.3",
+        ),
+        patch("app.hsguru_meta_matrix._record_current_history"),
+        patch("app.hsguru_meta_matrix.enrich_current_rows_with_cached_decks"),
         patch("app.hsguru_meta_matrix.save_dataset") as save_dataset,
         patch("app.hsguru_meta_matrix.save_status") as save_status,
     ):
         result = asyncio.run(
-            refresh_hsguru_meta_matrix(concurrency=5, attempts=1, scrape=scrape)
+            refresh_hsguru_meta_matrix(
+                concurrency=5,
+                attempts=1,
+                scrape=scrape,
+                scrape_current=scrape_current,
+            )
         )
 
     assert result["ok"] is True
-    assert result["base_slices"] == 50
-    assert result["logical_slices"] == 300
-    assert result["firecrawl_credits_used"] == 50
-    assert len(calls) == 50
+    assert result["base_slices"] == 90
+    assert result["logical_slices"] == 540
+    assert result["firecrawl_credits_used"] == 92
+    assert result["current_catalog_archetypes"] == 2
+    assert len(calls) == 90
     save_dataset.assert_called_once()
     dataset = save_dataset.call_args.args[1]
     assert dataset["data"]["structured"]["dimensions"]["min_games"] == [
         100, 250, 500, 1000, 2500, 5000
     ]
     assert dataset["data"]["structured"]["dimensions"]["coins"] == ["any_player"]
+    assert dataset["data"]["structured"]["current_catalog"]["criteria"] == {
+        "period": "patch_36.0.3",
+        "rank": "all",
+        "minimum_games": 50,
+        "formats": ["standard", "wild"],
+    }
     save_status.assert_called_once()
 
 
@@ -164,7 +296,17 @@ def test_v1_hsguru_meta_filters_unified_dataset_by_min_games() -> None:
                 "schema_version": 1,
                 "dimensions": {
                     "formats": ["standard", "wild"],
-                    "ranks": ["all", "legend", "diamond_4to1", "top_5k", "top_legend"],
+                    "ranks": [
+                        "all",
+                        "diamond",
+                        "diamond_4to1",
+                        "diamond_to_legend",
+                        "legend",
+                        "top_5k",
+                        "top_legend",
+                        "top_500",
+                        "top_100",
+                    ],
                     "periods": ["past_6_hours", "past_day", "past_3_days", "past_week", "past_2_weeks"],
                     "coins": ["any_player"],
                     "min_games": [100, 250, 500, 1000, 2500, 5000],
@@ -200,6 +342,94 @@ def test_v1_hsguru_meta_filters_unified_dataset_by_min_games() -> None:
     assert body["data"]["min_games"] == 2500
     assert body["meta"]["source_id"] == "hsguru_meta_matrix"
     assert body["meta"]["count"] == 1
+
+
+def test_v1_hsguru_archetypes_returns_current_patch_catalog() -> None:
+    fetched_at = datetime.now(UTC).isoformat()
+    dataset = {
+        "source_id": "hsguru_meta_matrix",
+        "fetched_at": fetched_at,
+        "data": {
+            "structured": {
+                "current_catalog": {
+                    "criteria": {
+                        "period": "patch_36.0.3",
+                        "rank": "all",
+                        "minimum_games": 50,
+                    },
+                    "coverage": {
+                        "standard": {"archetypes": 1},
+                        "wild": {"archetypes": 1},
+                    },
+                    "archetypes": [
+                        {
+                            "format": "standard",
+                            "archetype": "Quest Mage",
+                            "games": 742,
+                            "winrate": 51.1,
+                            "popularity_pct": 0.8,
+                            "decks": [],
+                        },
+                        {
+                            "format": "wild",
+                            "archetype": "Pirate Rogue",
+                            "games": 98,
+                            "winrate": 50.0,
+                            "popularity_pct": 0.2,
+                            "decks": [],
+                        },
+                    ],
+                }
+            }
+        },
+    }
+
+    with patch("app.routers.hsguru_meta.load_dataset", return_value=dataset):
+        response = client.get(
+            "/v1/hsguru/archetypes?format=wild&min_games=50"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [row["archetype"] for row in body["data"]] == ["Pirate Rogue"]
+    assert body["criteria"]["period"] == "patch_36.0.3"
+
+
+def test_v1_hsguru_archetypes_can_filter_to_rows_with_builds() -> None:
+    fetched_at = datetime.now(UTC).isoformat()
+    dataset = {
+        "source_id": "hsguru_meta_matrix",
+        "fetched_at": fetched_at,
+        "data": {
+            "structured": {
+                "current_catalog": {
+                    "criteria": {"period": "patch_36.0.3", "minimum_games": 50},
+                    "archetypes": [
+                        {
+                            "format": "wild",
+                            "archetype": "Thief Priest",
+                            "games": 31959,
+                            "decks": [{"deck_code": "AAECAa0GAValidDeckCode"}],
+                        },
+                        {
+                            "format": "wild",
+                            "archetype": "Unused Test Archetype",
+                            "games": 51,
+                            "decks": [],
+                        },
+                    ],
+                }
+            }
+        },
+    }
+
+    with patch("app.routers.hsguru_meta.load_dataset", return_value=dataset):
+        response = client.get(
+            "/v1/hsguru/archetypes?format=wild&min_games=50&has_decks=true"
+        )
+
+    assert response.status_code == 200
+    assert [row["archetype"] for row in response.json()["data"]] == ["Thief Priest"]
 
 
 def test_v1_hsguru_meta_rejects_removed_min_games_value() -> None:
@@ -239,6 +469,32 @@ def test_v1_hsguru_meta_accepts_all_ranks_and_any_player() -> None:
     assert response.status_code == 200
     assert response.json()["data"]["rank"] == "all"
     assert response.json()["data"]["coin"] == "any_player"
+
+
+@pytest.mark.parametrize("rank", ["diamond", "diamond_to_legend"])
+def test_v1_hsguru_meta_accepts_extended_diamond_ranks(rank: str) -> None:
+    fetched_at = datetime.now(UTC).isoformat()
+    dataset = {
+        "source_id": "hsguru_meta_matrix",
+        "fetched_at": fetched_at,
+        "data": {"structured": {"slices": [{
+            "key": f"standard|{rank}|past_day|any_player",
+            "source_url": (
+                "https://www.hsguru.com/meta?"
+                f"format=2&rank={rank}&period=past_day&min_games=100"
+            ),
+            "rows": [{"archetype": "Big Shaman", "games": 5321, "winrate": 55.4}],
+        }]}},
+    }
+
+    with patch("app.routers.hsguru_meta.load_dataset", return_value=dataset):
+        response = client.get(
+            f"/v1/hsguru/meta?format=standard&rank={rank}"
+            "&period=past_day&coin=any_player&min_games=100"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["rank"] == rank
 
 
 def test_v1_hsguru_meta_accepts_past_six_hours() -> None:
