@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ..hsguru_meta_matrix import MIN_GAMES, SOURCE_ID
+from ..hsguru_meta_matrix import MIN_GAMES, PERIODS, SOURCE_ID
 from ..storage import load_dataset
 from .models import ApiMeta, timestamp_is_stale
 
@@ -27,9 +27,7 @@ def hsguru_meta(
         "top_500",
         "top_100",
     ] = "all",
-    period: Literal[
-        "past_6_hours", "past_day", "past_3_days", "past_week", "past_2_weeks"
-    ] = "past_day",
+    period: str = Query("past_day", min_length=1, max_length=64),
     coin: Literal["any_player"] = "any_player",
     min_games: int = Query(100),
 ) -> dict:
@@ -39,6 +37,14 @@ def hsguru_meta(
     if not dataset:
         raise HTTPException(status_code=503, detail="HSGuru meta matrix is not available yet")
     structured = ((dataset.get("data") or {}).get("structured") or {})
+    allowed_periods = list(
+        (structured.get("dimensions") or {}).get("periods") or PERIODS
+    )
+    if period not in allowed_periods:
+        raise HTTPException(
+            status_code=422,
+            detail={"allowed_periods": allowed_periods},
+        )
     key = "|".join((format_name, rank, period, coin))
     selected = next(
         (item for item in structured.get("slices") or [] if item.get("key") == key),

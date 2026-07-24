@@ -34,7 +34,16 @@ RANKS = (
     "top_500",
     "top_100",
 )
-PERIODS = ("past_6_hours", "past_day", "past_3_days", "past_week", "past_2_weeks")
+ROLLING_PERIODS = (
+    "past_6_hours",
+    "past_day",
+    "past_3_days",
+    "past_week",
+    "past_2_weeks",
+)
+DEFAULT_PATCH_PERIOD = "patch_36.0.3"
+NAMED_PERIODS = ("violet_hold",)
+PERIODS = (*ROLLING_PERIODS, DEFAULT_PATCH_PERIOD, *NAMED_PERIODS)
 COINS = ("any_player",)
 MIN_GAMES = (100, 250, 500, 1000, 2500, 5000)
 CURRENT_MIN_GAMES = 50
@@ -60,9 +69,15 @@ class SliceSpec:
     url: str
 
 
-def iter_slice_specs() -> tuple[SliceSpec, ...]:
+def matrix_periods(current_patch_period: str) -> tuple[str, ...]:
+    if not re.fullmatch(r"patch_\d+(?:\.\d+){1,3}", current_patch_period):
+        raise ValueError(f"Invalid HSGuru patch period: {current_patch_period}")
+    return (*ROLLING_PERIODS, current_patch_period, *NAMED_PERIODS)
+
+
+def iter_slice_specs(periods: tuple[str, ...] = PERIODS) -> tuple[SliceSpec, ...]:
     specs = []
-    for format_name, rank, period, coin in product(FORMATS, RANKS, PERIODS, COINS):
+    for format_name, rank, period, coin in product(FORMATS, RANKS, periods, COINS):
         params = {
             "format": _FORMAT_QUERY[format_name],
             "rank": rank,
@@ -532,9 +547,24 @@ async def refresh_hsguru_meta_matrix(
 ) -> dict[str, Any]:
     fetched_at = datetime.now(UTC).isoformat()
     cached_dataset = load_dataset(SOURCE_ID)
-    specs = iter_slice_specs()
+    discovery_errors: list[dict[str, str]] = []
+    try:
+        current_period = await asyncio.to_thread(
+            resolve_current_patch_period,
+            cached_dataset,
+        )
+    except Exception as exc:
+        current_period = DEFAULT_PATCH_PERIOD
+        discovery_errors.append(
+            {
+                "key": "current|patch-discovery",
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            }
+        )
+    periods = matrix_periods(current_period)
+    specs = iter_slice_specs(periods)
     semaphore = asyncio.Semaphore(max(1, min(concurrency, 5)))
-    errors: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = list(discovery_errors)
 
     async def fetch_one(spec: SliceSpec) -> dict[str, Any] | None:
         last_error: Exception | None = None
@@ -576,14 +606,9 @@ async def refresh_hsguru_meta_matrix(
     slices.sort(key=lambda item: item["key"])
     content_length = sum(int(item.pop("content_length", 0)) for item in slices)
     credits_used = sum(float(item.pop("credits_used") or 0) for item in slices)
-    current_period: str | None = None
     current_rows: list[dict[str, Any]] = []
     current_acquisition: list[dict[str, Any]] = []
     try:
-        current_period = await asyncio.to_thread(
-            resolve_current_patch_period,
-            cached_dataset,
-        )
         current_results = await asyncio.gather(
             *(
                 scrape_current(format_name, current_period)
@@ -636,7 +661,7 @@ async def refresh_hsguru_meta_matrix(
         "dimensions": {
             "formats": list(FORMATS),
             "ranks": list(RANKS),
-            "periods": list(PERIODS),
+            "periods": list(periods),
             "coins": list(COINS),
             "min_games": list(MIN_GAMES),
         },
