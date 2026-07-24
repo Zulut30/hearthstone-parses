@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .trinket_slices import TRINKET_SLICE_SOURCE_IDS
+
 
 DEFAULT_DATA_DIR = "/var/lib/hs-data-api"
 DEFAULT_BACKENDS = "flaresolverr,scrapling,patchright,curl_cffi,cloudscraper"
@@ -223,6 +225,35 @@ def vicious_syndicate_storage_path() -> Path:
     )
 
 
+def hsguru_storage_path() -> Path:
+    return Path(
+        os.environ.get(
+            "HSGURU_STORAGE_PATH",
+            str(data_dir() / "hsguru-auth.json"),
+        )
+    )
+
+
+def scrape_do_token() -> str | None:
+    value = (
+        os.environ.get("HS_SCRAPE_DO_TOKEN")
+        or os.environ.get("SCRAPE_DO_TOKEN")
+        or ""
+    ).strip()
+    return value or None
+
+
+def scrape_do_timeout_seconds() -> float:
+    return max(15.0, float(os.environ.get("HS_SCRAPE_DO_TIMEOUT_SECONDS", "120")))
+
+
+def hsguru_current_patch_period() -> str | None:
+    value = os.environ.get("HS_HSGURU_PATCH_PERIOD", "").strip()
+    if not value or value.lower() == "auto":
+        return None
+    return value if value.startswith("patch_") else f"patch_{value}"
+
+
 def telegram_bot_token() -> str | None:
     value = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     return value or None
@@ -347,12 +378,40 @@ def dataset_regression_drop_ratio() -> float:
 
 
 def firecrawl_api_key() -> str | None:
+    """Return the currently active Firecrawl key (rotating pool or legacy single key)."""
+    from .firecrawl_keys import peek_firecrawl_key, parse_firecrawl_api_keys
+
+    if parse_firecrawl_api_keys():
+        lease = peek_firecrawl_key()
+        return lease.key.key if lease else None
     value = (
         os.environ.get("FIRECRAWL_API_KEY")
         or os.environ.get("HS_FIRECRAWL_API_KEY")
         or ""
     ).strip()
     return value or None
+
+
+def firecrawl_default_key_credit_limit() -> int:
+    return max(1, int(os.environ.get("HS_FIRECRAWL_KEY_ROTATION_CREDITS", "1000")))
+
+
+def firecrawl_key_reset_day() -> int:
+    """Day of month when Firecrawl key rotation counters reset (billing-cycle aligned)."""
+    # Cap at 28 so February never overflows.
+    return max(1, min(28, int(os.environ.get("HS_FIRECRAWL_KEY_RESET_DAY", "22"))))
+
+
+def fun_deck_min_score() -> float:
+    return min(1.0, max(0.0, float(os.environ.get("HS_FUN_DECK_MIN_SCORE", "0.55"))))
+
+
+def fun_deck_max_meta_similarity() -> float:
+    return min(1.0, max(0.0, float(os.environ.get("HS_FUN_DECK_MAX_META_SIMILARITY", "0.42"))))
+
+
+def fun_deck_retention_hours() -> int:
+    return max(1, int(os.environ.get("HS_FUN_DECK_RETENTION_HOURS", "168")))
 
 
 def firecrawl_max_age_ms() -> int:
@@ -411,6 +470,7 @@ def firecrawl_fallback_source_ids() -> set[str]:
                 "hsreplay_battlegrounds_heroes",
                 "hsreplay_battlegrounds_trinkets_lesser",
                 "hsreplay_battlegrounds_trinkets_greater",
+                *sorted(TRINKET_SLICE_SOURCE_IDS),
                 "hsreplay_decks_trending",
                 "heartharena_tierlist",
                 "vicious_syndicate_radars",

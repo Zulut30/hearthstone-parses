@@ -751,16 +751,21 @@ def _enrich_firecrawl_trinkets_from_cache(source: Source, parsed: dict[str, Any]
         trinket_variant_key,
     )
 
+    from .trinket_slices import TRINKET_SLICE_SOURCE_IDS
+
     if source.id not in {
         "hsreplay_battlegrounds_trinkets_lesser",
         "hsreplay_battlegrounds_trinkets_greater",
-    }:
+    } | TRINKET_SLICE_SOURCE_IDS:
         return parsed
     structured = parsed.get("structured")
     if not isinstance(structured, dict) or structured.get("type") != "bg_trinkets":
         return parsed
     rows = structured.get("trinkets") or []
     if not isinstance(rows, list) or not rows:
+        return parsed
+    source_meta = structured.get("source") or {}
+    if source_meta.get("backend") == "hsreplay_json_api":
         return parsed
 
     previous = load_dataset(source.id) or {}

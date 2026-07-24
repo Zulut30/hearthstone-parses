@@ -8,10 +8,15 @@ from urllib import request
 
 from .config import (
     data_dir,
-    firecrawl_api_key,
     firecrawl_map_hsreplay_limit,
     firecrawl_map_hsreplay_url,
     firecrawl_timeout_ms,
+)
+from .firecrawl_keys import (
+    acquire_firecrawl_key,
+    is_firecrawl_credit_error,
+    mark_firecrawl_key_exhausted,
+    record_firecrawl_credits,
 )
 from .storage import load_dataset
 
@@ -113,10 +118,6 @@ def _validate_map_size(url_count: int, *, previous_count: int) -> None:
 
 
 def fetch_hsreplay_firecrawl_map() -> dict[str, Any]:
-    api_key = firecrawl_api_key()
-    if not api_key:
-        raise RuntimeError("FIRECRAWL_API_KEY is not configured")
-
     payload = {
         "url": firecrawl_map_hsreplay_url(),
         "limit": firecrawl_map_hsreplay_limit(HSREPLAY_MAP_LIMIT),
@@ -124,20 +125,53 @@ def fetch_hsreplay_firecrawl_map() -> dict[str, Any]:
         "sitemap": "include",
     }
     body = json.dumps(payload).encode("utf-8")
-    req = request.Request(
-        FIRECRAWL_MAP_URL,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     timeout = (firecrawl_timeout_ms() / 1000) + 60
-    with request.urlopen(req, timeout=timeout) as response:
-        raw = response.read().decode("utf-8")
-        parsed = json.loads(raw)
+    errors: list[str] = []
+    parsed: dict[str, Any] | None = None
+    lease_label: str | None = None
+    lease_fingerprint: str | None = None
+    rotation: dict[str, Any] | None = None
 
+    for _ in range(8):
+        lease = acquire_firecrawl_key()
+        lease_label = lease.key.label
+        lease_fingerprint = lease.key.fingerprint
+        req = request.Request(
+            FIRECRAWL_MAP_URL,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {lease.key.key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=timeout) as response:
+                raw = response.read().decode("utf-8")
+                parsed = json.loads(raw)
+        except Exception as exc:
+            if is_firecrawl_credit_error(exc):
+                mark_firecrawl_key_exhausted(lease.key.label, reason=str(exc))
+                errors.append(f"{lease.key.label}: {exc}")
+                continue
+            raise
+
+        credits = 1
+        if isinstance(parsed, dict):
+            if parsed.get("creditsUsed") is not None:
+                try:
+                    credits = int(parsed.get("creditsUsed") or 1)
+                except (TypeError, ValueError):
+                    credits = 1
+            elif not parsed.get("success", True):
+                raise RuntimeError(f"Firecrawl map failed: {parsed}")
+        rotation = record_firecrawl_credits(lease.key.label, max(1, credits))
+        break
+    else:
+        detail = "; ".join(errors) if errors else "no available keys"
+        raise RuntimeError(f"Firecrawl map failed after key rotation attempts: {detail}")
+
+    assert parsed is not None
     now = datetime.now(UTC).isoformat()
     urls = _unique_urls(parsed)
     previous = load_hsreplay_map() or {}
@@ -150,6 +184,9 @@ def fetch_hsreplay_firecrawl_map() -> dict[str, Any]:
         "url_count": len(urls),
         "urls": urls,
         "firecrawl_response": parsed,
+        "firecrawl_key_label": lease_label,
+        "firecrawl_key_fingerprint": lease_fingerprint,
+        "firecrawl_key_rotation": rotation,
     }
     _write_json(hsreplay_map_path(), result)
     return result

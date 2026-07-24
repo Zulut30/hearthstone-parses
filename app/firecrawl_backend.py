@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import json
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
 from .config import (
-    firecrawl_api_key,
     firecrawl_hsguru_matchups_timeout_ms,
     firecrawl_max_age_ms,
     firecrawl_timeout_ms,
     firecrawl_wait_ms,
+)
+from .firecrawl_keys import (
+    acquire_firecrawl_key,
+    is_firecrawl_credit_error,
+    mark_firecrawl_key_exhausted,
+    record_firecrawl_credits,
 )
 from .sources import Source
 
@@ -33,9 +39,10 @@ class FirecrawlScrape:
         return len(self.html.encode("utf-8", errors="replace"))
 
 
-def _scrape_sync(
+def _scrape_once(
     source: Source,
     *,
+    api_key: str,
     formats: list[Any] | None = None,
     only_main_content: bool = True,
     headers: dict[str, str] | None = None,
@@ -43,10 +50,6 @@ def _scrape_sync(
     wait_ms: int | None = None,
     timeout_ms: int | None = None,
 ) -> FirecrawlScrape:
-    api_key = firecrawl_api_key()
-    if not api_key:
-        raise RuntimeError("FIRECRAWL_API_KEY/HS_FIRECRAWL_API_KEY is not configured")
-
     effective_timeout_ms = firecrawl_timeout_ms() if timeout_ms is None else timeout_ms
     payload = {
         "url": source.url,
@@ -67,8 +70,13 @@ def _scrape_sync(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=(effective_timeout_ms / 1000) + 30) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=(effective_timeout_ms / 1000) + 30) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Firecrawl HTTP {exc.code}: {detail[:500]}") from exc
+
     if not body.get("success"):
         raise RuntimeError(f"Firecrawl scrape failed: {body}")
 
@@ -87,6 +95,60 @@ def _scrape_sync(
         status_code=int(metadata.get("statusCode") or 200),
         final_url=str(metadata.get("ogUrl") or metadata.get("sourceURL") or source.fetch_url),
     )
+
+
+def _scrape_sync(
+    source: Source,
+    *,
+    formats: list[Any] | None = None,
+    only_main_content: bool = True,
+    headers: dict[str, str] | None = None,
+    max_age_ms: int | None = None,
+    wait_ms: int | None = None,
+    timeout_ms: int | None = None,
+) -> FirecrawlScrape:
+    errors: list[str] = []
+    for _ in range(8):
+        lease = acquire_firecrawl_key()
+        try:
+            scraped = _scrape_once(
+                source,
+                api_key=lease.key.key,
+                formats=formats,
+                only_main_content=only_main_content,
+                headers=headers,
+                max_age_ms=max_age_ms,
+                wait_ms=wait_ms,
+                timeout_ms=timeout_ms,
+            )
+        except Exception as exc:
+            if is_firecrawl_credit_error(exc):
+                mark_firecrawl_key_exhausted(lease.key.label, reason=str(exc))
+                errors.append(f"{lease.key.label}: {exc}")
+                continue
+            raise
+
+        credits = scraped.metadata.get("creditsUsed")
+        try:
+            credits_int = int(credits) if credits is not None else 1
+        except (TypeError, ValueError):
+            credits_int = 1
+        rotation = record_firecrawl_credits(lease.key.label, credits_int)
+        metadata = dict(scraped.metadata)
+        metadata["firecrawl_key_label"] = lease.key.label
+        metadata["firecrawl_key_fingerprint"] = lease.key.fingerprint
+        metadata["firecrawl_key_rotation"] = rotation
+        return FirecrawlScrape(
+            html=scraped.html,
+            markdown=scraped.markdown,
+            screenshot=scraped.screenshot,
+            metadata=metadata,
+            status_code=scraped.status_code,
+            final_url=scraped.final_url,
+        )
+
+    detail = "; ".join(errors) if errors else "no available keys"
+    raise RuntimeError(f"Firecrawl scrape failed after key rotation attempts: {detail}")
 
 
 async def scrape_source(source: Source) -> FirecrawlScrape:

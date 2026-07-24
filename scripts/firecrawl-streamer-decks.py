@@ -54,47 +54,65 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _firecrawl_key() -> str:
-    value = (
-        os.environ.get("FIRECRAWL_API_KEY")
-        or os.environ.get("HS_FIRECRAWL_API_KEY")
-        or ""
-    ).strip()
-    if not value:
-        raise RuntimeError("Set FIRECRAWL_API_KEY or HS_FIRECRAWL_API_KEY in /etc/hs-data-api.env")
-    return value
-
-
 def _scrape_html(url: str) -> tuple[str, dict[str, Any]]:
+    from app.firecrawl_keys import (
+        acquire_firecrawl_key,
+        is_firecrawl_credit_error,
+        mark_firecrawl_key_exhausted,
+        record_firecrawl_credits,
+    )
+
     payload = {
         "url": url,
         "formats": ["html", "markdown"],
         "onlyMainContent": True,
-        "maxAge": int(os.environ.get("HS_FIRECRAWL_MAX_AGE_MS", "172800000")),
+        "maxAge": int(os.environ.get("HS_FIRECRAWL_MAX_AGE_MS", "3000000")),
         "waitFor": int(os.environ.get("HS_FIRECRAWL_WAIT_MS", "5000")),
         "timeout": int(os.environ.get("HS_FIRECRAWL_TIMEOUT_MS", "30000")),
     }
-    request = urllib.request.Request(
-        FIRECRAWL_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {_firecrawl_key()}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=90) as response:
-        body = json.loads(response.read().decode("utf-8"))
-    if not body.get("success"):
-        raise RuntimeError(f"Firecrawl scrape failed: {body}")
-    data = body.get("data") or {}
-    metadata = dict(data.get("metadata") or {})
-    if body.get("creditsUsed") is not None and metadata.get("creditsUsed") is None:
-        metadata["creditsUsed"] = body.get("creditsUsed")
-    html = data.get("html") or ""
-    if not html:
-        raise RuntimeError("Firecrawl response did not include html")
-    return html, metadata
+    errors: list[str] = []
+    for _ in range(8):
+        lease = acquire_firecrawl_key()
+        request = urllib.request.Request(
+            FIRECRAWL_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {lease.key.key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            if is_firecrawl_credit_error(exc):
+                mark_firecrawl_key_exhausted(lease.key.label, reason=str(exc))
+                errors.append(f"{lease.key.label}: {exc}")
+                continue
+            raise
+        if not body.get("success"):
+            raise RuntimeError(f"Firecrawl scrape failed: {body}")
+        data = body.get("data") or {}
+        metadata = dict(data.get("metadata") or {})
+        if body.get("creditsUsed") is not None and metadata.get("creditsUsed") is None:
+            metadata["creditsUsed"] = body.get("creditsUsed")
+        try:
+            credits_int = int(metadata.get("creditsUsed") or 1)
+        except (TypeError, ValueError):
+            credits_int = 1
+        metadata["firecrawl_key_label"] = lease.key.label
+        metadata["firecrawl_key_fingerprint"] = lease.key.fingerprint
+        metadata["firecrawl_key_rotation"] = record_firecrawl_credits(
+            lease.key.label, max(1, credits_int)
+        )
+        html = data.get("html") or ""
+        if not html:
+            raise RuntimeError("Firecrawl response did not include html")
+        return html, metadata
+
+    detail = "; ".join(errors) if errors else "no available keys"
+    raise RuntimeError(f"Firecrawl scrape failed after key rotation attempts: {detail}")
 
 
 def _parse_table(html: str) -> list[dict[str, Any]]:
@@ -246,6 +264,15 @@ def main() -> int:
             raise RuntimeError("Firecrawl streamer decks returned zero rows")
         rows = _merge_rows(new_rows, _previous_rows())
         status = _save(rows, html=html, metadata=metadata, started=started)
+    try:
+        from app.fun_decks import refresh_fun_decks
+
+        fun_status = refresh_fun_decks()
+        status = dict(status)
+        status["fun_decks"] = fun_status
+    except Exception as exc:  # noqa: BLE001 - streamer refresh should still succeed
+        status = dict(status)
+        status["fun_decks"] = {"ok": False, "error": str(exc)[:500]}
     print(json.dumps(status, ensure_ascii=False, indent=2))
     return 0
 
