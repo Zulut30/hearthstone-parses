@@ -120,10 +120,16 @@ def _attribute_in_tree(cell: Tag, *names: str) -> str | None:
 
 
 def _card_identity(cell: Tag) -> tuple[str | None, int | None, str]:
-    name = (
-        _attribute_in_tree(cell, "data-card-name", "aria-label", "alt")
-        or cell.get_text(" ", strip=True)
-    )
+    name_node = cell.select_one(".card-name")
+    if name_node is not None:
+        name = name_node.get_text(" ", strip=True)
+        for hidden in name_node.select('[style*="font-size: 0"]'):
+            name = name.replace(hidden.get_text(" ", strip=True), "")
+    else:
+        name = (
+            _attribute_in_tree(cell, "data-card-name", "aria-label", "alt")
+            or cell.get_text(" ", strip=True)
+        )
     card_id = _attribute_in_tree(cell, "data-card-id", "data-cardid")
     dbf_raw = _attribute_in_tree(cell, "data-dbf-id", "data-dbfid")
     dbf_id = int(dbf_raw) if dbf_raw and dbf_raw.isdigit() else None
@@ -136,9 +142,14 @@ def _card_identity(cell: Tag) -> tuple[str | None, int | None, str]:
         dbf_query = next(iter(query.get("dbf_id", [])), None)
         if dbf_id is None and dbf_query and dbf_query.isdigit():
             dbf_id = int(dbf_query)
-        path_match = re.search(r"/card/(?:\d+/)?([A-Za-z0-9_]+)", parsed.path)
-        if card_id is None and path_match:
-            card_id = path_match.group(1)
+        path_match = re.search(r"/card/([^/?#]+)(?:/([^/?#]+))?", parsed.path)
+        if path_match:
+            first, second = path_match.groups()
+            if first.isdigit():
+                dbf_id = dbf_id or int(first)
+                card_id = card_id or second
+            else:
+                card_id = card_id or first
 
     image = cell.find("img", src=True)
     if card_id is None and image is not None:
@@ -148,6 +159,16 @@ def _card_identity(cell: Tag) -> tuple[str | None, int | None, str]:
         )
         if image_match:
             card_id = image_match.group(1)
+
+    if dbf_id is not None:
+        try:
+            from .cards_index import cards_by_dbfid
+
+            metadata = cards_by_dbfid().get(dbf_id) or {}
+            card_id = card_id or metadata.get("id")
+            name = name or str(metadata.get("name") or "")
+        except (OSError, RuntimeError, TypeError, ValueError):
+            pass
     return card_id, dbf_id, re.sub(r"\s+", " ", name).strip()
 
 

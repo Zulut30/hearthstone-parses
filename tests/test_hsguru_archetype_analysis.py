@@ -47,6 +47,36 @@ CARD_STATS_HTML = """
 </table>
 """
 
+CARD_STATS_LIVE_CELL_HTML = """
+<table>
+  <thead>
+    <tr>
+      <th>Card</th>
+      <th>Mulligan Impact</th><th>Mulligan Count</th>
+      <th>Drawn Impact</th><th>Drawn Count</th>
+      <th>Kept Impact</th><th>Kept Count</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>
+        <a href="https://www.hsguru.com/card/126252">
+          <span class="card-number">4</span>
+          <div class="card-name">
+            <span style="font-size: 0"># ↑x (4)</span>
+            Tower of Ghouls
+          </div>
+          <span class="card-number">↑</span>
+        </a>
+      </td>
+      <td>4.6</td><td>606</td>
+      <td>1.7</td><td>2,137</td>
+      <td>4.8</td><td>399</td>
+    </tr>
+  </tbody>
+</table>
+"""
+
 
 class HSGuruArchetypeAnalysisTest(unittest.TestCase):
     def test_parses_class_matchups_and_excludes_total(self) -> None:
@@ -71,6 +101,15 @@ class HSGuruArchetypeAnalysisTest(unittest.TestCase):
         self.assertEqual(rows[0]["mulligan_count"], 12345)
         self.assertEqual(rows[0]["drawn_impact"], -1.2)
         self.assertEqual(rows[0]["kept_count"], 7654)
+
+    def test_cleans_live_card_cell_and_treats_numeric_path_as_dbf_id(self) -> None:
+        rows = parse_card_stats_html(CARD_STATS_LIVE_CELL_HTML)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["dbf_id"], 126252)
+        self.assertEqual(rows[0]["card_name"], "Tower of Ghouls")
+        self.assertNotIn("↑", rows[0]["card_name"])
+        self.assertNotEqual(rows[0]["card_id"], "126252")
 
     def test_builds_legend_past_week_urls_for_requested_format(self) -> None:
         urls = analysis_urls("Void Soul DH", "standard")
