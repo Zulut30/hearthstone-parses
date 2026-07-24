@@ -85,6 +85,41 @@ def test_screenshot_request_is_preserved_during_scrape_do_fallback() -> None:
     assert fallback.call_args.kwargs["full_screenshot"] is True
 
 
+def test_hsguru_fallback_uses_verified_super_render_profile() -> None:
+    hsguru = Source(
+        id="hsguru_fallback_test",
+        url="https://www.hsguru.com/meta?format=2&rank=legend",
+        site="hsguru",
+        category="meta",
+    )
+    super_result = ScrapeDoScrape(
+        html="<html><body>meta</body></html>",
+        status_code=200,
+        final_url=hsguru.url,
+        request_cost=25,
+        credits_remaining=249_975,
+        super_proxy=True,
+    )
+    with (
+        patch(
+            "app.firecrawl_backend.acquire_firecrawl_key",
+            side_effect=RuntimeError("All Firecrawl API keys are exhausted"),
+        ),
+        patch("app.firecrawl_backend.scrape_do_token", return_value="configured"),
+        patch(
+            "app.firecrawl_backend.scrape_url_sync",
+            return_value=super_result,
+        ) as fallback,
+    ):
+        result = _scrape_sync(hsguru, formats=["html"])
+
+    assert result.backend == "scrape_do_super"
+    assert result.scrape_do_credits_used == 25
+    fallback.assert_called_once()
+    assert fallback.call_args.kwargs["render"] is True
+    assert fallback.call_args.kwargs["super_proxy"] is True
+
+
 def test_non_credit_firecrawl_error_does_not_switch_provider() -> None:
     lease = type(
         "Lease",

@@ -126,16 +126,31 @@ def _scrape_via_scrape_do(
     if not scrape_do_token():
         raise RuntimeError(reason)
     screenshot, full_screenshot = _screenshot_options(formats)
-    scraped = scrape_url_sync(
-        source.url,
-        render=True,
-        super_proxy=False,
-        headers=headers,
-        wait_ms=wait_ms,
-        timeout_ms=timeout_ms,
-        screenshot=screenshot,
-        full_screenshot=full_screenshot,
-    )
+    profiles = (True,) if source.site == "hsguru" else (False, True)
+    errors: list[str] = []
+    scraped = None
+    for super_proxy in profiles:
+        try:
+            scraped = scrape_url_sync(
+                source.url,
+                render=True,
+                super_proxy=super_proxy,
+                headers=headers,
+                wait_ms=wait_ms,
+                timeout_ms=timeout_ms,
+                screenshot=screenshot,
+                full_screenshot=full_screenshot,
+            )
+            break
+        except Exception as exc:
+            errors.append(
+                f"{'super' if super_proxy else 'standard'}: "
+                f"{type(exc).__name__}: {str(exc)[:300]}"
+            )
+    if scraped is None:
+        raise RuntimeError(
+            f"{reason}; Scrape.do fallback failed: {'; '.join(errors)}"
+        )
     html = scraped.html
     requested = formats or ["html", "markdown"]
     markdown = _html_to_markdown(html) if "markdown" in requested else ""
@@ -144,7 +159,9 @@ def _scrape_via_scrape_do(
         markdown=markdown,
         screenshot=scraped.screenshot,
         metadata={
-            "backend": "scrape_do",
+            "backend": (
+                "scrape_do_super" if scraped.super_proxy else "scrape_do"
+            ),
             "creditsUsed": 0,
             "scrapeDoCreditsUsed": scraped.request_cost,
             "scrapeDoRemainingCredits": scraped.credits_remaining,
