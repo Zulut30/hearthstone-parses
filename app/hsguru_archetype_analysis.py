@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from bs4 import BeautifulSoup, Tag
+
+from .config import scrape_do_token
+from .firecrawl_backend import scrape_source_with_options
+from .firecrawl_keys import peek_firecrawl_key
+from .scrape_do_backend import scrape_url
+from .sources import Source
+from .storage import load_dataset, save_dataset, save_status
 
 
 SOURCE_ID = "hsguru_archetype_analysis"
@@ -213,4 +223,314 @@ def analysis_urls(archetype: str, format_name: str) -> dict[str, str]:
                 }
             )
         ),
+    }
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _active_archetypes() -> list[dict[str, str]]:
+    dataset = load_dataset("hsguru_meta_matrix") or {}
+    structured = ((dataset.get("data") or {}).get("structured") or {})
+    rows = (
+        (structured.get("current_catalog") or {}).get("archetypes")
+        or structured.get("archetypes")
+        or []
+    )
+    active: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        format_name = str(row.get("format") or "")
+        archetype = str(row.get("archetype") or "").strip()
+        has_decks = bool(row.get("has_decks") or row.get("decks"))
+        if format_name in FORMAT_IDS and archetype and has_decks:
+            active.append({"format": format_name, "archetype": archetype})
+    return active
+
+
+def _previous_analysis() -> dict[tuple[str, str], dict[str, Any]]:
+    dataset = load_dataset(SOURCE_ID) or {}
+    rows = ((dataset.get("data") or {}).get("structured") or {}).get("archetypes") or []
+    return {
+        (str(row.get("format") or ""), str(row.get("archetype") or "").casefold()): dict(row)
+        for row in rows
+        if isinstance(row, dict)
+    }
+
+
+def _firecrawl_headers() -> dict[str, str] | None:
+    try:
+        from .hsguru_auth import hsguru_firecrawl_headers
+
+        return hsguru_firecrawl_headers()
+    except (ImportError, RuntimeError):
+        return None
+
+
+async def _fetch_html(url: str) -> tuple[str, dict[str, Any]]:
+    errors: list[str] = []
+    if peek_firecrawl_key() is not None:
+        source = Source(
+            id=f"{SOURCE_ID}:page",
+            url=url,
+            site="hsguru",
+            category="archetype_analysis",
+            kind="pipeline",
+        )
+        try:
+            result = await scrape_source_with_options(
+                source,
+                formats=["html"],
+                only_main_content=True,
+                headers=_firecrawl_headers(),
+                max_age_ms=0,
+                wait_ms=5_000,
+                timeout_ms=120_000,
+            )
+            return result.html, {
+                "backend": "firecrawl",
+                "request_credits": int(result.metadata.get("creditsUsed") or 1),
+                "final_url": result.final_url,
+            }
+        except Exception as exc:
+            errors.append(f"firecrawl: {exc}")
+
+    if scrape_do_token():
+        for super_proxy, attempts in ((False, 2), (True, 3)):
+            for attempt in range(1, attempts + 1):
+                try:
+                    result = await scrape_url(
+                        url,
+                        render=True,
+                        super_proxy=super_proxy,
+                    )
+                    return result.html, {
+                        "backend": "scrape_do_super" if super_proxy else "scrape_do",
+                        "request_credits": result.request_cost,
+                        "final_url": result.final_url,
+                        "attempt": attempt,
+                    }
+                except Exception as exc:
+                    errors.append(
+                        f"{'super' if super_proxy else 'standard'} "
+                        f"attempt {attempt}: {exc}"
+                    )
+                    if attempt < attempts:
+                        await asyncio.sleep(min(attempt * 2, 4))
+
+    if not errors:
+        raise RuntimeError("Firecrawl and Scrape.do are not configured")
+    raise RuntimeError("; ".join(errors))
+
+
+async def refresh_hsguru_archetype_analysis(
+    *,
+    concurrency: int = 3,
+    limit: int | None = None,
+    archetypes: list[dict[str, str]] | None = None,
+    fetch_html=_fetch_html,
+) -> dict[str, Any]:
+    started_at = _now()
+    targets = list(archetypes if archetypes is not None else _active_archetypes())
+    targets.sort(key=lambda row: (row["format"], row["archetype"].casefold()))
+    if limit is not None:
+        targets = targets[: max(0, limit)]
+    if not targets:
+        raise RuntimeError("No active HSGuru archetypes with cached decks")
+
+    previous = _previous_analysis()
+    semaphore = asyncio.Semaphore(max(1, min(concurrency, 10)))
+    acquisitions: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    async def fetch_and_parse(
+        url: str,
+        parser,
+        *,
+        format_name: str,
+        archetype: str,
+        kind: str,
+    ) -> tuple[list[dict[str, Any]], str]:
+        async with semaphore:
+            html, acquisition = await fetch_html(url)
+        rows = parser(html)
+        if not rows:
+            raise RuntimeError(f"HSGuru {kind} page contained no valid rows")
+        fetched_at = _now()
+        acquisitions.append(
+            {
+                **acquisition,
+                "kind": kind,
+                "format": format_name,
+                "archetype": archetype,
+                "rows": len(rows),
+            }
+        )
+        return rows, fetched_at
+
+    async def enrich(target: dict[str, str]) -> dict[str, Any]:
+        format_name = target["format"]
+        archetype = target["archetype"]
+        urls = analysis_urls(archetype, format_name)
+        cached = previous.get((format_name, archetype.casefold()), {})
+        entry = {
+            "format": format_name,
+            "archetype": archetype,
+            "rank": ANALYSIS_RANK,
+            "period": ANALYSIS_PERIOD,
+            "source_urls": urls,
+            "class_matchups": list(cached.get("class_matchups") or []),
+            "card_stats": list(cached.get("card_stats") or []),
+            "matchups_updated_at": cached.get("matchups_updated_at"),
+            "card_stats_updated_at": cached.get("card_stats_updated_at"),
+        }
+        tasks = {
+            "matchups": asyncio.create_task(
+                fetch_and_parse(
+                    urls["matchups"],
+                    parse_class_matchups_html,
+                    format_name=format_name,
+                    archetype=archetype,
+                    kind="matchups",
+                )
+            ),
+            "cards": asyncio.create_task(
+                fetch_and_parse(
+                    urls["cards"],
+                    parse_card_stats_html,
+                    format_name=format_name,
+                    archetype=archetype,
+                    kind="card_stats",
+                )
+            ),
+        }
+        fresh = 0
+        for kind, task in tasks.items():
+            try:
+                rows, fetched_at = await task
+                if kind == "matchups":
+                    entry["class_matchups"] = rows
+                    entry["matchups_updated_at"] = fetched_at
+                else:
+                    entry["card_stats"] = rows
+                    entry["card_stats_updated_at"] = fetched_at
+                fresh += 1
+            except Exception as exc:
+                errors.append(
+                    {
+                        "format": format_name,
+                        "archetype": archetype,
+                        "kind": kind,
+                        "error": f"{type(exc).__name__}: {str(exc)[:400]}",
+                    }
+                )
+        entry["state"] = (
+            "ok"
+            if fresh == 2
+            else "partial"
+            if entry["class_matchups"] or entry["card_stats"]
+            else "error"
+        )
+        entry["updated_at"] = max(
+            str(entry.get("matchups_updated_at") or ""),
+            str(entry.get("card_stats_updated_at") or ""),
+        ) or None
+        return entry
+
+    refreshed = await asyncio.gather(*(enrich(target) for target in targets))
+    refreshed_keys = {
+        (row["format"], row["archetype"].casefold())
+        for row in refreshed
+    }
+    retained = [
+        row
+        for key, row in previous.items()
+        if key not in refreshed_keys
+    ]
+    rows = [*refreshed, *retained]
+    rows.sort(key=lambda row: (str(row.get("format")), str(row.get("archetype")).casefold()))
+    coverage = {
+        format_name: {
+            "archetypes": sum(1 for row in rows if row.get("format") == format_name),
+            "with_matchups": sum(
+                1
+                for row in rows
+                if row.get("format") == format_name and row.get("class_matchups")
+            ),
+            "with_card_stats": sum(
+                1
+                for row in rows
+                if row.get("format") == format_name and row.get("card_stats")
+            ),
+        }
+        for format_name in FORMAT_IDS
+    }
+    firecrawl_credits = sum(
+        int(item.get("request_credits") or 0)
+        for item in acquisitions
+        if item.get("backend") == "firecrawl"
+    )
+    scrape_do_credits = sum(
+        int(item.get("request_credits") or 0)
+        for item in acquisitions
+        if str(item.get("backend") or "").startswith("scrape_do")
+    )
+    structured = {
+        "type": SOURCE_ID,
+        "schema_version": SCHEMA_VERSION,
+        "criteria": {
+            "rank": ANALYSIS_RANK,
+            "period": ANALYSIS_PERIOD,
+            "formats": list(FORMAT_IDS),
+            "requires_decks": True,
+        },
+        "coverage": coverage,
+        "archetypes": rows,
+    }
+    payload = {
+        "source_id": SOURCE_ID,
+        "state": "ok" if not errors else "partial",
+        "fetched_at": started_at,
+        "http_status": 200,
+        "final_url": "https://www.hsguru.com/archetype",
+        "content_length": len(json.dumps(structured, ensure_ascii=False).encode("utf-8")),
+        "backend": "+".join(
+            sorted({str(item.get("backend")) for item in acquisitions})
+        ) or "cache",
+        "data": {
+            "structured": structured,
+            "acquisition": {
+                "pages": acquisitions,
+                "firecrawl_credits_used": firecrawl_credits,
+                "scrape_do_credits_used": scrape_do_credits,
+            },
+        },
+    }
+    save_dataset(SOURCE_ID, payload)
+    status = {
+        "source_id": SOURCE_ID,
+        "site": "hsguru",
+        "category": "archetype_analysis",
+        "state": payload["state"],
+        "fetched_at": started_at,
+        "http_status": 200,
+        "backend": payload["backend"],
+        "rows_total": len(rows),
+        "coverage": coverage,
+        "errors": errors[:50],
+        "firecrawl_credits_used": firecrawl_credits,
+        "scrape_do_credits_used": scrape_do_credits,
+    }
+    save_status(SOURCE_ID, status)
+    return {
+        "ok": not errors,
+        "source_id": SOURCE_ID,
+        "targets": len(targets),
+        "archetypes": len(rows),
+        "coverage": coverage,
+        "errors": errors,
+        "firecrawl_credits_used": firecrawl_credits,
+        "scrape_do_credits_used": scrape_do_credits,
     }

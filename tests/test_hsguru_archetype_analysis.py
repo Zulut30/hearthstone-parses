@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.hsguru_archetype_analysis import (
     analysis_urls,
     parse_card_stats_html,
     parse_class_matchups_html,
+    refresh_hsguru_archetype_analysis,
 )
 
 
@@ -78,6 +80,45 @@ class HSGuruArchetypeAnalysisTest(unittest.TestCase):
         self.assertIn("rank=legend", urls["matchups"])
         self.assertIn("period=past_week", urls["matchups"])
         self.assertIn("show_counts=yes", urls["cards"])
+
+    def test_refresh_publishes_both_analysis_surfaces(self) -> None:
+        async def fetch_html(url: str):
+            if "/archetype/" in url:
+                return MATCHUPS_HTML, {"backend": "firecrawl", "request_credits": 1}
+            return CARD_STATS_HTML, {"backend": "scrape_do", "request_credits": 5}
+
+        saved = {}
+        with (
+            patch(
+                "app.hsguru_archetype_analysis._previous_analysis",
+                return_value={},
+            ),
+            patch(
+                "app.hsguru_archetype_analysis.save_dataset",
+                side_effect=lambda source_id, payload: saved.update(
+                    {"source_id": source_id, "payload": payload}
+                ),
+            ),
+            patch("app.hsguru_archetype_analysis.save_status"),
+        ):
+            import asyncio
+
+            result = asyncio.run(
+                refresh_hsguru_archetype_analysis(
+                    archetypes=[
+                        {"format": "standard", "archetype": "Void Soul DH"}
+                    ],
+                    fetch_html=fetch_html,
+                )
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["firecrawl_credits_used"], 1)
+        self.assertEqual(result["scrape_do_credits_used"], 5)
+        rows = saved["payload"]["data"]["structured"]["archetypes"]
+        self.assertEqual(rows[0]["state"], "ok")
+        self.assertEqual(len(rows[0]["class_matchups"]), 2)
+        self.assertEqual(len(rows[0]["card_stats"]), 1)
 
 
 if __name__ == "__main__":
